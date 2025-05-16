@@ -1,0 +1,174 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-milou}
+    volumes:
+      - pgdata:/var/lib/postgresql/data:rw
+    command: ["postgres", "-c", "client_encoding=UTF8"]
+    ports:
+      - "5433:5432"
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "8082:80"
+    networks:
+      - milou_network
+      - proxy
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-your_redis_password}
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-your_redis_password}
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "-a", "${REDIS_PASSWORD:-your_redis_password}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "8083:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/milou-sh/milou/backend:v1.0.0
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - PORT=9999
+      # ... other environment variables
+    expose:
+      - "9999"
+    volumes:
+      - uploads:/app/dashboard/backend/src/uploads:rw
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - milou_network
+      - proxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9999/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  frontend:
+    image: ghcr.io/milou-sh/milou/frontend:v1.0.0
+    environment:
+      - VITE_API_URL=/api
+      - NODE_ENV=${NODE_ENV:-development}
+    expose:
+      - "5173"
+    depends_on:
+      - backend
+    networks:
+      - milou_network
+      - proxy
+
+  engine:
+    image: ghcr.io/milou-sh/milou/engine:v1.0.0
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - DATABASE_URI=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-milou}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - engine_logs:/app/src/logger/logs:rw
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - milou_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  nginx:
+    image: ghcr.io/milou-sh/milou/nginx:v1.0.0
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:${SSL_PORT:-443}:443"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - SERVER_NAME=${CUSTOMER_DOMAIN_NAME}
+    volumes:
+      - ./ssl:/etc/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - milou_network
+
+networks:
+  milou_network:
+    driver: bridge
+  proxy:
+    external: true
+
+volumes:
+  pgdata: {}
+  rabbitmq_data: {}
+  pgadmin_data: {}
+  redis_data: {}
+  backend_logs: {}
+  engine_logs: {}
+  uploads: {}

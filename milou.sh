@@ -103,7 +103,7 @@ function handle_setup() {
     
     # Login to GitHub Container Registry
     echo "Authenticating with GitHub Container Registry..."
-    docker login ghcr.io -u "token" -p "${github_token}" || {
+    echo "${github_token}" | docker login ghcr.io -u "token" --password-stdin || {
         echo "Error: Failed to authenticate with GitHub Container Registry."
         exit 1
     }

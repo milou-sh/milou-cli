@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:16
+    image: ghcr.io/milou-sh/milou/database:v1.0.0
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -11,7 +11,7 @@ services:
       - pgdata:/var/lib/postgresql/data:rw
     command: ["postgres", "-c", "client_encoding=UTF8"]
     ports:
-      - "5433:5432"
+      - "5432:5432"
     networks:
       - milou_network
     healthcheck:
@@ -20,22 +20,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    ports:
-      - "8082:80"
-    networks:
-      - milou_network
-      - proxy
-    depends_on:
-      - db
-    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -167,7 +151,6 @@ networks:
 volumes:
   pgdata: {}
   rabbitmq_data: {}
-  pgadmin_data: {}
   redis_data: {}
   backend_logs: {}
   engine_logs: {}

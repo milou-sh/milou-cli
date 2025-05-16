@@ -30,10 +30,6 @@ generate_config() {
     RABBITMQ_USER="guest"
     RABBITMQ_PASSWORD="guest"
     
-    # PgAdmin credentials
-    PGADMIN_EMAIL="admin@${domain}"
-    PGADMIN_PASSWORD="$(generate_random_string 16)"
-    
     # Session and encryption
     SESSION_SECRET="$(generate_random_string 64)"
     ENCRYPTION_KEY="$(generate_random_string 32)"
@@ -83,11 +79,6 @@ REDIS_CLEANUP_INTERVAL=3600
 RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
 RABBITMQ_USER=${RABBITMQ_USER}
 RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
-
-# PgAdmin Configuration
-# ----------------------------------------
-PGADMIN_EMAIL=${PGADMIN_EMAIL}
-PGADMIN_PASSWORD=${PGADMIN_PASSWORD}
 
 # Session Configuration
 # ----------------------------------------
@@ -219,11 +210,6 @@ REDIS_CLEANUP_INTERVAL=${REDIS_CLEANUP_INTERVAL:-3600}
 # RabbitMQ Configuration
 # ----------------------------------------
 RABBITMQ_URL=${RABBITMQ_URL:-amqp://your_rabbitmq_user_here:your_rabbitmq_password_here@your_rabbitmq_host_here:5672}
-
-# PgAdmin Configuration
-# ----------------------------------------
-PGADMIN_EMAIL=${PGADMIN_EMAIL:-your_pgadmin_email_here}
-PGADMIN_PASSWORD=${PGADMIN_PASSWORD:-your_pgadmin_password_here}
 
 # Session Configuration
 # ----------------------------------------

@@ -353,7 +353,7 @@ interactive_setup() {
     return 0
 }
 
-# Enhanced interactive setup wizard
+# Enhanced interactive setup wizard with better existing installation handling
 interactive_setup_wizard() {
     echo
     echo -e "${BOLD}${PURPLE}╔════════════════════════════════════════════════════════════════╗${NC}"
@@ -364,24 +364,78 @@ interactive_setup_wizard() {
     echo "Welcome to the Milou setup wizard!"
     echo "This wizard will guide you through the initial configuration."
 
-    # Step 0: Pre-flight System Check
+    # Step 0: Pre-flight System Check with Enhanced Options
     echo -e "${BOLD}Step 0: Pre-flight System Check${NC}"
     echo "Let's first check your current system state..."
     echo
     
-    # Check for existing installation - suppress errors but show results
-    if ! check_existing_installation 2>/dev/null; then
-        echo "An existing Milou installation was detected."
+    # Detect existing installation and get details
+    if ! detect_existing_installation 2>/dev/null; then
+        # Existing installation detected
+        show_existing_installation_summary
+        
+        echo "An existing Milou installation was detected. How would you like to proceed?"
         echo
-        if ! confirm "Do you want to continue with setup anyway?" "Y"; then
-            log "INFO" "Setup cancelled by user"
-            exit 0
-        fi
+        echo "  1) Preserve existing configuration and data (recommended for upgrades)"
+        echo "  2) Start fresh with new configuration (will remove all containers and data)"
+        echo "  3) Cancel setup"
+        echo
+        
+        local setup_choice=""
+        while true; do
+            echo -ne "${CYAN}Choose option (1-3): ${NC}"
+            read setup_choice
+            case "$setup_choice" in
+                1)
+                    export PRESERVE_EXISTING=true
+                    export FRESH_INSTALL=false
+                    log "INFO" "✅ Will preserve existing configuration and data"
+                    break
+                    ;;
+                2)
+                    export PRESERVE_EXISTING=false
+                    export FRESH_INSTALL=true
+                    log "INFO" "🆕 Will start fresh (existing data will be removed)"
+                    
+                    echo
+                    echo -e "${RED}⚠️  WARNING: This will remove all existing containers and data!${NC}"
+                    if ! confirm "Are you sure you want to proceed with a fresh installation?" "N"; then
+                        log "INFO" "Setup cancelled by user"
+                        exit 0
+                    fi
+                    
+                    # Stop and remove existing containers
+                    log "INFO" "Stopping and removing existing containers..."
+                    if docker ps -a --filter "name=static-" --format "{{.Names}}" | xargs -r docker rm -f >/dev/null 2>&1; then
+                        log "SUCCESS" "Existing containers removed"
+                    fi
+                    
+                    # Optionally remove volumes
+                    if confirm "Also remove existing data volumes? (This will delete all data)" "N"; then
+                        if docker volume ls --filter "name=static_" --format "{{.Name}}" | xargs -r docker volume rm >/dev/null 2>&1; then
+                            log "SUCCESS" "Existing volumes removed"
+                        fi
+                    fi
+                    break
+                    ;;
+                3)
+                    log "INFO" "Setup cancelled by user"
+                    exit 0
+                    ;;
+                *)
+                    echo "Invalid choice. Please enter 1-3."
+                    ;;
+            esac
+        done
+        echo
+    else
+        # Fresh installation
+        export PRESERVE_EXISTING=false
+        export FRESH_INSTALL=true
+        log "SUCCESS" "Fresh installation detected - proceeding with new setup"
         echo
     fi
 
-    echo
-    
     # Step 1: System Prerequisites
     echo -e "${BOLD}Step 1: System Prerequisites${NC}"
     check_system_requirements
@@ -412,36 +466,134 @@ interactive_setup_wizard() {
     # Step 3: Domain Configuration
     echo -e "${BOLD}Step 3: Domain Configuration${NC}"
     local domain="localhost"
-    echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
-    read user_domain
-    if [[ -n "$user_domain" ]]; then
-        if validate_input "$user_domain" "domain"; then
-            domain="$user_domain"
+    
+    # Check if preserving existing config and get current domain
+    if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
+        local current_domain
+        current_domain=$(get_config_value "SERVER_NAME" "localhost" 2>/dev/null || echo "localhost")
+        if [[ "$current_domain" != "localhost" ]]; then
+            echo "Current domain: $current_domain"
+            if confirm "Keep existing domain ($current_domain)?" "Y"; then
+                domain="$current_domain"
+            else
+                echo -ne "${CYAN}Enter new domain name: ${NC}"
+                read user_domain
+                if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+                    domain="$user_domain"
+                fi
+            fi
         else
-            log "WARN" "Invalid domain, using localhost"
-            domain="localhost"
+            echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
+            read user_domain
+            if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+                domain="$user_domain"
+            fi
+        fi
+    else
+        echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
+        read user_domain
+        if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+            domain="$user_domain"
         fi
     fi
     echo
     
-    # Step 4: SSL Configuration
+    # Step 4: SSL Configuration with Smart Detection
     echo -e "${BOLD}Step 4: SSL Configuration${NC}"
     local ssl_path="./ssl"
-    echo -ne "${CYAN}SSL certificates directory (default: ./ssl): ${NC}"
-    read user_ssl_path
-    if [[ -n "$user_ssl_path" ]]; then
-        ssl_path="$user_ssl_path"
+    local ssl_choice=""
+    
+    # Check if SSL certificates already exist
+    if [[ -f "./ssl/milou.crt" && -f "./ssl/milou.key" ]]; then
+        echo "📄 Existing SSL certificates found!"
+        
+        # Show certificate information
+        if command -v openssl >/dev/null 2>&1; then
+            echo
+            echo "Certificate Information:"
+            show_certificate_info "./ssl/milou.crt" "$domain"
+        fi
+        
+        echo "SSL Certificate Options:"
+        echo "  1) Use existing certificates"
+        echo "  2) Generate new certificates"
+        echo "  3) Specify different SSL path"
+        echo
+        
+        while true; do
+            echo -ne "${CYAN}Choose option (1-3): ${NC}"
+            read ssl_choice
+            case "$ssl_choice" in
+                1)
+                    ssl_path="./ssl"
+                    log "INFO" "✅ Will use existing SSL certificates"
+                    break
+                    ;;
+                2)
+                    ssl_path="./ssl"
+                    log "INFO" "🆕 Will generate new SSL certificates"
+                    # Backup existing certificates
+                    mv "./ssl/milou.crt" "./ssl/milou.crt.backup.$(date +%s)" 2>/dev/null || true
+                    mv "./ssl/milou.key" "./ssl/milou.key.backup.$(date +%s)" 2>/dev/null || true
+                    break
+                    ;;
+                3)
+                    echo -ne "${CYAN}SSL certificates directory: ${NC}"
+                    read user_ssl_path
+                    if [[ -n "$user_ssl_path" ]]; then
+                        ssl_path="$user_ssl_path"
+                    fi
+                    break
+                    ;;
+                *)
+                    echo "Invalid choice. Please enter 1-3."
+                    ;;
+            esac
+        done
+    else
+        echo -ne "${CYAN}SSL certificates directory (default: ./ssl): ${NC}"
+        read user_ssl_path
+        if [[ -n "$user_ssl_path" ]]; then
+            ssl_path="$user_ssl_path"
+        fi
     fi
     echo
     
     # Step 5: Optional Configuration
     echo -e "${BOLD}Step 5: Optional Configuration${NC}"
     local admin_email=""
-    echo -ne "${CYAN}Admin email (optional): ${NC}"
-    read admin_email
-    if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
-        log "WARN" "Invalid email format, skipping"
-        admin_email=""
+    
+    # Check if preserving existing and get current email
+    if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
+        local current_email
+        current_email=$(get_config_value "MILOU_ADMIN_EMAIL" "" 2>/dev/null || echo "")
+        if [[ -n "$current_email" ]]; then
+            echo "Current admin email: $current_email"
+            if confirm "Keep existing admin email ($current_email)?" "Y"; then
+                admin_email="$current_email"
+            else
+                echo -ne "${CYAN}Enter new admin email (optional): ${NC}"
+                read admin_email
+                if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
+                    log "WARN" "Invalid email format, skipping"
+                    admin_email=""
+                fi
+            fi
+        else
+            echo -ne "${CYAN}Admin email (optional): ${NC}"
+            read admin_email
+            if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
+                log "WARN" "Invalid email format, skipping"
+                admin_email=""
+            fi
+        fi
+    else
+        echo -ne "${CYAN}Admin email (optional): ${NC}"
+        read admin_email
+        if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
+            log "WARN" "Invalid email format, skipping"
+            admin_email=""
+        fi
     fi
     echo
     
@@ -465,72 +617,127 @@ interactive_setup_wizard() {
     
     # Configuration Summary
     echo -e "${BOLD}Step 7: Configuration Summary${NC}"
+    echo "Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserve existing" || echo "Fresh installation")"
     echo "Domain: $domain"
     echo "SSL Path: $ssl_path"
+    echo "SSL Certificates: $([ "$ssl_choice" == "1" ] && echo "Use existing" || echo "Generate new")"
     echo "Admin Email: ${admin_email:-Not provided}"
     echo "GitHub Token: *****(provided)"
     echo "Image Strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
     echo
     
     if ! confirm "Proceed with this configuration?" "Y"; then
-            log "INFO" "Setup cancelled by user"
-            exit 0
-        fi
-        echo
+        log "INFO" "Setup cancelled by user"
+        exit 0
+    fi
+    echo
     
     # Step 8: Generate Configuration
     echo -e "${BOLD}Step 8: Generating Configuration${NC}"
     show_progress "Generating .env configuration file" 2
-    if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
-        error_exit "Failed to generate configuration"
+    
+    # Choose configuration generation mode based on user choice
+    if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
+        # Use the credential preservation mode
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"; then
+            error_exit "Failed to generate configuration with preservation"
+        fi
+        # Set the environment variable for later use
+        export MILOU_PRESERVED_CREDENTIALS="true"
+    else
+        # Fresh installation - force new credentials
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "never"; then
+            error_exit "Failed to generate configuration"
+        fi
+        # Set the environment variable for later use
+        export MILOU_PRESERVED_CREDENTIALS="false"
     fi
     echo
     
-    # Step 9: SSL Certificate Setup
+    # Step 9: SSL Certificate Setup (only if not using existing)
     echo -e "${BOLD}Step 9: SSL Certificate Setup${NC}"
-    if ! setup_ssl "$ssl_path" "$domain"; then
-        if ! confirm "SSL setup failed. Continue anyway?" "N"; then
-            error_exit "Setup cancelled due to SSL certificate issues"
+    if [[ "$ssl_choice" != "1" ]]; then
+        if ! setup_ssl "$ssl_path" "$domain"; then
+            if ! confirm "SSL setup failed. Continue anyway?" "N"; then
+                error_exit "Setup cancelled due to SSL certificate issues"
+            fi
         fi
+    else
+        log "SUCCESS" "Using existing SSL certificates"
     fi
     echo
     
     # Step 10: Pull Docker Images
     echo -e "${BOLD}Step 10: Pulling Docker Images${NC}"
-    show_progress "Validating image availability" 1
-    
-    # First validate that images exist
-    if ! validate_images_exist "$github_token" "$use_latest"; then
-        log "WARN" "Some required images are not available in the registry"
-        if ! confirm "Continue with setup anyway? (This may cause service startup failures)" "N"; then
-            error_exit "Setup cancelled due to missing Docker images"
-        fi
+    show_progress "Validating image availability" 2
+    if ! validate_image_availability "$github_token"; then
+        log "WARN" "Some images may not be available - continuing anyway"
     fi
     
-    show_progress "Pulling Docker images from GitHub Container Registry" 3
-    if ! pull_images "$github_token" "$use_latest"; then
-        if ! confirm "Some images failed to pull. Continue anyway?" "N"; then
-            error_exit "Setup cancelled due to image pull failures"
-        fi
+    show_progress "Pulling Docker images from GitHub Container Registry" 2
+    if ! pull_images "$github_token"; then
+        error_exit "Failed to pull Docker images"
     fi
     echo
     
-    # Step 11: Start Services
+    # Step 11: Start Services with Enhanced Handling
     echo -e "${BOLD}Step 11: Start Services${NC}"
     if confirm "Start services now?" "Y"; then
         show_progress "Starting services" 2
+        # Use the enhanced startup function with setup mode enabled
         if start_services_with_checks "true"; then
             echo
-            log "SUCCESS" "${ROCKET_EMOJI} Setup complete! Milou is now running."
-            log "INFO" "Access your instance at: https://$domain"
-            if [[ "$domain" == "localhost" ]]; then
-                log "INFO" "Local access: https://localhost"
+            echo -e "${GREEN}${BOLD}🎉 Setup Complete!${NC}"
+            echo
+            echo "Milou is now running and accessible at:"
+            if [[ "$domain" != "localhost" ]]; then
+                echo "  🌐 https://$domain (if SSL is configured)"
+                echo "  🌐 http://$domain (HTTP fallback)"
+            else
+                echo "  🌐 https://localhost (if SSL is configured)"
+                echo "  🌐 http://localhost:8080 (HTTP fallback)"
             fi
+            echo
+            echo "Useful commands:"
+            echo "  📊 ./milou.sh status       - Check service status"
+            echo "  📋 ./milou.sh logs        - View service logs"
+            echo "  🏥 ./milou.sh health      - Run health checks"
+            echo "  📖 ./milou.sh help        - Show all commands"
+            echo
+            
+            # Show setup summary
+            echo -e "${BOLD}Setup Summary:${NC}"
+            echo "  📝 Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Fresh installation")"
+            echo "  🌍 Domain: $domain"
+            echo "  🔒 SSL: $([ "$ssl_choice" == "1" ] && echo "Using existing certificates" || echo "Generated new certificates")"
+            echo "  🔑 Credentials: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Generated new")"
+            echo "  📧 Admin Email: ${admin_email:-Not provided}"
+            echo
         else
-            log "ERROR" "Failed to start services"
-            log "INFO" "You can start services later with: $0 start"
+            echo -e "${RED}[ERROR]${NC} Failed to start services"
+            echo
+            echo "🔧 Troubleshooting options:"
+            echo "  1. Check service status: ./milou.sh status"
+            echo "  2. View detailed logs: ./milou.sh logs"
+            echo "  3. Run diagnostics: ./milou.sh diagnose"
+            echo "  4. Try manual start: ./milou.sh start --force"
+            echo
+            return 1
         fi
     else
-        log "INFO" "Setup complete! Start services with: $0 start"
+        echo
+        echo -e "${GREEN}${BOLD}🎉 Configuration Complete!${NC}"
+        echo
+        echo "Setup completed successfully. Start services when ready with:"
+        echo "  🚀 ./milou.sh start"
+        echo
+        echo "Setup Summary:"
+        echo "  📝 Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Fresh installation")"
+        echo "  🌍 Domain: $domain"
+        echo "  🔒 SSL: $([ "$ssl_choice" == "1" ] && echo "Using existing certificates" || echo "Generated new certificates")"
+        echo "  🔑 Credentials: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Generated new")"
+        echo "  📧 Admin Email: ${admin_email:-Not provided}"
     fi
+    
+    return 0
 } 

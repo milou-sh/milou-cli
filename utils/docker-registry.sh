@@ -350,6 +350,49 @@ pull_images() {
     # Validate Docker access
     if ! docker info >/dev/null 2>&1; then
         log "ERROR" "Docker daemon is not accessible"
+        
+        # Provide specific diagnostics for common issues
+        local current_user=$(whoami)
+        log "INFO" "💡 Troubleshooting Docker access:"
+        
+        # Check if user is in docker group
+        if ! groups "$current_user" 2>/dev/null | grep -q docker; then
+            log "INFO" "   • User '$current_user' is not in docker group"
+            log "INFO" "   • Solution: sudo usermod -aG docker $current_user"
+            log "INFO" "   • Then logout/login or run: newgrp docker"
+        else
+            log "INFO" "   • User '$current_user' is in docker group"
+            log "INFO" "   • Docker group membership may not be active in this session"
+            log "INFO" "   • Try: newgrp docker"
+        fi
+        
+        # Check Docker service status
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-active docker >/dev/null 2>&1; then
+                log "INFO" "   • Docker service is running"
+            else
+                log "INFO" "   • Docker service is not running"
+                log "INFO" "   • Solution: sudo systemctl start docker"
+            fi
+        fi
+        
+        # Check Docker socket permissions
+        if [[ -S /var/run/docker.sock ]]; then
+            local socket_perms socket_owner socket_group
+            socket_perms=$(stat -c %a /var/run/docker.sock 2>/dev/null || echo "unknown")
+            socket_owner=$(stat -c %U /var/run/docker.sock 2>/dev/null || echo "unknown")
+            socket_group=$(stat -c %G /var/run/docker.sock 2>/dev/null || echo "unknown")
+            log "INFO" "   • Docker socket: /var/run/docker.sock"
+            log "INFO" "   • Permissions: $socket_perms, Owner: $socket_owner, Group: $socket_group"
+            
+            if [[ "$socket_group" != "docker" ]]; then
+                log "INFO" "   • Socket group should be 'docker'"
+                log "INFO" "   • Solution: sudo chgrp docker /var/run/docker.sock"
+            fi
+        else
+            log "INFO" "   • Docker socket not found at /var/run/docker.sock"
+        fi
+        
         return 1
     fi
     

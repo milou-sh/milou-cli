@@ -140,6 +140,26 @@ create_milou_user() {
     log "SUCCESS" "User $MILOU_USER created successfully"
     log "INFO" "Home directory: $MILOU_HOME"
     log "INFO" "UID: $(id -u "$MILOU_USER"), GID: $(id -g "$MILOU_USER")"
+    
+    # Verify Docker access for the new user
+    log "DEBUG" "Verifying Docker access for newly created user..."
+    if command -v docker >/dev/null 2>&1; then
+        # Quick verification that the user can access Docker
+        if sudo -u "$MILOU_USER" bash -c "newgrp docker -c 'docker info'" >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Docker access verified for $MILOU_USER user"
+        else
+            log "WARN" "⚠️  Docker access verification failed for $MILOU_USER user"
+            log "INFO" "💡 This may resolve after the first login or with 'newgrp docker'"
+            
+            # Run a quick diagnostic in debug mode
+            if [[ "${VERBOSE:-false}" == "true" ]]; then
+                log "DEBUG" "Running Docker diagnostic for troubleshooting..."
+                diagnose_docker_access "$MILOU_USER" >/dev/null 2>&1 || true
+            fi
+        fi
+    else
+        log "WARN" "Docker not available for verification"
+    fi
 }
 
 # Setup milou user environment
@@ -677,11 +697,28 @@ switch_to_milou_user() {
             log "WARN" "No command or arguments provided during user switch"
         fi
         
+        # CRITICAL FIX: Ensure docker group membership is active in the new session
+        # Use newgrp docker to activate the docker group for the milou user
+        local enhanced_exec_cmd="newgrp docker -c \"$exec_cmd\""
+        
         log "DEBUG" "Executing as $MILOU_USER in directory: $target_dir"
-        log "DEBUG" "Full command: $exec_cmd"
+        log "DEBUG" "Enhanced command with docker group activation: $enhanced_exec_cmd"
+        
+        # Try with newgrp first, but have fallback if it fails
+        if ! sudo -u "$MILOU_USER" -H bash -c "newgrp docker -c 'echo test'" >/dev/null 2>&1; then
+            log "WARN" "newgrp docker failed, trying alternative approach..."
+            # Alternative: use sg (set group) command if available
+            if command -v sg >/dev/null 2>&1; then
+                enhanced_exec_cmd="sg docker -c \"$exec_cmd\""
+                log "DEBUG" "Using sg command for docker group activation"
+            else
+                log "WARN" "Neither newgrp nor sg available, running without explicit docker group activation"
+                enhanced_exec_cmd="$exec_cmd"
+            fi
+        fi
         
         # Execute with proper environment and working directory
-        exec sudo -u "$MILOU_USER" -H bash -c "$exec_cmd"
+        exec sudo -u "$MILOU_USER" -H bash -c "$enhanced_exec_cmd"
         
     else
         error_exit "Cannot switch to $MILOU_USER user without root privileges"
@@ -835,20 +872,66 @@ migrate_to_milou_user() {
 fix_docker_permissions() {
     log "DEBUG" "Ensuring proper Docker permissions for $MILOU_USER..."
     
+    # Ensure docker group exists
+    if ! getent group docker >/dev/null 2>&1; then
+        log "INFO" "Creating docker group..."
+        if ! groupadd docker; then
+            log "ERROR" "Failed to create docker group"
+            return 1
+        fi
+    fi
+    
     # Add milou user to docker group if not already
     if ! groups "$MILOU_USER" 2>/dev/null | grep -q docker; then
         log "DEBUG" "Adding $MILOU_USER to docker group..."
-        usermod -aG docker "$MILOU_USER" || log "WARN" "Failed to add $MILOU_USER to docker group"
+        if usermod -aG docker "$MILOU_USER"; then
+            log "SUCCESS" "User $MILOU_USER added to docker group"
+        else
+            log "ERROR" "Failed to add $MILOU_USER to docker group"
+            return 1
+        fi
+    else
+        log "DEBUG" "User $MILOU_USER is already in docker group"
     fi
     
-    # Fix permissions on Docker socket if needed
+    # Fix permissions on Docker socket if needed and it exists
     if [[ -S /var/run/docker.sock ]]; then
-        local socket_group
+        local socket_group socket_perms
         socket_group=$(stat -c %G /var/run/docker.sock 2>/dev/null || echo "root")
+        socket_perms=$(stat -c %a /var/run/docker.sock 2>/dev/null || echo "000")
+        
+        log "DEBUG" "Docker socket permissions: $socket_perms, group: $socket_group"
+        
         if [[ "$socket_group" != "docker" ]]; then
-            log "DEBUG" "Fixing Docker socket permissions..."
-            chgrp docker /var/run/docker.sock 2>/dev/null || log "WARN" "Could not change Docker socket group"
+            log "DEBUG" "Fixing Docker socket group ownership..."
+            if chgrp docker /var/run/docker.sock 2>/dev/null; then
+                log "SUCCESS" "Docker socket group fixed"
+            else
+                log "WARN" "Could not change Docker socket group (may require root)"
+            fi
         fi
+        
+        # Ensure socket is group writable
+        if [[ ! "$socket_perms" =~ ^[0-9]*[2367][0-9]*$ ]]; then  # Check if group has write permission
+            log "DEBUG" "Fixing Docker socket permissions..."
+            if chmod g+w /var/run/docker.sock 2>/dev/null; then
+                log "SUCCESS" "Docker socket permissions fixed"
+            else
+                log "WARN" "Could not fix Docker socket permissions (may require root)"
+            fi
+        fi
+    else
+        log "WARN" "Docker socket not found at /var/run/docker.sock"
+    fi
+    
+    # Test Docker access for milou user
+    if sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
+        log "SUCCESS" "Docker access verified for $MILOU_USER user"
+        return 0
+    else
+        log "WARN" "Docker access test failed for $MILOU_USER user"
+        log "INFO" "💡 This might be resolved by logging out and back in, or running: newgrp docker"
+        return 1
     fi
 }
 
@@ -1330,7 +1413,7 @@ show_user_status() {
     if [[ -f "$ENV_FILE" ]]; then
         echo "  Configuration file: exists ✅"
         local config_perms
-        config_perms=$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %A "$ENV_FILE" 2>/dev/null || echo "unknown")
+        config_perms=$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %A "$ENV_FILE" 2>/dev/null)
         echo "  Config permissions: $config_perms $([ "$config_perms" -le 600 ] && echo "✅" || echo "⚠️")"
     else
         echo "  Configuration file: missing ❌"
@@ -1570,4 +1653,166 @@ export -f has_docker_permissions
 export -f create_milou_user
 export -f switch_to_milou_user
 export -f validate_user_permissions
-export -f ensure_proper_user_setup 
+export -f ensure_proper_user_setup
+export -f diagnose_docker_access
+
+# Comprehensive Docker access diagnostic
+diagnose_docker_access() {
+    local target_user="${1:-$(whoami)}"
+    
+    log "STEP" "Diagnosing Docker access for user: $target_user"
+    echo
+    
+    local issues=0
+    local warnings=0
+    
+    # Check if user exists
+    if ! id "$target_user" >/dev/null 2>&1; then
+        log "ERROR" "User '$target_user' does not exist"
+        return 1
+    fi
+    
+    # Check Docker installation
+    log "INFO" "1. Docker Installation:"
+    if command -v docker >/dev/null 2>&1; then
+        local docker_version
+        docker_version=$(docker --version 2>/dev/null | head -1 || echo "unknown")
+        log "SUCCESS" "  ✅ Docker installed: $docker_version"
+    else
+        log "ERROR" "  ❌ Docker not installed"
+        ((issues++))
+    fi
+    echo
+    
+    # Check Docker service
+    log "INFO" "2. Docker Service Status:"
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active docker >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ Docker service is active"
+            if systemctl is-enabled docker >/dev/null 2>&1; then
+                log "SUCCESS" "  ✅ Docker service is enabled (auto-start)"
+            else
+                log "WARN" "  ⚠️  Docker service not enabled for auto-start"
+                ((warnings++))
+            fi
+        else
+            log "ERROR" "  ❌ Docker service is not running"
+            log "INFO" "     💡 Try: sudo systemctl start docker"
+            ((issues++))
+        fi
+    else
+        log "WARN" "  ⚠️  Cannot check service status (systemctl not available)"
+        ((warnings++))
+    fi
+    echo
+    
+    # Check Docker group and user membership
+    log "INFO" "3. Docker Group and User Membership:"
+    if getent group docker >/dev/null 2>&1; then
+        log "SUCCESS" "  ✅ Docker group exists"
+        
+        # Check if target user is in docker group
+        if groups "$target_user" 2>/dev/null | grep -q docker; then
+            log "SUCCESS" "  ✅ User '$target_user' is in docker group"
+            
+            # Check if group membership is active in current session
+            if [[ "$target_user" == "$(whoami)" ]]; then
+                if groups | grep -q docker; then
+                    log "SUCCESS" "  ✅ Docker group membership is active in current session"
+                else
+                    log "WARN" "  ⚠️  Docker group membership not active in current session"
+                    log "INFO" "     💡 Try: newgrp docker"
+                    ((warnings++))
+                fi
+            fi
+        else
+            log "ERROR" "  ❌ User '$target_user' is not in docker group"
+            log "INFO" "     💡 Try: sudo usermod -aG docker $target_user"
+            ((issues++))
+        fi
+    else
+        log "ERROR" "  ❌ Docker group does not exist"
+        log "INFO" "     💡 Try: sudo groupadd docker"
+        ((issues++))
+    fi
+    echo
+    
+    # Check Docker socket
+    log "INFO" "4. Docker Socket:"
+    if [[ -S /var/run/docker.sock ]]; then
+        local socket_perms socket_owner socket_group
+        socket_perms=$(stat -c %a /var/run/docker.sock 2>/dev/null || echo "unknown")
+        socket_owner=$(stat -c %U /var/run/docker.sock 2>/dev/null || echo "unknown")
+        socket_group=$(stat -c %G /var/run/docker.sock 2>/dev/null || echo "unknown")
+        
+        log "SUCCESS" "  ✅ Docker socket exists: /var/run/docker.sock"
+        log "INFO" "     Permissions: $socket_perms"
+        log "INFO" "     Owner: $socket_owner"
+        log "INFO" "     Group: $socket_group"
+        
+        if [[ "$socket_group" == "docker" ]]; then
+            log "SUCCESS" "  ✅ Socket group is correct (docker)"
+        else
+            log "ERROR" "  ❌ Socket group should be 'docker', but is '$socket_group'"
+            log "INFO" "     💡 Try: sudo chgrp docker /var/run/docker.sock"
+            ((issues++))
+        fi
+        
+        # Check if socket is group writable
+        if [[ "$socket_perms" =~ ^[0-9]*[2367][0-9]*$ ]]; then
+            log "SUCCESS" "  ✅ Socket is group writable"
+        else
+            log "WARN" "  ⚠️  Socket may not be group writable"
+            log "INFO" "     💡 Try: sudo chmod g+w /var/run/docker.sock"
+            ((warnings++))
+        fi
+    else
+        log "ERROR" "  ❌ Docker socket not found at /var/run/docker.sock"
+        ((issues++))
+    fi
+    echo
+    
+    # Test Docker access
+    log "INFO" "5. Docker Access Test:"
+    local docker_test_result
+    if [[ "$target_user" == "$(whoami)" ]]; then
+        # Test directly
+        if docker info >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ Docker access test passed for current user"
+        else
+            log "ERROR" "  ❌ Docker access test failed for current user"
+            ((issues++))
+        fi
+    else
+        # Test via sudo
+        if sudo -u "$target_user" docker info >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ Docker access test passed for user '$target_user'"
+        else
+            log "ERROR" "  ❌ Docker access test failed for user '$target_user'"
+            ((issues++))
+            
+            # Try with newgrp
+            if sudo -u "$target_user" bash -c "newgrp docker -c 'docker info'" >/dev/null 2>&1; then
+                log "SUCCESS" "  ✅ Docker access works with 'newgrp docker' for user '$target_user'"
+                log "INFO" "     💡 Group membership activation needed"
+            else
+                log "ERROR" "  ❌ Docker access still fails even with 'newgrp docker'"
+            fi
+        fi
+    fi
+    echo
+    
+    # Summary
+    log "INFO" "Diagnosis Summary:"
+    log "INFO" "  Critical Issues: $issues"
+    log "INFO" "  Warnings: $warnings"
+    echo
+    
+    if [[ $issues -eq 0 ]]; then
+        log "SUCCESS" "🎉 Docker access should work correctly!"
+        return 0
+    else
+        log "ERROR" "❌ Docker access issues detected ($issues critical issues)"
+        return 1
+    fi
+} 

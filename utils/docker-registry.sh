@@ -269,6 +269,22 @@ validate_images_exist() {
     
     log "INFO" "Validating image availability in registry..."
     
+    # Ensure authentication with GitHub Container Registry if token is provided
+    if [[ -n "$token" ]]; then
+        log "DEBUG" "Ensuring authentication for image validation..."
+        local github_user
+        github_user=$(curl -s -H "Authorization: Bearer $token" \
+                     -H "Accept: application/vnd.github.v3+json" \
+                     "$GITHUB_API_BASE/user" 2>/dev/null | \
+                     grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+        
+        if [[ -n "$github_user" ]]; then
+            if ! echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
+                log "WARN" "Failed to authenticate for validation - some checks may fail"
+            fi
+        fi
+    fi
+    
     local -A image_configs=(
         ["backend"]="backend"
         ["frontend"]="frontend" 
@@ -305,6 +321,7 @@ validate_images_exist() {
         for img in "${missing_images[@]}"; do
             echo "  ❌ $img"
         done
+        log "INFO" "💡 This may be due to authentication issues or missing images"
         return 1
     else
         log "SUCCESS" "All required images are available in the registry"
@@ -334,6 +351,33 @@ pull_images() {
     if ! docker info >/dev/null 2>&1; then
         log "ERROR" "Docker daemon is not accessible"
         return 1
+    fi
+    
+    # Ensure authentication with GitHub Container Registry
+    log "DEBUG" "Ensuring GitHub Container Registry authentication..."
+    if [[ -n "$token" ]]; then
+        # Get GitHub username for authentication
+        local github_user
+        github_user=$(curl -s -H "Authorization: Bearer $token" \
+                     -H "Accept: application/vnd.github.v3+json" \
+                     "$GITHUB_API_BASE/user" 2>/dev/null | \
+                     grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+        
+        if [[ -n "$github_user" ]]; then
+            log "DEBUG" "Authenticating Docker with GitHub user: $github_user"
+            if echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
+                log "SUCCESS" "Docker registry authentication successful"
+            else
+                log "ERROR" "Failed to authenticate with GitHub Container Registry"
+                log "INFO" "💡 Ensure your token has 'read:packages' scope"
+                return 1
+            fi
+        else
+            log "ERROR" "Could not determine GitHub username from token"
+            return 1
+        fi
+    else
+        log "WARN" "No GitHub token provided - attempting to pull without authentication"
     fi
     
     # Define the images to pull
@@ -386,53 +430,66 @@ pull_images() {
             continue
         fi
         
-        # Initialize variables for both modes
+        # Initialize variables for pull operation
         local pull_output=""
         local pull_exit_code=0
+        local temp_output
+        temp_output=$(mktemp)
         
-        # For interactive terminals, show real-time progress
+        # Enhanced error capture and progress display
         if [[ -t 1 && "${VERBOSE:-false}" != "true" ]]; then
-            # Interactive mode with live progress
-            local temp_output
-            temp_output=$(mktemp)
+            # Interactive mode with live progress but capture all output
+            echo -e "${DIM}  └─ Downloading layers...${NC}"
             
-            # Temporarily disable errexit for the docker pull command
+            # Disable errexit temporarily and capture both stdout and stderr
             set +e
-            docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
-                # Filter and format progress output for better readability
-                if [[ "$line" =~ ^#[0-9]+ ]]; then
-                    # Layer progress lines - show simplified version
-                    local layer_info=$(echo "$line" | sed -E 's/^#[0-9]+ //' | cut -d' ' -f1-2)
-                    if [[ "$layer_info" =~ (Downloading|Extracting|Pull complete) ]]; then
-                        echo -e "\r${DIM}  └─ $layer_info...${NC}" | head -c 80
+            {
+                docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
+                    # Filter and format progress output for better readability
+                    if [[ "$line" =~ ^#[0-9]+ ]]; then
+                        # Layer progress lines - show simplified version
+                        local layer_info=$(echo "$line" | sed -E 's/^#[0-9]+ //' | cut -d' ' -f1-2)
+                        if [[ "$layer_info" =~ (Downloading|Extracting|Pull complete) ]]; then
+                            echo -ne "\r${DIM}  └─ $layer_info...${NC}"
+                        fi
+                    elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
+                        echo -ne "\r${DIM}  └─ $line${NC}"
+                    elif [[ "$line" =~ (Error|error|unauthorized|forbidden|not found) ]]; then
+                        echo -e "\n${RED}  └─ $line${NC}"
                     fi
-                elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
-                    echo -e "\r${DIM}  └─ $line${NC}" | head -c 80
-                fi
-            done
+                done
+            }
             pull_exit_code=$?
             set -e
-            
-            # Capture the output for error reporting
-            pull_output=$(cat "$temp_output" 2>/dev/null || echo "No output captured")
-            rm -f "$temp_output"
             echo # New line after progress
         else
-            # Non-interactive mode or verbose mode - capture output
-            # Temporarily disable errexit for the docker pull command
+            # Non-interactive mode or verbose mode - capture all output
+            echo -e "${DIM}  └─ Downloading...${NC}"
+            
+            # Disable errexit temporarily
             set +e
-            pull_output=$(docker pull "$image_url" 2>&1)
+            pull_output=$(docker pull "$image_url" 2>&1 | tee "$temp_output")
             pull_exit_code=$?
             set -e
             
             if [[ "${VERBOSE:-false}" == "true" ]]; then
-                echo "$pull_output"
+                echo "$pull_output" | sed 's/^/    /'
             else
-                # Show simplified progress for non-interactive
-                echo "$pull_output" | grep -E "(Pulling|Download|Pull complete|Already exists)" | while read -r line; do
-                    echo -e "${DIM}  └─ $line${NC}"
+                # Show key progress indicators for non-interactive
+                echo "$pull_output" | grep -E "(Pulling|Download|Pull complete|Already exists|Error|error|unauthorized)" | while read -r line; do
+                    if [[ "$line" =~ (Error|error|unauthorized|forbidden|not found) ]]; then
+                        echo -e "${RED}  └─ $line${NC}"
+                    else
+                        echo -e "${DIM}  └─ $line${NC}"
+                    fi
                 done
             fi
+        fi
+        
+        # Ensure we have the output for error reporting
+        if [[ -f "$temp_output" ]]; then
+            pull_output=$(cat "$temp_output" 2>/dev/null || echo "Failed to read output")
+            rm -f "$temp_output"
         fi
         
         # Ensure pull_output is never empty to avoid unbound variable issues
@@ -445,10 +502,30 @@ pull_images() {
             successful_images+=("$image_url")
         else
             echo -e "${RED}  ❌ Failed to pull: $image_name:$tag${NC}"
+            
+            # Enhanced error analysis and reporting
+            local error_summary=""
+            if echo "$pull_output" | grep -qi "unauthorized\|authentication required"; then
+                error_summary="Authentication failed - check GitHub token permissions"
+            elif echo "$pull_output" | grep -qi "forbidden\|access denied"; then
+                error_summary="Access denied - insufficient token permissions"
+            elif echo "$pull_output" | grep -qi "not found\|no such"; then
+                error_summary="Image not found - check image name and tag"
+            elif echo "$pull_output" | grep -qi "network\|timeout\|connection"; then
+                error_summary="Network error - check connectivity"
+            elif echo "$pull_output" | grep -qi "disk\|space"; then
+                error_summary="Insufficient disk space"
+            else
+                error_summary="Unknown error - see details below"
+            fi
+            
+            echo -e "${RED}    └─ $error_summary${NC}"
             pull_errors["$image_name"]="$pull_output"
             failed_images+=("$image_name:$tag")
-            if [[ "${VERBOSE:-false}" == "true" ]]; then
-                log "DEBUG" "Error details: $pull_output"
+            
+            # Always show critical errors even in non-verbose mode
+            if echo "$pull_output" | grep -qi "unauthorized\|forbidden\|not found"; then
+                echo -e "${DIM}    └─ Error details: $(echo "$pull_output" | grep -i "error\|unauthorized\|forbidden\|not found" | head -1)${NC}"
             fi
         fi
         
@@ -477,18 +554,41 @@ pull_images() {
         done
         echo
         
-        # Show detailed errors if verbose mode
-        if [[ "${VERBOSE:-false}" == "true" ]]; then
-            echo -e "${BOLD}${RED}Error Details:${NC}"
-            for image_name in "${!pull_errors[@]}"; do
-                echo -e "${BOLD}$image_name:${NC}"
-                echo "${pull_errors[$image_name]}" | sed 's/^/  /'
-                echo
-            done
-        else
-            echo -e "${DIM}💡 Run with --verbose to see detailed error information${NC}"
+        # Show detailed errors with enhanced formatting
+        echo -e "${BOLD}${RED}Error Details:${NC}"
+        for image_name in "${!pull_errors[@]}"; do
+            echo -e "${BOLD}$image_name:${NC}"
+            local error_text="${pull_errors[$image_name]}"
+            
+            # Show most relevant error lines first
+            echo "$error_text" | grep -i "error\|unauthorized\|forbidden\|not found" | head -3 | sed 's/^/  /' || true
+            
+            if [[ "${VERBOSE:-false}" == "true" ]]; then
+                echo -e "${DIM}Full output:${NC}"
+                echo "$error_text" | sed 's/^/    /'
+            fi
             echo
+        done
+        
+        # Provide helpful troubleshooting suggestions
+        echo -e "${BOLD}${YELLOW}💡 Troubleshooting Suggestions:${NC}"
+        if grep -qi "unauthorized\|authentication" <<< "${pull_errors[*]}"; then
+            echo "  🔑 Authentication issue detected:"
+            echo "     • Verify GitHub token has 'read:packages' scope"
+            echo "     • Check token expiration"
+            echo "     • Try re-running: docker login ghcr.io"
         fi
+        if grep -qi "forbidden\|access denied" <<< "${pull_errors[*]}"; then
+            echo "  🚫 Access denied:"
+            echo "     • Ensure token has access to milou-sh organization"
+            echo "     • Verify repository visibility settings"
+        fi
+        if grep -qi "not found" <<< "${pull_errors[*]}"; then
+            echo "  📦 Image not found:"
+            echo "     • Check if images exist with the specified tag ($tag)"
+            echo "     • Try with different tag (e.g., v1.0.0, main)"
+        fi
+        echo
         
         return 1
     else
@@ -556,4 +656,82 @@ debug_docker_images() {
     fi
     
     return $([[ "$all_good" == true ]] && echo 0 || echo 1)
+}
+
+# =============================================================================
+# Enhanced Image Management Functions
+# =============================================================================
+
+# Try multiple image tags with fallback strategy
+try_pull_with_fallback() {
+    local image_name="$1"
+    local primary_tag="$2"
+    local token="$3"
+    
+    log "DEBUG" "Attempting to pull $image_name with fallback strategy..."
+    
+    # Define fallback tag order
+    local -a tag_candidates=()
+    
+    if [[ "$primary_tag" == "latest" ]]; then
+        tag_candidates=("latest" "main" "master" "v1.0.0" "stable")
+    elif [[ "$primary_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        tag_candidates=("$primary_tag" "latest" "main" "master")
+    else
+        tag_candidates=("$primary_tag" "latest" "main")
+    fi
+    
+    for tag in "${tag_candidates[@]}"; do
+        local image_url="ghcr.io/milou-sh/milou/$image_name:$tag"
+        log "DEBUG" "Trying $image_url..."
+        
+        # Check if image exists first
+        if docker manifest inspect "$image_url" >/dev/null 2>&1; then
+            log "DEBUG" "Found available tag: $tag for $image_name"
+            
+            # Try to pull the image
+            if docker pull "$image_url" >/dev/null 2>&1; then
+                log "SUCCESS" "Successfully pulled $image_name:$tag"
+                return 0
+            else
+                log "DEBUG" "Pull failed for $image_name:$tag despite manifest existing"
+            fi
+        else
+            log "DEBUG" "Tag $tag not available for $image_name"
+        fi
+    done
+    
+    log "ERROR" "Failed to pull $image_name with any available tag"
+    return 1
+}
+
+# Enhanced image availability check with multiple strategies
+enhanced_image_check() {
+    local image_name="$1"
+    local tag="$2"
+    local token="$3"
+    
+    local image_url="ghcr.io/milou-sh/milou/$image_name:$tag"
+    
+    # Strategy 1: Simple manifest check
+    if docker manifest inspect "$image_url" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Strategy 2: Try with authentication if token is available
+    if [[ -n "$token" ]]; then
+        local github_user
+        github_user=$(curl -s -H "Authorization: Bearer $token" \
+                     -H "Accept: application/vnd.github.v3+json" \
+                     "$GITHUB_API_BASE/user" 2>/dev/null | \
+                     grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+        
+        if [[ -n "$github_user" ]] && echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
+            if docker manifest inspect "$image_url" >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+    fi
+    
+    return 1
 } 

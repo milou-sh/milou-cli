@@ -13,38 +13,49 @@ readonly NC_PROMPT='\033[0m'
 
 # Interactive prompts
 prompt_user() {
-    local prompt="$1"
-    local default="$2"
-    local var_name="$3"
-    local is_hidden="${4:-false}"
-    
-    if [[ "$is_hidden" == "true" ]]; then
-        echo -ne "${CYAN_PROMPT}${prompt}${NC_PROMPT}"
-        [[ -n "$default" ]] && echo -ne " ${YELLOW}(default: *****)${NC_PROMPT}"
+    local prompt_text="$1"
+    local default_value="$2"
+    local var_to_set="$3"
+    local is_hidden_input="${4:-false}"
+
+    local current_user_input # Variable to store read input
+
+    if [[ "$is_hidden_input" == "true" ]]; then
+        # Prompt for hidden input (e.g., passwords, tokens)
+        echo -ne "${CYAN_PROMPT}${prompt_text}${NC_PROMPT}"
+        [[ -n "$default_value" ]] && echo -ne " ${YELLOW}(default: *****)${NC_PROMPT}"
         echo -ne ": "
-        read -s user_input
-        echo  # New line after secret input
+        read -rs current_user_input # Use -r to read raw input, -s for silent
+        echo  # Ensure a new line after hidden input
     else
-        echo -ne "${CYAN_PROMPT}${prompt}${NC_PROMPT}"
-        [[ -n "$default" ]] && echo -ne " ${YELLOW}(default: $default)${NC_PROMPT}"
+        # Prompt for regular input
+        echo -ne "${CYAN_PROMPT}${prompt_text}${NC_PROMPT}"
+        [[ -n "$default_value" ]] && echo -ne " ${YELLOW}(default: $default_value)${NC_PROMPT}"
         echo -ne ": "
-        read user_input
+        read -r current_user_input # Use -r to read raw input
     fi
-    
-    # Use default if no input provided
-    if [[ -z "$user_input" && -n "$default" ]]; then
-        user_input="$default"
+
+    # Use default_value if no input was provided by the user
+    if [[ -z "$current_user_input" && -n "$default_value" ]]; then
+        current_user_input="$default_value"
     fi
-    
-    # Set the variable dynamically
-    eval "$var_name='$user_input'"
+
+    # Safely set the target variable using printf -v
+    # This avoids issues with special characters in current_user_input that could break eval
+    if printf -v "$var_to_set" '%s' "$current_user_input"; then
+        return 0 # Success
+    else
+        # In case printf -v fails (e.g., var_to_set is an invalid variable name)
+        # Fallback error echo if log function is not available
+        echo "[ERROR] Critical: Failed to set variable '$var_to_set' in prompt_user function." >&2
+        return 1 # Failure
+    fi
 }
 
 # Validate user inputs interactively
 validate_input() {
     local input="$1"
     local type="$2"
-    local field_name="$3"
     
     case "$type" in
         "github_token")
@@ -295,7 +306,7 @@ interactive_setup() {
     
     # Generate configuration
     echo -e "\n${BOLD_PROMPT}Step 4: Generating Configuration${NC_PROMPT}"
-    if ! generate_config "$domain" "$ssl_path"; then
+    if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
         echo -e "${RED}[ERROR]${NC_PROMPT} Failed to generate configuration"
         return 1
     fi
@@ -340,4 +351,186 @@ interactive_setup() {
     fi
     
     return 0
+}
+
+# Enhanced interactive setup wizard
+interactive_setup_wizard() {
+    echo
+    echo -e "${BOLD}${PURPLE}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${PURPLE}║                    Milou Setup Wizard                         ║${NC}"
+    echo -e "${BOLD}${PURPLE}║                    Version ${SCRIPT_VERSION:-3.0.0}                     ║${NC}"
+    echo -e "${BOLD}${PURPLE}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo
+    echo "Welcome to the Milou setup wizard!"
+    echo "This wizard will guide you through the initial configuration."
+
+    # Step 0: Pre-flight System Check
+    echo -e "${BOLD}Step 0: Pre-flight System Check${NC}"
+    echo "Let's first check your current system state..."
+    echo
+    
+    # Check for existing installation - suppress errors but show results
+    if ! check_existing_installation 2>/dev/null; then
+        echo "An existing Milou installation was detected."
+        echo
+        if ! confirm "Do you want to continue with setup anyway?" "Y"; then
+            log "INFO" "Setup cancelled by user"
+            exit 0
+        fi
+        echo
+    fi
+
+    echo
+    
+    # Step 1: System Prerequisites
+    echo -e "${BOLD}Step 1: System Prerequisites${NC}"
+    check_system_requirements
+    echo
+    
+    # Step 2: GitHub Authentication
+    echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
+    local github_token=""
+    while true; do
+        echo -ne "${CYAN}GitHub Personal Access Token: ${NC}"
+        read -rs github_token
+        echo
+        
+        if [[ -z "$github_token" ]]; then
+            log "ERROR" "GitHub token is required"
+            continue
+        fi
+        
+        if test_github_authentication "$github_token"; then
+            break
+        else
+            echo "Please try again with a valid token."
+            echo
+        fi
+    done
+    echo
+    
+    # Step 3: Domain Configuration
+    echo -e "${BOLD}Step 3: Domain Configuration${NC}"
+    local domain="localhost"
+    echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
+    read user_domain
+    if [[ -n "$user_domain" ]]; then
+        if validate_input "$user_domain" "domain"; then
+            domain="$user_domain"
+        else
+            log "WARN" "Invalid domain, using localhost"
+            domain="localhost"
+        fi
+    fi
+    echo
+    
+    # Step 4: SSL Configuration
+    echo -e "${BOLD}Step 4: SSL Configuration${NC}"
+    local ssl_path="./ssl"
+    echo -ne "${CYAN}SSL certificates directory (default: ./ssl): ${NC}"
+    read user_ssl_path
+    if [[ -n "$user_ssl_path" ]]; then
+        ssl_path="$user_ssl_path"
+    fi
+    echo
+    
+    # Step 5: Optional Configuration
+    echo -e "${BOLD}Step 5: Optional Configuration${NC}"
+    local admin_email=""
+    echo -ne "${CYAN}Admin email (optional): ${NC}"
+    read admin_email
+    if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
+        log "WARN" "Invalid email format, skipping"
+        admin_email=""
+    fi
+    echo
+    
+    # Step 6: Image Version Strategy
+    echo -e "${BOLD}Step 6: Image Version Strategy${NC}"
+    echo "Choose Docker image versioning strategy:"
+    echo "  1) Use latest available versions (recommended)"
+    echo "  2) Use specific version (v1.0.0)"
+    echo
+    local use_latest=false
+    while true; do
+        echo -ne "${CYAN}Enter your choice (1-2): ${NC}"
+        read version_choice
+        case "$version_choice" in
+            1) use_latest=true; break ;;
+            2) use_latest=false; break ;;
+            *) echo "Invalid choice. Please enter 1 or 2." ;;
+        esac
+    done
+    echo
+    
+    # Configuration Summary
+    echo -e "${BOLD}Step 7: Configuration Summary${NC}"
+    echo "Domain: $domain"
+    echo "SSL Path: $ssl_path"
+    echo "Admin Email: ${admin_email:-Not provided}"
+    echo "GitHub Token: *****(provided)"
+    echo "Image Strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
+    echo
+    
+    if ! confirm "Proceed with this configuration?" "Y"; then
+            log "INFO" "Setup cancelled by user"
+            exit 0
+        fi
+        echo
+    
+    # Step 8: Generate Configuration
+    echo -e "${BOLD}Step 8: Generating Configuration${NC}"
+    show_progress "Generating .env configuration file" 2
+    if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
+        error_exit "Failed to generate configuration"
+    fi
+    echo
+    
+    # Step 9: SSL Certificate Setup
+    echo -e "${BOLD}Step 9: SSL Certificate Setup${NC}"
+    if ! setup_ssl "$ssl_path" "$domain"; then
+        if ! confirm "SSL setup failed. Continue anyway?" "N"; then
+            error_exit "Setup cancelled due to SSL certificate issues"
+        fi
+    fi
+    echo
+    
+    # Step 10: Pull Docker Images
+    echo -e "${BOLD}Step 10: Pulling Docker Images${NC}"
+    show_progress "Validating image availability" 1
+    
+    # First validate that images exist
+    if ! validate_images_exist "$github_token" "$use_latest"; then
+        log "WARN" "Some required images are not available in the registry"
+        if ! confirm "Continue with setup anyway? (This may cause service startup failures)" "N"; then
+            error_exit "Setup cancelled due to missing Docker images"
+        fi
+    fi
+    
+    show_progress "Pulling Docker images from GitHub Container Registry" 3
+    if ! pull_images "$github_token" "$use_latest"; then
+        if ! confirm "Some images failed to pull. Continue anyway?" "N"; then
+            error_exit "Setup cancelled due to image pull failures"
+        fi
+    fi
+    echo
+    
+    # Step 11: Start Services
+    echo -e "${BOLD}Step 11: Start Services${NC}"
+    if confirm "Start services now?" "Y"; then
+        show_progress "Starting services" 2
+        if start_services_with_checks; then
+            echo
+            log "SUCCESS" "${ROCKET_EMOJI} Setup complete! Milou is now running."
+            log "INFO" "Access your instance at: https://$domain"
+            if [[ "$domain" == "localhost" ]]; then
+                log "INFO" "Local access: https://localhost"
+            fi
+        else
+            log "ERROR" "Failed to start services"
+            log "INFO" "You can start services later with: $0 start"
+        fi
+    else
+        log "INFO" "Setup complete! Start services with: $0 start"
+    fi
 } 

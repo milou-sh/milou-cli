@@ -378,7 +378,9 @@ pull_images() {
             local temp_output
             temp_output=$(mktemp)
             
-            if docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
+            # Temporarily disable errexit for the docker pull command
+            set +e
+            docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
                 # Filter and format progress output for better readability
                 if [[ "$line" =~ ^#[0-9]+ ]]; then
                     # Layer progress lines - show simplified version
@@ -389,11 +391,9 @@ pull_images() {
                 elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
                     echo -e "\r${DIM}  └─ $line${NC}" | head -c 80
                 fi
-            done; then
-                pull_exit_code=0
-            else
-                pull_exit_code=$?
-            fi
+            done
+            pull_exit_code=$?
+            set -e
             
             # Capture the output for error reporting
             pull_output=$(cat "$temp_output" 2>/dev/null || echo "No output captured")
@@ -401,8 +401,11 @@ pull_images() {
             echo # New line after progress
         else
             # Non-interactive mode or verbose mode - capture output
+            # Temporarily disable errexit for the docker pull command
+            set +e
             pull_output=$(docker pull "$image_url" 2>&1)
             pull_exit_code=$?
+            set -e
             
             if [[ "${VERBOSE:-false}" == "true" ]]; then
                 echo "$pull_output"
@@ -412,6 +415,11 @@ pull_images() {
                     echo -e "${DIM}  └─ $line${NC}"
                 done
             fi
+        fi
+        
+        # Ensure pull_output is never empty to avoid unbound variable issues
+        if [[ -z "$pull_output" ]]; then
+            pull_output="No output captured from docker pull command"
         fi
         
         if [[ $pull_exit_code -eq 0 ]]; then

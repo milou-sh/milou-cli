@@ -21,6 +21,10 @@ setup_ssl() {
     # Strategy 1: Check if valid certificates already exist
     if [[ -f "$cert_file" && -f "$key_file" ]]; then
         log "INFO" "SSL certificates found at $ssl_path"
+        
+        # Show current certificate information
+        show_certificate_info "$cert_file" "$domain"
+        
         if validate_ssl_certificates "$cert_file" "$key_file" "$domain"; then
             log "SUCCESS" "Existing SSL certificates are valid"
             return 0
@@ -35,6 +39,7 @@ setup_ssl() {
     # Strategy 2: Try to consolidate from other locations (migration)
     if consolidate_existing_certificates "$ssl_path"; then
         log "SUCCESS" "SSL certificates consolidated from existing installation"
+        show_certificate_info "$cert_file" "$domain"
         return 0
     fi
     
@@ -46,6 +51,23 @@ setup_ssl() {
             return 0
         fi
     else
+        # Real domain - try Let's Encrypt first, then fallback to self-signed
+        log "INFO" "Real domain detected: $domain"
+        
+        # Check if Let's Encrypt is available and domain is publicly accessible
+        if is_domain_publicly_accessible "$domain" && can_use_letsencrypt; then
+            log "INFO" "Attempting to obtain Let's Encrypt certificate for $domain"
+            if generate_letsencrypt_certificate "$ssl_path" "$domain"; then
+                log "SUCCESS" "Let's Encrypt certificate obtained successfully"
+                show_certificate_info "$cert_file" "$domain"
+                return 0
+            else
+                log "WARN" "Let's Encrypt failed, falling back to self-signed certificate"
+            fi
+        else
+            log "INFO" "Let's Encrypt not available, using self-signed certificate"
+        fi
+        
         log "INFO" "Generating production self-signed certificate for $domain"
         if generate_production_certificate "$ssl_path" "$domain"; then
             log "SUCCESS" "Production SSL certificate generated"
@@ -526,5 +548,215 @@ show_ssl_info() {
         if [[ -f "$key_file" ]]; then
             echo "  Private key file: $key_file"
         fi
+    fi
+}
+
+# Show certificate information
+show_certificate_info() {
+    local cert_file="$1"
+    local expected_domain="$2"
+    
+    if [[ ! -f "$cert_file" ]] || ! command -v openssl >/dev/null 2>&1; then
+        return 1
+    fi
+    
+    log "INFO" "📄 Current Certificate Information:"
+    
+    # Get certificate subject and issuer
+    local subject issuer not_before not_after
+    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
+    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//')
+    not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | cut -d'=' -f2)
+    not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d'=' -f2)
+    
+    # Extract Common Name from subject
+    local cn
+    cn=$(echo "$subject" | grep -o 'CN=[^,]*' | cut -d'=' -f2 | sed 's/^ *//')
+    
+    # Extract Subject Alternative Names
+    local san
+    san=$(openssl x509 -in "$cert_file" -noout -ext subjectAltName 2>/dev/null | grep -v "Subject Alternative Name" | tr ',' '\n' | sed 's/^ *DNS://' | sed 's/^ *IP:/IP: /' | grep -v '^$' | sort | uniq | tr '\n' ', ' | sed 's/, $//')
+    
+    echo "  🏷️  Domain: ${cn:-Unknown}"
+    [[ -n "$san" ]] && echo "  🔗 Alt Names: $san"
+    
+    # Determine certificate type
+    local cert_type="Unknown"
+    if [[ "$issuer" =~ "Let's Encrypt" ]]; then
+        cert_type="Let's Encrypt (Valid CA)"
+    elif [[ "$subject" == "$issuer" ]]; then
+        cert_type="Self-signed"
+    else
+        cert_type="CA-signed"
+    fi
+    echo "  📋 Type: $cert_type"
+    
+    # Show validity period
+    if [[ -n "$not_before" && -n "$not_after" ]]; then
+        echo "  📅 Valid: $(date -d "$not_before" "+%Y-%m-%d" 2>/dev/null || echo "$not_before") to $(date -d "$not_after" "+%Y-%m-%d" 2>/dev/null || echo "$not_after")"
+        
+        # Calculate days until expiry
+        local expiry_timestamp current_timestamp
+        expiry_timestamp=$(date -d "$not_after" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null)
+        current_timestamp=$(date +%s)
+        
+        if [[ -n "$expiry_timestamp" ]]; then
+            local days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
+            if [[ $days_until_expiry -le 0 ]]; then
+                echo "  ⚠️  Status: EXPIRED"
+            elif [[ $days_until_expiry -le 7 ]]; then
+                echo "  ⚠️  Status: Expires in $days_until_expiry days (renewal needed)"
+            elif [[ $days_until_expiry -le 30 ]]; then
+                echo "  ⚠️  Status: Expires in $days_until_expiry days"
+            else
+                echo "  ✅ Status: Valid for $days_until_expiry more days"
+            fi
+        fi
+    fi
+    
+    # Domain match check
+    if [[ -n "$expected_domain" && "$expected_domain" != "localhost" ]]; then
+        if [[ "$cn" == "$expected_domain" ]] || [[ "$san" =~ $expected_domain ]]; then
+            echo "  ✅ Domain match: Certificate matches requested domain"
+        else
+            echo "  ⚠️  Domain mismatch: Certificate is for '$cn' but '$expected_domain' requested"
+        fi
+    fi
+    
+    echo
+}
+
+# Check if domain is publicly accessible (for Let's Encrypt)
+is_domain_publicly_accessible() {
+    local domain="$1"
+    
+    # Skip check for localhost and private IPs
+    if [[ "$domain" =~ ^(localhost|127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.) ]]; then
+        return 1
+    fi
+    
+    # Try to resolve the domain
+    if ! command -v dig >/dev/null 2>&1 && ! command -v nslookup >/dev/null 2>&1; then
+        log "DEBUG" "No DNS tools available to check domain accessibility"
+        return 1
+    fi
+    
+    # Simple DNS resolution check
+    if command -v dig >/dev/null 2>&1; then
+        if dig +short "$domain" >/dev/null 2>&1; then
+            log "DEBUG" "Domain $domain resolves to public IP"
+            return 0
+        fi
+    elif command -v nslookup >/dev/null 2>&1; then
+        if nslookup "$domain" >/dev/null 2>&1; then
+            log "DEBUG" "Domain $domain resolves via nslookup"
+            return 0
+        fi
+    fi
+    
+    log "DEBUG" "Domain $domain does not appear to be publicly accessible"
+    return 1
+}
+
+# Check if Let's Encrypt (certbot) can be used
+can_use_letsencrypt() {
+    # Check if certbot is available
+    if command -v certbot >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Check if snap certbot is available
+    if command -v snap >/dev/null 2>&1 && snap list certbot >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Check if we're running as root (required for certbot)
+    if [[ $EUID -ne 0 ]]; then
+        log "DEBUG" "Let's Encrypt requires root privileges"
+        return 1
+    fi
+    
+    # Try to install certbot if not available
+    log "INFO" "Certbot not found, attempting to install..."
+    if install_certbot; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Install certbot
+install_certbot() {
+    # Try snap installation first (most reliable)
+    if command -v snap >/dev/null 2>&1; then
+        log "INFO" "Installing certbot via snap..."
+        if snap install --classic certbot >/dev/null 2>&1; then
+            # Create symlink if needed
+            if [[ ! -f /usr/bin/certbot ]]; then
+                ln -s /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+            fi
+            log "SUCCESS" "Certbot installed successfully via snap"
+            return 0
+        fi
+    fi
+    
+    # Try package manager installation
+    if command -v apt-get >/dev/null 2>&1; then
+        log "INFO" "Installing certbot via apt..."
+        if apt-get update >/dev/null 2>&1 && apt-get install -y certbot >/dev/null 2>&1; then
+            log "SUCCESS" "Certbot installed successfully via apt"
+            return 0
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        log "INFO" "Installing certbot via yum..."
+        if yum install -y certbot >/dev/null 2>&1; then
+            log "SUCCESS" "Certbot installed successfully via yum"
+            return 0
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        log "INFO" "Installing certbot via dnf..."
+        if dnf install -y certbot >/dev/null 2>&1; then
+            log "SUCCESS" "Certbot installed successfully via dnf"
+            return 0
+        fi
+    fi
+    
+    log "WARN" "Failed to install certbot"
+    return 1
+}
+
+# Generate Let's Encrypt certificate
+generate_letsencrypt_certificate() {
+    local ssl_path="$1"
+    local domain="$2"
+    
+    local cert_file="$ssl_path/milou.crt"
+    local key_file="$ssl_path/milou.key"
+    
+    # Determine certbot command
+    local certbot_cmd="certbot"
+    if ! command -v certbot >/dev/null 2>&1 && command -v snap >/dev/null 2>&1; then
+        certbot_cmd="/snap/bin/certbot"
+    fi
+    
+    log "INFO" "Requesting Let's Encrypt certificate for $domain..."
+    
+    # Use standalone mode for simplicity (requires port 80 to be free)
+    local certbot_output
+    certbot_output=$($certbot_cmd certonly --standalone --non-interactive --agree-tos \
+        --email "admin@$domain" --domains "$domain" \
+        --cert-path "$cert_file" --key-path "$key_file" 2>&1)
+    
+    if [[ $? -eq 0 && -f "$cert_file" && -f "$key_file" ]]; then
+        # Set proper permissions
+        chmod 644 "$cert_file"
+        chmod 600 "$key_file"
+        
+        log "SUCCESS" "Let's Encrypt certificate obtained for $domain"
+        return 0
+    else
+        log "WARN" "Let's Encrypt certificate request failed"
+        log "DEBUG" "Certbot output: $certbot_output"
+        return 1
     fi
 } 

@@ -1653,8 +1653,6 @@ export -f has_docker_permissions
 export -f create_milou_user
 export -f switch_to_milou_user
 export -f validate_user_permissions
-export -f ensure_proper_user_setup
-export -f diagnose_docker_access
 
 # Comprehensive Docker access diagnostic
 diagnose_docker_access() {

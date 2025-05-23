@@ -4,6 +4,7 @@
 
 # Import utility functions
 source "${SCRIPT_DIR}/utils/utils.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/utils/docker-registry.sh" 2>/dev/null || true
 
 # Colors for interactive prompts
 readonly CYAN_PROMPT='\033[0;36m'
@@ -320,7 +321,7 @@ interactive_setup() {
     
     # Pull Docker images
     echo -e "\n${BOLD_PROMPT}Step 6: Pulling Docker Images${NC_PROMPT}"
-    if ! pull_images "$github_token"; then
+    if ! pull_images "$github_token" "true"; then
         echo -e "${RED}[ERROR]${NC_PROMPT} Failed to pull Docker images"
         return 1
     fi
@@ -672,12 +673,12 @@ interactive_setup_wizard() {
     # Step 10: Pull Docker Images
     echo -e "${BOLD}Step 10: Pulling Docker Images${NC}"
     show_progress "Validating image availability" 2
-    if ! validate_image_availability "$github_token"; then
+    if ! validate_images_exist "$github_token" "$use_latest"; then
         log "WARN" "Some images may not be available - continuing anyway"
     fi
     
     show_progress "Pulling Docker images from GitHub Container Registry" 2
-    if ! pull_images "$github_token"; then
+    if ! pull_images "$github_token" "$use_latest"; then
         error_exit "Failed to pull Docker images"
     fi
     echo

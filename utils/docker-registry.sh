@@ -278,10 +278,16 @@ validate_images_exist() {
     )
     
     local -a missing_images=()
-    local tag="latest"  # For now, just check latest since manual tests confirmed it works
+    local tag="latest"  # Default to latest for safety
     
-    if [[ "$use_latest" != true ]]; then
+    log "DEBUG" "validate_images_exist: use_latest parameter: '$use_latest'"
+    
+    # Handle both string "false" and boolean false
+    if [[ "$use_latest" == "false" || "$use_latest" == false ]]; then
         tag="v1.0.0"
+        log "DEBUG" "validate_images_exist: Using fixed version tag: $tag"
+    else
+        log "DEBUG" "validate_images_exist: Using latest tag: $tag"
     fi
     
     # Check each image quickly
@@ -316,7 +322,13 @@ pull_images() {
     local use_latest="${2:-false}"
     
     log "STEP" "Pulling Docker images from GitHub Container Registry..."
-    log "INFO" "Image versioning strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
+    
+    # Fix the log message to use robust boolean logic
+    local strategy_message="Latest versions"
+    if [[ "$use_latest" == "false" || "$use_latest" == false ]]; then
+        strategy_message="Fixed version (v1.0.0)"
+    fi
+    log "INFO" "Image versioning strategy: $strategy_message"
     
     # Validate Docker access
     if ! docker info >/dev/null 2>&1; then
@@ -339,10 +351,16 @@ pull_images() {
     local total_images=${#image_configs[@]}
     local current=0
     
-    # Determine tag to use
+    # Determine tag to use with robust boolean handling
     local tag="latest"
-    if [[ "$use_latest" != true ]]; then
+    log "DEBUG" "use_latest parameter received: '$use_latest' (type: $(type -t use_latest 2>/dev/null || echo 'variable'))"
+    
+    # Handle both string "true" and boolean true, defaulting to latest for safety
+    if [[ "$use_latest" == "false" || "$use_latest" == false ]]; then
         tag="v1.0.0"
+        log "DEBUG" "Using fixed version tag: $tag"
+    else
+        log "DEBUG" "Using latest tag: $tag"
     fi
     
     echo

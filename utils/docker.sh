@@ -2,65 +2,145 @@
 
 # Docker utility functions
 
+# Validate GitHub token format
+validate_github_token() {
+    local token="$1"
+    if [[ ! "$token" =~ ^gh[pousr]_[A-Za-z0-9_]{36,251}$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
 # Pull Docker images from GitHub Container Registry
 pull_images() {
     local github_token="$1"
     
     echo "Pulling Docker images from GitHub Container Registry..."
     
+    # Validate token if provided
+    if [[ -n "$github_token" ]] && ! validate_github_token "$github_token"; then
+        echo "Error: Invalid GitHub token format"
+        return 1
+    fi
+    
     # List of images to pull
     local images=(
         "ghcr.io/milou-sh/milou/backend:v1.0.0"
         "ghcr.io/milou-sh/milou/frontend:v1.0.0"
         "ghcr.io/milou-sh/milou/engine:v1.0.0"
+        "ghcr.io/milou-sh/milou/nginx:v1.0.0"
+        "ghcr.io/milou-sh/milou/database:v1.0.0"
     )
+    
+    local failed_images=()
     
     for image in "${images[@]}"; do
         echo "Pulling ${image}..."
-        docker pull "${image}" || {
-            echo "Error: Failed to pull ${image}. Please check your GitHub token and network connection."
-            return 1
-        }
+        if ! docker pull "${image}" 2>/dev/null; then
+            echo "Warning: Failed to pull ${image}"
+            failed_images+=("$image")
+        fi
     done
+    
+    if [[ ${#failed_images[@]} -gt 0 ]]; then
+        echo "Error: Failed to pull the following images:"
+        printf '  %s\n' "${failed_images[@]}"
+        echo "Please check your GitHub token and network connection."
+        return 1
+    fi
     
     echo "All Docker images pulled successfully."
     return 0
 }
 
+# Check if Docker daemon is accessible
+check_docker_access() {
+    if ! docker info >/dev/null 2>&1; then
+        echo "Error: Cannot access Docker daemon."
+        echo "Please ensure:"
+        echo "  1. Docker is installed and running"
+        echo "  2. Current user has Docker permissions"
+        echo "  3. Try: sudo usermod -aG docker \$USER && newgrp docker"
+        return 1
+    fi
+    return 0
+}
+
+# Create Docker networks if they don't exist
+create_networks() {
+    echo "Creating Docker networks..."
+    
+    # Create milou_network if it doesn't exist
+    if ! docker network inspect milou_network >/dev/null 2>&1; then
+        echo "Creating milou_network..."
+        if ! docker network create milou_network; then
+            echo "Error: Failed to create milou_network"
+            return 1
+        fi
+    fi
+    
+    # Create proxy network if it doesn't exist
+    if ! docker network inspect proxy >/dev/null 2>&1; then
+        echo "Creating proxy network..."
+        if ! docker network create proxy; then
+            echo "Error: Failed to create proxy network"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
 # Start all services
 start_services() {
+    # Check Docker access first
+    if ! check_docker_access; then
+        return 1
+    fi
+    
     # Ensure we have a valid configuration
     if ! validate_config; then
         echo "Error: Invalid configuration. Please run setup first."
         return 1
     fi
     
-    # Create external network if it doesn't exist
-    if ! docker network inspect proxy &>/dev/null; then
-        echo "Creating proxy network..."
-        docker network create proxy || {
-            echo "Error: Failed to create proxy network."
-            return 1
-        }
+    # Create networks
+    if ! create_networks; then
+        return 1
     fi
     
     # Start services with Docker Compose
     echo "Starting services with Docker Compose..."
-    cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml --env-file .env up -d || {
-        echo "Error: Failed to start services."
+    cd "${SCRIPT_DIR}" || {
+        echo "Error: Cannot change to script directory"
         return 1
     }
     
+    if ! docker compose -f static/docker-compose.yml --env-file .env up -d; then
+        echo "Error: Failed to start services."
+        return 1
+    fi
+    
     # Wait for services to be ready
     echo "Waiting for services to be ready..."
+    if wait_for_services; then
+        echo "All services are ready!"
+        return 0
+    else
+        echo "Warning: Some services may not be fully ready yet."
+        return 0
+    fi
+}
+
+# Wait for services to be healthy
+wait_for_services() {
     local timeout=120
     local interval=5
     local elapsed=0
     
     while [ $elapsed -lt $timeout ]; do
         # Check if backend is healthy
-        if docker compose -f "${SCRIPT_DIR}/static/docker-compose.yml" ps | grep backend | grep "healthy" &>/dev/null; then
-            echo "All services are ready!"
+        if docker compose -f "${SCRIPT_DIR}/static/docker-compose.yml" ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null | grep -q "healthy"; then
             return 0
         fi
         
@@ -69,17 +149,23 @@ start_services() {
         elapsed=$((elapsed + interval))
     done
     
-    echo "Warning: Timeout waiting for services to be ready. They might still be starting up."
-    return 0
+    echo "Warning: Timeout waiting for services to be ready."
+    return 1
 }
 
 # Stop all services
 stop_services() {
     echo "Stopping services..."
-    cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml --env-file .env down || {
-        echo "Error: Failed to stop services."
+    
+    cd "${SCRIPT_DIR}" || {
+        echo "Error: Cannot change to script directory"
         return 1
     }
+    
+    if ! docker compose -f static/docker-compose.yml down; then
+        echo "Warning: Some services may not have stopped cleanly"
+        return 1
+    fi
     
     echo "Services stopped successfully."
     return 0
@@ -89,19 +175,35 @@ stop_services() {
 restart_services() {
     echo "Restarting services..."
     
-    stop_services
-    start_services
+    if ! stop_services; then
+        echo "Warning: Stop operation had issues"
+    fi
     
-    return $?
+    # Wait a moment for cleanup
+    sleep 2
+    
+    if start_services; then
+        echo "Services restarted successfully"
+        return 0
+    else
+        echo "Error: Failed to restart services"
+        return 1
+    fi
 }
 
 # Check the status of all services
 check_service_status() {
     echo "Service Status:"
-    cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml ps || {
-        echo "Error: Failed to check service status."
+    
+    cd "${SCRIPT_DIR}" || {
+        echo "Error: Cannot change to script directory"
         return 1
     }
+    
+    if ! docker compose -f static/docker-compose.yml ps; then
+        echo "Error: Failed to check service status."
+        return 1
+    fi
     
     return 0
 }
@@ -110,18 +212,23 @@ check_service_status() {
 view_logs() {
     local service="$1"
     
+    cd "${SCRIPT_DIR}" || {
+        echo "Error: Cannot change to script directory"
+        return 1
+    }
+    
     if [ -z "$service" ]; then
         # View logs for all services
-        cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml logs --tail=100 || {
+        if ! docker compose -f static/docker-compose.yml logs --tail=100; then
             echo "Error: Failed to view logs."
             return 1
-        }
+        fi
     else
         # View logs for a specific service
-        cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml logs --tail=100 "$service" || {
+        if ! docker compose -f static/docker-compose.yml logs --tail=100 "$service"; then
             echo "Error: Failed to view logs for $service."
             return 1
-        }
+        fi
     fi
     
     return 0
@@ -130,6 +237,10 @@ view_logs() {
 # Clean up Docker resources
 cleanup_docker() {
     echo "Cleaning up Docker resources..."
+    
+    if ! check_docker_access; then
+        return 1
+    fi
     
     # Remove unused images
     docker image prune -f
@@ -151,17 +262,25 @@ get_shell() {
         return 1
     fi
     
+    cd "${SCRIPT_DIR}" || {
+        echo "Error: Cannot change to script directory"
+        return 1
+    }
+    
     # Check if the service is running
-    if ! docker compose -f "${SCRIPT_DIR}/static/docker-compose.yml" ps | grep "$service" | grep "Up" &>/dev/null; then
+    if ! docker compose -f static/docker-compose.yml ps --format "table {{.Service}}\t{{.Status}}" | grep "$service" | grep -q "Up"; then
         echo "Error: Service $service is not running."
         return 1
     fi
     
     # Get a shell in the container
-    cd "${SCRIPT_DIR}" && docker compose -f static/docker-compose.yml exec "$service" sh || {
-        echo "Error: Failed to get shell in $service."
-        return 1
-    }
+    if ! docker compose -f static/docker-compose.yml exec "$service" /bin/bash; then
+        # Try with sh if bash is not available
+        if ! docker compose -f static/docker-compose.yml exec "$service" /bin/sh; then
+            echo "Error: Failed to get shell in $service."
+            return 1
+        fi
+    fi
     
     return 0
 } 

@@ -2,10 +2,42 @@
 
 # Configuration utility functions
 
-# Generate a random string of specified length
+# Generate a secure random string of specified length
 generate_random_string() {
     local length=${1:-32}
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${length} | head -n 1
+    
+    # Use openssl if available for better entropy
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 "$((length * 3 / 4))" | tr -d "=+/" | cut -c1-"$length"
+    else
+        # Fallback to /dev/urandom with base64 encoding
+        head -c "$length" /dev/urandom | base64 | tr -d "=+/" | cut -c1-"$length"
+    fi
+}
+
+# Validate configuration inputs
+validate_config_inputs() {
+    local domain="$1"
+    local ssl_path="$2"
+    
+    # Validate domain
+    if [[ -n "$domain" ]] && [[ "$domain" != "localhost" ]]; then
+        if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+            echo "Error: Invalid domain name format: $domain"
+            return 1
+        fi
+    fi
+    
+    # Validate SSL path
+    if [[ -n "$ssl_path" ]]; then
+        local ssl_dir=$(dirname "$ssl_path")
+        if [[ ! -d "$ssl_dir" ]]; then
+            echo "Error: SSL path directory does not exist: $ssl_dir"
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 
 # Generate a configuration file with all required environment variables
@@ -15,32 +47,35 @@ generate_config() {
     
     echo "Generating .env configuration file..."
     
+    # Validate inputs
+    if ! validate_config_inputs "$domain" "$ssl_path"; then
+        return 1
+    fi
+    
     # Database credentials
-    DB_USER="milou_$(generate_random_string 8)"
-    DB_PASSWORD="$(generate_random_string 32)"
-    DB_NAME="milou"
-    POSTGRES_USER="${DB_USER}"
-    POSTGRES_PASSWORD="${DB_PASSWORD}"
-    POSTGRES_DB="${DB_NAME}"
+    local DB_USER="milou_$(generate_random_string 8)"
+    local DB_PASSWORD="$(generate_random_string 32)"
+    local DB_NAME="milou"
+    local POSTGRES_USER="${DB_USER}"
+    local POSTGRES_PASSWORD="${DB_PASSWORD}"
+    local POSTGRES_DB="${DB_NAME}"
     
     # Redis credentials
-    REDIS_PASSWORD="$(generate_random_string 32)"
+    local REDIS_PASSWORD="$(generate_random_string 32)"
     
     # RabbitMQ credentials
-    RABBITMQ_USER="guest"
-    RABBITMQ_PASSWORD="guest"
+    local RABBITMQ_USER="guest"
+    local RABBITMQ_PASSWORD="guest"
     
     # Session and encryption
-    SESSION_SECRET="$(generate_random_string 64)"
-    ENCRYPTION_KEY="$(generate_random_string 32)"
-    
-    # GitHub token (store for updates)
-    GITHUB_TOKEN="${github_token}"
+    local SESSION_SECRET="$(generate_random_string 64)"
+    local ENCRYPTION_KEY="$(generate_random_string 32)"
     
     # Save to .env file
     cat > "${SCRIPT_DIR}/.env" << EOF
 # Milou Application Environment Configuration
 # Generated on $(date)
+# Version: ${VERSION:-1.1.0}
 # ========================================
 
 # Nginx configuration
@@ -94,15 +129,22 @@ PORT=9999
 # Environment
 NODE_ENV=production
 
-# GitHub Token (for updates)
-GITHUB_TOKEN=${GITHUB_TOKEN}
+# SECURITY NOTE: GitHub token should NOT be stored here
+# Pass it as command line argument: --token YOUR_TOKEN
 EOF
 
     echo "Configuration file created at ${SCRIPT_DIR}/.env"
     
+    # Set secure permissions
+    chmod 600 "${SCRIPT_DIR}/.env" || {
+        echo "Warning: Could not set secure permissions on .env file"
+    }
+    
     # Save a backup of the configuration
     mkdir -p "${CONFIG_DIR}"
-    cp "${SCRIPT_DIR}/.env" "${CONFIG_DIR}/env_$(date +%Y%m%d%H%M%S).backup"
+    cp "${SCRIPT_DIR}/.env" "${CONFIG_DIR}/env_$(date +%Y%m%d%H%M%S).backup" || {
+        echo "Warning: Could not create configuration backup"
+    }
     
     return 0
 }

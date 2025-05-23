@@ -1,14 +1,22 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 # Constants
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="1.0.0"
+VERSION="1.1.0"
 CONFIG_DIR="${HOME}/.milou"
 ENV_FILE="${SCRIPT_DIR}/.env"
 BACKUP_DIR="${CONFIG_DIR}/backups"
 DEFAULT_SSL_PATH="./ssl"
+LOG_FILE="${CONFIG_DIR}/milou.log"
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
 
 # Source utility functions
 source "${SCRIPT_DIR}/utils/configure.sh"
@@ -21,6 +29,79 @@ source "${SCRIPT_DIR}/utils/utils.sh"
 # Create config directory if it doesn't exist
 mkdir -p "${CONFIG_DIR}"
 mkdir -p "${BACKUP_DIR}"
+touch "${LOG_FILE}"
+
+# Logging function
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    case "$level" in
+        "ERROR")
+            echo -e "${RED}[ERROR]${NC} $message" >&2
+            echo "[$timestamp] [ERROR] $message" >> "$LOG_FILE"
+            ;;
+        "WARN")
+            echo -e "${YELLOW}[WARN]${NC} $message" >&2
+            echo "[$timestamp] [WARN] $message" >> "$LOG_FILE"
+            ;;
+        "INFO")
+            echo -e "${GREEN}[INFO]${NC} $message"
+            echo "[$timestamp] [INFO] $message" >> "$LOG_FILE"
+            ;;
+        "DEBUG")
+            echo -e "${BLUE}[DEBUG]${NC} $message"
+            echo "[$timestamp] [DEBUG] $message" >> "$LOG_FILE"
+            ;;
+    esac
+}
+
+# Input validation functions
+validate_domain() {
+    local domain="$1"
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]] && [[ "$domain" != "localhost" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_github_token() {
+    local token="$1"
+    if [[ ! "$token" =~ ^gh[pousr]_[A-Za-z0-9_]{36,251}$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# Error handling
+error_exit() {
+    log "ERROR" "$1"
+    exit "${2:-1}"
+}
+
+# Check prerequisites
+check_prerequisites() {
+    log "INFO" "Checking system prerequisites..."
+    
+    # Check if running as root
+    if [[ $EUID -eq 0 ]]; then
+        error_exit "This script should not be run as root for security reasons"
+    fi
+    
+    # Check Docker installation
+    if ! command -v docker >/dev/null 2>&1; then
+        error_exit "Docker is not installed. Please install Docker first."
+    fi
+    
+    # Check Docker Compose
+    if ! docker compose version >/dev/null 2>&1; then
+        error_exit "Docker Compose plugin is not installed"
+    fi
+    
+    log "INFO" "Prerequisites check completed"
+}
 
 # Print usage information
 function show_usage() {
@@ -40,6 +121,7 @@ function show_usage() {
     echo "  logs [service]    View logs for all or specific service"
     echo "  cert              Manage SSL certificates"
     echo "  config            View or edit configuration"
+    echo "  health            Run health checks"
     echo "  help              Show this help message"
     echo ""
     echo "Options:"
@@ -58,11 +140,17 @@ function show_usage() {
     echo "  - milou.crt: Your SSL certificate"
     echo "  - milou.key: Your private key"
     echo ""
+    echo "SECURITY NOTE: Never store GitHub tokens in configuration files!"
+    echo "Always pass tokens via command line arguments."
+    echo ""
 }
 
 # Command handlers
 function handle_setup() {
-    echo "Setting up Milou..."
+    log "INFO" "Starting Milou setup..."
+    
+    # Check prerequisites first
+    check_prerequisites
     
     # Parse setup-specific arguments
     local github_token=""
@@ -96,84 +184,139 @@ function handle_setup() {
     
     # Validate required parameters
     if [[ -z "$github_token" ]]; then
-        echo "Error: GitHub token is required for setup."
-        echo "Use --token to provide a GitHub Personal Access Token."
-        exit 1
+        error_exit "GitHub token is required for setup. Use --token to provide a GitHub Personal Access Token."
     fi
     
+    # Validate GitHub token format
+    if ! validate_github_token "$github_token"; then
+        error_exit "Invalid GitHub token format. Token should start with 'ghp_', 'gho_', 'ghu_', 'ghs_', or 'ghr_'."
+    fi
+    
+    # Validate domain
+    if ! validate_domain "$domain"; then
+        error_exit "Invalid domain name: $domain"
+    fi
+    
+    # Validate SSL path
+    if [[ ! -d "$(dirname "$ssl_path")" ]]; then
+        error_exit "SSL path directory does not exist: $(dirname "$ssl_path")"
+    fi
+    
+    log "INFO" "Configuration validated successfully"
+    
     # Login to GitHub Container Registry
-    echo "Authenticating with GitHub Container Registry..."
-    echo "${github_token}" | docker login ghcr.io -u "token" --password-stdin || {
-        echo "Error: Failed to authenticate with GitHub Container Registry."
-        exit 1
-    }
+    log "INFO" "Authenticating with GitHub Container Registry..."
+    if ! echo "${github_token}" | docker login ghcr.io -u "token" --password-stdin 2>/dev/null; then
+        error_exit "Failed to authenticate with GitHub Container Registry. Please check your token."
+    fi
+    log "INFO" "Authentication successful"
     
     # Generate configuration
-    echo "Generating configuration..."
-    generate_config "${domain}" "${ssl_path}"
+    log "INFO" "Generating secure configuration..."
+    if ! generate_config "${domain}" "${ssl_path}"; then
+        error_exit "Failed to generate configuration"
+    fi
+    
+    # Set secure permissions on .env file
+    chmod 600 "${ENV_FILE}" || log "WARN" "Could not set secure permissions on .env file"
     
     # Set up SSL certificates
-    echo "Setting up SSL certificates..."
-    setup_ssl "${ssl_path}" "${domain}"
+    log "INFO" "Setting up SSL certificates..."
+    if ! setup_ssl "${ssl_path}" "${domain}"; then
+        error_exit "Failed to setup SSL certificates"
+    fi
     
     # Pull Docker images
-    echo "Pulling Docker images..."
-    pull_images "${github_token}"
+    log "INFO" "Pulling Docker images..."
+    if ! pull_images "${github_token}"; then
+        error_exit "Failed to pull Docker images"
+    fi
     
     # Start services
     if [[ "$force" == true ]] || confirm "Start services now?"; then
-        start_services
-        echo "Setup complete! Milou is now running."
-        echo "Access your instance at: https://${domain}"
+        log "INFO" "Starting services..."
+        if start_services; then
+            log "INFO" "Setup complete! Milou is now running."
+            log "INFO" "Access your instance at: https://${domain}"
+        else
+            error_exit "Failed to start services"
+        fi
     else
-        echo "Setup complete! Start services with: ./milou.sh start"
+        log "INFO" "Setup complete! Start services with: ./milou.sh start"
     fi
 }
 
 function handle_start() {
-    echo "Starting Milou services..."
-    start_services
+    log "INFO" "Starting Milou services..."
+    if start_services; then
+        log "INFO" "Services started successfully"
+    else
+        error_exit "Failed to start services"
+    fi
 }
 
 function handle_stop() {
-    echo "Stopping Milou services..."
-    stop_services
+    log "INFO" "Stopping Milou services..."
+    if stop_services; then
+        log "INFO" "Services stopped successfully"
+    else
+        error_exit "Failed to stop services"
+    fi
 }
 
 function handle_restart() {
-    echo "Restarting Milou services..."
-    restart_services
+    log "INFO" "Restarting Milou services..."
+    if restart_services; then
+        log "INFO" "Services restarted successfully"
+    else
+        error_exit "Failed to restart services"
+    fi
 }
 
 function handle_status() {
-    echo "Checking service status..."
+    log "INFO" "Checking service status..."
     check_service_status
 }
 
 function handle_backup() {
-    echo "Creating backup..."
-    create_backup
+    log "INFO" "Creating backup..."
+    if create_backup; then
+        log "INFO" "Backup created successfully"
+    else
+        error_exit "Failed to create backup"
+    fi
 }
 
 function handle_restore() {
     local backup_file="$1"
     if [[ -z "$backup_file" ]]; then
-        echo "Error: Backup file path is required."
-        echo "Usage: $(basename "$0") restore [backup_file]"
-        exit 1
+        error_exit "Backup file path is required. Usage: $(basename "$0") restore [backup_file]"
     fi
     
-    echo "Restoring from backup: $backup_file"
-    restore_backup "$backup_file"
+    if [[ ! -f "$backup_file" ]]; then
+        error_exit "Backup file does not exist: $backup_file"
+    fi
+    
+    log "INFO" "Restoring from backup: $backup_file"
+    if restore_backup "$backup_file"; then
+        log "INFO" "Restore completed successfully"
+    else
+        error_exit "Failed to restore from backup"
+    fi
 }
 
 function handle_update() {
-    echo "Checking for updates..."
-    update_milou
+    log "INFO" "Checking for updates..."
+    if update_milou; then
+        log "INFO" "Update completed successfully"
+    else
+        error_exit "Failed to update"
+    fi
 }
 
 function handle_logs() {
     local service="$1"
+    log "INFO" "Viewing logs for ${service:-all services}"
     view_logs "$service"
 }
 
@@ -197,36 +340,61 @@ function handle_cert() {
         esac
     done
     
-    echo "Managing SSL certificates..."
-    setup_ssl "${ssl_path}" "${domain}"
-    
-    # Show certificate info if it exists
-    if [ -f "${ssl_path}/milou.crt" ]; then
-        check_ssl_expiration
+    log "INFO" "Managing SSL certificates..."
+    if setup_ssl "${ssl_path}" "${domain}"; then
+        log "INFO" "SSL certificates setup completed"
+        
+        # Show certificate info if it exists
+        if [ -f "${ssl_path}/milou.crt" ]; then
+            check_ssl_expiration
+        fi
+    else
+        error_exit "Failed to setup SSL certificates"
     fi
 }
 
 function handle_config() {
-    echo "Current configuration:"
-    cat "${ENV_FILE}"
+    if [[ -f "${ENV_FILE}" ]]; then
+        log "INFO" "Current configuration:"
+        cat "${ENV_FILE}"
+    else
+        error_exit "Configuration file not found. Please run setup first."
+    fi
+}
+
+function handle_health() {
+    log "INFO" "Running health checks..."
+    
+    # Check if configuration exists
+    if [[ ! -f "${ENV_FILE}" ]]; then
+        error_exit "Configuration file not found. Please run setup first."
+    fi
+    
+    # Check if Docker is accessible
+    if ! docker info >/dev/null 2>&1; then
+        error_exit "Cannot access Docker daemon. Please check Docker installation and permissions."
+    fi
+    
+    # Check if services are running
+    local running_services
+    if running_services=$(docker compose -f "${SCRIPT_DIR}/static/docker-compose.yml" ps --services --filter "status=running" 2>/dev/null); then
+        local service_count=$(echo "$running_services" | wc -l)
+        if [[ $service_count -gt 0 ]]; then
+            log "INFO" "Health check passed: $service_count services running"
+        else
+            log "WARN" "No services are currently running"
+        fi
+    else
+        log "WARN" "Could not check service status"
+    fi
+    
+    log "INFO" "Health check completed"
 }
 
 # Main command handler
 if [[ $# -eq 0 ]]; then
     show_usage
     exit 0
-fi
-
-# Check if Docker is installed
-if ! command -v docker &> /dev/null; then
-    echo "Error: Docker is not installed. Please install Docker before running this script."
-    exit 1
-fi
-
-# Check if Docker Compose plugin is installed
-if ! docker compose version &> /dev/null; then
-    echo "Error: Docker Compose plugin is not installed. Please install the Docker Compose plugin."
-    exit 1
 fi
 
 # Parse command and arguments
@@ -267,13 +435,14 @@ case "$COMMAND" in
     config)
         handle_config
         ;;
+    health)
+        handle_health
+        ;;
     help|--help|-h)
         show_usage
         ;;
     *)
-        echo "Error: Unknown command '$COMMAND'"
-        show_usage
-        exit 1
+        error_exit "Unknown command '$COMMAND'. Use 'help' to see available commands."
         ;;
 esac
 

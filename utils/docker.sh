@@ -13,8 +13,13 @@ source "${BASH_SOURCE%/*}/docker-services.sh" 2>/dev/null || true
 # Constants and Configuration
 # =============================================================================
 
-readonly GITHUB_REGISTRY="ghcr.io/milou-sh/milou"
-readonly GITHUB_API_BASE="https://api.github.com"
+GITHUB_REGISTRY="${GITHUB_REGISTRY:-ghcr.io/milou-sh/milou}"
+GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
+
+# Constants (use defaults if not already set)
+DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-v1.0.0}"
+DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 
 # =============================================================================
 # Docker Environment Management

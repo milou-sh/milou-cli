@@ -3,12 +3,12 @@
 set -euo pipefail
 
 # =============================================================================
-# Milou Management CLI - Enhanced Edition
+# Milou Management CLI - Enhanced Edition v3.1.0
 # State-of-the-art CLI with comprehensive improvements using modular utilities
 # =============================================================================
 
 # Version and Constants
-readonly SCRIPT_VERSION="3.0.0"
+readonly SCRIPT_VERSION="3.1.0"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONFIG_DIR="${HOME}/.milou"
 readonly ENV_FILE="${SCRIPT_DIR}/.env"
@@ -17,7 +17,7 @@ readonly LOG_FILE="${CONFIG_DIR}/milou.log"
 readonly CACHE_DIR="${CONFIG_DIR}/cache"
 readonly DEFAULT_SSL_PATH="./ssl"
 
-# Global State
+# Global State - Enhanced with better defaults
 declare -g VERBOSE=false
 declare -g FORCE=false
 declare -g DRY_RUN=false
@@ -27,22 +27,63 @@ declare -g SKIP_VERSION_CHECK=false
 declare -g INTERACTIVE=true
 declare -g AUTO_CREATE_USER=false
 declare -g SKIP_USER_CHECK=false
+declare -g FRESH_INSTALL=false
 
-# Source utility functions
-source "${SCRIPT_DIR}/utils/utils.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/docker.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/docker-registry.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/ssl.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/backup.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/update.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/configure.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/setup_wizard.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/user-management.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/security.sh" 2>/dev/null || true
+# Enhanced state management for user switching
+declare -g ORIGINAL_COMMAND=""
+declare -g ORIGINAL_ARGUMENTS=()
+declare -g USER_SWITCH_IN_PROGRESS=false
+
+# Source utility functions with better error handling
+source_utility() {
+    local util_file="$1"
+    if [[ -f "${SCRIPT_DIR}/utils/${util_file}" ]]; then
+        source "${SCRIPT_DIR}/utils/${util_file}"
+    else
+        echo "ERROR: Required utility file not found: ${util_file}" >&2
+        exit 1
+    fi
+}
+
+# Source all utilities
+source_utility "utils.sh"
+source_utility "docker.sh"
+source_utility "docker-registry.sh"
+source_utility "ssl.sh"
+source_utility "backup.sh"
+source_utility "update.sh"
+source_utility "configure.sh"
+source_utility "setup_wizard.sh"
+source_utility "user-management.sh"
+source_utility "security.sh"
 
 # Create necessary directories
 mkdir -p "${CONFIG_DIR}" "${BACKUP_DIR}" "${CACHE_DIR}"
 touch "${LOG_FILE}"
+
+# =============================================================================
+# Enhanced State Management
+# =============================================================================
+
+# Save the original command and arguments for user switching
+preserve_original_command() {
+    ORIGINAL_COMMAND="${1:-}"
+    shift 2>/dev/null || true
+    ORIGINAL_ARGUMENTS=("$@")
+    export ORIGINAL_COMMAND
+    # Export the arguments as a string for simpler handling in subshells
+    export ORIGINAL_ARGUMENTS_STR="$(printf '%q ' "$@")"
+    log "DEBUG" "Preserved command: '$ORIGINAL_COMMAND' with ${#ORIGINAL_ARGUMENTS[@]} arguments"
+}
+
+# Check if we're resuming after a user switch
+check_user_switch_resume() {
+    if [[ "${USER_SWITCH_IN_PROGRESS:-false}" == "true" && -n "${ORIGINAL_COMMAND:-}" ]]; then
+        log "DEBUG" "Resuming after user switch with command: $ORIGINAL_COMMAND"
+        return 0
+    fi
+    return 1
+}
 
 # =============================================================================
 # Enhanced Help System
@@ -88,7 +129,8 @@ show_help() {
     printf "    ${YELLOW}--ssl-path${NC} PATH      Path to SSL certificates directory\n"
     printf "    ${YELLOW}--email${NC} EMAIL        Admin email address\n"
     printf "    ${YELLOW}--latest${NC}             Use latest available Docker image versions\n"
-    printf "    ${YELLOW}--non-interactive${NC}    Run setup without interactive prompts\n\n"
+    printf "    ${YELLOW}--non-interactive${NC}    Run setup without interactive prompts\n"
+    printf "    ${YELLOW}--fresh-install${NC}      Optimized mode for fresh server installations\n\n"
 
     printf "${BOLD}GLOBAL OPTIONS:${NC}\n"
     printf "    ${YELLOW}--verbose${NC}            Show detailed output and debug information\n"
@@ -99,6 +141,9 @@ show_help() {
     printf "    ${YELLOW}--help${NC}               Show this help message\n\n"
 
     printf "${BOLD}EXAMPLES:${NC}\n"
+    printf "    ${DIM}# Fresh server setup (recommended for new installations)${NC}\n"
+    printf "    $(basename "$0") setup --fresh-install\n\n"
+    
     printf "    ${DIM}# Interactive setup (recommended)${NC}\n"
     printf "    $(basename "$0") setup\n\n"
     
@@ -142,83 +187,107 @@ show_help() {
 }
 
 # =============================================================================
-# Argument Parsing
-# =============================================================================
-
-parse_arguments() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --verbose)
-                VERBOSE=true
-                shift
-                ;;
-            --force)
-                FORCE=true
-                shift
-                ;;
-            --dry-run)
-                DRY_RUN=true
-                shift
-                ;;
-            --token)
-                GITHUB_TOKEN="$2"
-                shift 2
-                ;;
-            --domain)
-                DOMAIN="$2"
-                shift 2
-                ;;
-            --ssl-path)
-                SSL_PATH="$2"
-                shift 2
-                ;;
-            --email)
-                ADMIN_EMAIL="$2"
-                shift 2
-                ;;
-            --latest)
-                USE_LATEST_IMAGES=true
-                shift
-                ;;
-            --non-interactive)
-                INTERACTIVE=false
-                shift
-                ;;
-            --auto-create-user)
-                AUTO_CREATE_USER=true
-                shift
-                ;;
-            --skip-user-check)
-                SKIP_USER_CHECK=true
-                shift
-                ;;
-            --help|-h)
-                show_help
-                exit 0
-                ;;
-            *)
-                # Unknown option, keep for command processing
-                break
-                ;;
-        esac
-    done
-}
-
-# =============================================================================
-# Command Handlers
+# Command Handlers - Enhanced
 # =============================================================================
 
 handle_setup() {
-    # Early user management check for security
-    if [[ "${SKIP_USER_CHECK:-false}" != "true" ]]; then
-        ensure_proper_user_setup "$@"
+    # CRITICAL FIX: Preserve command state BEFORE user management check
+    preserve_original_command "setup" "$@"
+    
+    # Enhanced fresh server detection for seamless setup
+    local is_fresh_server=false
+    local is_setup_command=true
+    
+    # Check for explicit fresh install flag
+    if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
+        is_fresh_server=true
+        log "INFO" "🆕 Fresh install mode enabled - optimizing setup experience"
+    # Detect fresh server scenario automatically
+    elif is_running_as_root; then
+        local fresh_indicators=0
+        
+        # Check if milou user doesn't exist
+        if ! milou_user_exists; then
+            ((fresh_indicators++))
+        fi
+        
+        # Check if no existing configuration
+        if [[ ! -f "$ENV_FILE" ]]; then
+            ((fresh_indicators++))
+        fi
+        
+        # Check if no existing containers
+        if ! docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null | grep -q .; then
+            ((fresh_indicators++))
+        fi
+        
+        # If 2 or more indicators, treat as fresh server
+        if [[ $fresh_indicators -ge 2 ]]; then
+            is_fresh_server=true
+            log "INFO" "🆕 Fresh server detected - optimizing setup experience"
+        fi
     fi
     
-    if [[ -n "$GITHUB_TOKEN" ]]; then
+    # Enhanced user management for setup command
+    if [[ "${SKIP_USER_CHECK:-false}" != "true" ]]; then
+        # For fresh server setup, be more automatic about user creation
+        if [[ "$is_fresh_server" == true ]]; then
+            log "INFO" "🔧 Setting up optimal user environment for Milou..."
+            
+            if ! milou_user_exists; then
+                log "INFO" "Creating dedicated milou user for secure operations..."
+                
+                # For explicit fresh install flag, be more automatic
+                if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
+                    echo
+                    echo -e "${GREEN}🚀 Fresh Install Mode: Setting up secure user environment...${NC}"
+                    create_milou_user
+                    log "SUCCESS" "✅ Milou user created! Switching to continue setup..."
+                    switch_to_milou_user "$@"
+                    return $?  # This should never be reached due to exec
+                else
+                    # Auto-detected fresh server - quick confirmation
+                    echo
+                    echo -e "${CYAN}For security and best practices, Milou should run as a dedicated user.${NC}"
+                    echo -e "${CYAN}This will create a 'milou' user and continue setup from there.${NC}"
+                    echo
+                    
+                    # Quick confirmation with default Yes and timeout for fresh server
+                    if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                        if ! confirm "Create milou user and continue setup?" "Y" 10; then
+                            log "INFO" "Continuing as root (not recommended for production)"
+                        else
+                            create_milou_user
+                            log "SUCCESS" "✅ Milou user created! Switching to continue setup..."
+                            switch_to_milou_user "$@"
+                            return $?  # This should never be reached due to exec
+                        fi
+                    else
+                        # Non-interactive mode
+                        create_milou_user
+                        switch_to_milou_user "$@"
+                        return $?  # This should never be reached due to exec
+                    fi
+                fi
+            else
+                # Milou user exists, switch to it
+                log "INFO" "Switching to existing milou user for secure setup..."
+                switch_to_milou_user "$@"
+                return $?  # This should never be reached due to exec
+            fi
+        else
+            # Non-fresh server, use standard user management
+            ensure_proper_user_setup "$@"
+        fi
+    fi
+    
+    # Determine setup mode based on parameters
+    if [[ -n "$GITHUB_TOKEN" ]] || [[ "${INTERACTIVE:-true}" == "false" ]]; then
         # Non-interactive setup
         handle_non_interactive_setup "$@"
     else
-        # Interactive setup
+        # Interactive setup - this is what continues after user switch
+        log "INFO" "🎯 Starting interactive setup wizard..."
         interactive_setup_wizard
     fi
 }
@@ -227,85 +296,146 @@ handle_non_interactive_setup() {
     log "STEP" "Running non-interactive setup..."
     log "INFO" "Image versioning strategy: $([ "$USE_LATEST_IMAGES" == true ] && echo "Latest available versions" || echo "Fixed version (v1.0.0)")"
     
-    # Set defaults
+    # Set defaults with validation
     local domain="${DOMAIN:-localhost}"
     local ssl_path="${SSL_PATH:-./ssl}"
     local admin_email="${ADMIN_EMAIL:-}"
     
-    # Validate required inputs
+    # Enhanced input validation
     if [[ -z "$GITHUB_TOKEN" ]]; then
-        error_exit "GitHub token is required for non-interactive setup"
+        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+            log "WARN" "No GitHub token provided, switching to interactive mode"
+            interactive_setup_wizard
+            return $?
+        else
+            error_exit "GitHub token is required for non-interactive setup. Use --token option."
+        fi
     fi
     
-    # Run setup steps
+    # Validate domain format
+    if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$|^localhost$ ]]; then
+        log "WARN" "Invalid domain format: $domain, using localhost"
+        domain="localhost"
+    fi
+    
+    # Run setup steps with better error handling
+    log "STEP" "Checking system requirements..."
     check_system_requirements
     
+    log "STEP" "Authenticating with GitHub..."
     if ! test_github_authentication "$GITHUB_TOKEN"; then
-        error_exit "GitHub authentication failed"
+        error_exit "GitHub authentication failed. Please check your token."
     fi
     
+    log "STEP" "Generating configuration..."
     if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
         error_exit "Configuration generation failed"
     fi
     
-    # SSL setup with automatic fallbacks - NEVER FAILS
+    # SSL setup with enhanced fallbacks
     log "STEP" "Setting up SSL certificates for $domain..."
     mkdir -p "$ssl_path"
     
     if setup_ssl "$ssl_path" "$domain"; then
         log "SUCCESS" "SSL certificates ready"
     else
-        # This should never happen with the new setup_ssl, but just in case
-        error_exit "Critical error: SSL setup failed despite automatic fallbacks"
+        error_exit "SSL setup failed - please check your configuration"
     fi
     
-    # Verify certificates exist before proceeding
+    # Verify certificates exist
     if [[ ! -f "$ssl_path/milou.crt" || ! -f "$ssl_path/milou.key" ]]; then
-        error_exit "SSL certificate files are missing after setup. This indicates a critical system issue."
+        error_exit "SSL certificate files are missing after setup"
     fi
     
-    # Enhanced image pulling with better feedback
-    log "INFO" "Pulling Docker images with strategy: $([ "$USE_LATEST_IMAGES" == true ] && echo "latest" || echo "fixed v1.0.0")"
-    if ! pull_images "$GITHUB_TOKEN" "$USE_LATEST_IMAGES"; then
-        if [[ "$FORCE" == true ]]; then
-            log "WARN" "Some images failed to pull, but --force flag is set, continuing..."
+    # Enhanced image pulling with retry logic
+    log "STEP" "Pulling Docker images..."
+    log "INFO" "Strategy: $([ "$USE_LATEST_IMAGES" == true ] && echo "latest versions" || echo "fixed v1.0.0")"
+    
+    local pull_attempts=0
+    local max_attempts=3
+    
+    while [[ $pull_attempts -lt $max_attempts ]]; do
+        if pull_images "$GITHUB_TOKEN" "$USE_LATEST_IMAGES"; then
+            break
         else
-            log "ERROR" "Image pull failed. Use --force to continue anyway or fix the issues."
-            log "INFO" "💡 Try running: $0 debug-images --token YOUR_TOKEN"
-            error_exit "Failed to pull Docker images"
+            ((pull_attempts++))
+            if [[ $pull_attempts -lt $max_attempts ]]; then
+                log "WARN" "Image pull failed (attempt $pull_attempts/$max_attempts), retrying in 5 seconds..."
+                sleep 5
+            else
+                if [[ "$FORCE" == true ]]; then
+                    log "WARN" "Image pull failed after $max_attempts attempts, but --force flag is set"
+                    break
+                else
+                    log "ERROR" "Image pull failed after $max_attempts attempts"
+                    log "INFO" "💡 Try: $0 debug-images --token YOUR_TOKEN"
+                    log "INFO" "💡 Or use --force to continue anyway"
+                    error_exit "Failed to pull Docker images"
+                fi
+            fi
         fi
-    fi
+    done
     
-    # Start services - make this automatic for truly non-interactive setup
+    # Enhanced service startup
     log "STEP" "Starting services..."
     if start_services_with_checks; then
         log "SUCCESS" "${ROCKET_EMOJI} Non-interactive setup complete!"
-        log "INFO" "Access your instance at: https://$domain"
+        log "INFO" "🌐 Access your instance at: https://$domain"
         if [[ "$domain" == "localhost" ]]; then
-            log "INFO" "Local access: https://localhost"
+            log "INFO" "🏠 Local access: https://localhost"
         fi
         
-        # Show quick health status
-        log "INFO" "Performing quick health check..."
-        sleep 10  # Give services a moment to start
-        show_service_status
+        # Enhanced health check
+        log "INFO" "Performing initial health check..."
+        sleep 5
+        if show_service_status; then
+            log "SUCCESS" "All services are running correctly!"
+        else
+            log "WARN" "Some services may need more time to start"
+            log "INFO" "💡 Run '$0 status' later to check service health"
+        fi
     else
         log "ERROR" "Failed to start services"
-        log "INFO" "You can try starting manually with: $0 start"
+        log "INFO" "💡 You can try starting manually with: $0 start"
+        log "INFO" "💡 Check logs with: $0 logs"
         exit 1
     fi
 }
 
+# Enhanced start handler with better checks
 handle_start() {
-    start_services_with_checks
+    # Check if already running
+    if check_services_running >/dev/null 2>&1; then
+        log "INFO" "Services are already running"
+        show_service_status
+        return 0
+    fi
+    
+    log "STEP" "Starting Milou services..."
+    if start_services_with_checks; then
+        log "SUCCESS" "Services started successfully"
+    else
+        error_exit "Failed to start services"
+    fi
 }
 
+# Enhanced handlers for other commands  
 handle_stop() {
-    stop_services
+    log "STEP" "Stopping Milou services..."
+    if stop_services; then
+        log "SUCCESS" "Services stopped successfully"
+    else
+        error_exit "Failed to stop services"
+    fi
 }
 
 handle_restart() {
-    restart_services
+    log "STEP" "Restarting Milou services..."
+    if restart_services; then
+        log "SUCCESS" "Services restarted successfully"
+    else
+        error_exit "Failed to restart services"
+    fi
 }
 
 handle_status() {
@@ -317,7 +447,7 @@ handle_detailed_status() {
 }
 
 handle_logs() {
-    local service="$1"
+    local service="${1:-}"
     
     cd "$SCRIPT_DIR" || error_exit "Cannot change to script directory"
     
@@ -333,15 +463,26 @@ handle_logs() {
 handle_health() {
     log "STEP" "Running comprehensive health checks..."
     
-    check_system_requirements
-    validate_configuration
-    
-    # Check service health
-    if show_service_status; then
-        log "SUCCESS" "Health check completed"
-    else
-        error_exit "Health check failed"
+    # System requirements check
+    if ! check_system_requirements; then
+        log "ERROR" "System requirements check failed"
+        return 1
     fi
+    
+    # Configuration validation
+    if ! validate_configuration; then
+        log "ERROR" "Configuration validation failed"
+        return 1
+    fi
+    
+    # Service health check
+    if ! show_service_status; then
+        log "ERROR" "Service health check failed"
+        return 1
+    fi
+    
+    log "SUCCESS" "All health checks passed!"
+    return 0
 }
 
 handle_config() {
@@ -349,14 +490,32 @@ handle_config() {
         log "INFO" "Current configuration:"
         echo
         # Show configuration but hide sensitive values
-        sed 's/=.*PASSWORD.*/=***HIDDEN***/g; s/=.*SECRET.*/=***HIDDEN***/g; s/=.*KEY.*/=***HIDDEN***/g' "$ENV_FILE"
+        sed 's/=.*PASSWORD.*/=***HIDDEN***/g; s/=.*SECRET.*/=***HIDDEN***/g; s/=.*KEY.*/=***HIDDEN***/g; s/=.*TOKEN.*/=***HIDDEN***/g' "$ENV_FILE"
     else
         error_exit "Configuration file not found. Please run setup first."
     fi
 }
 
 handle_validate() {
-    validate_configuration && check_system_requirements
+    log "STEP" "Validating Milou installation..."
+    
+    local issues=0
+    
+    if ! validate_configuration; then
+        ((issues++))
+    fi
+    
+    if ! check_system_requirements; then
+        ((issues++))
+    fi
+    
+    if [[ $issues -eq 0 ]]; then
+        log "SUCCESS" "Validation completed - no issues found"
+        return 0
+    else
+        log "ERROR" "Validation found $issues issue(s)"
+        return 1
+    fi
 }
 
 handle_backup() {
@@ -387,6 +546,10 @@ handle_backup() {
                 clean_old_backups "$days"
                 return $?
                 ;;
+            --help)
+                show_backup_help
+                return 0
+                ;;
             *)
                 shift
                 ;;
@@ -395,7 +558,7 @@ handle_backup() {
     
     log "INFO" "Creating $backup_type backup..."
     if create_backup "$backup_type"; then
-        log "INFO" "Backup created successfully"
+        log "SUCCESS" "Backup created successfully"
     else
         error_exit "Failed to create backup"
     fi
@@ -413,7 +576,7 @@ handle_restore() {
     
     log "INFO" "Restoring from backup: $backup_file"
     if restore_backup "$backup_file"; then
-        log "INFO" "Restore completed successfully"
+        log "SUCCESS" "Restore completed successfully"
     else
         error_exit "Failed to restore from backup"
     fi
@@ -422,7 +585,7 @@ handle_restore() {
 handle_update() {
     log "STEP" "Checking for updates..."
     if update_milou; then
-        log "INFO" "Update completed successfully"
+        log "SUCCESS" "Update completed successfully"
     else
         error_exit "Failed to update"
     fi
@@ -444,20 +607,84 @@ handle_ssl() {
                 shift 2
                 ;;
             --status)
-                # Use ssl-manager for status
-                exec ./ssl-manager.sh status
+                # Pass through to ssl-manager for status
+                if [[ -f "./ssl-manager.sh" ]]; then
+                    exec ./ssl-manager.sh status
+                else
+                    # Fallback to basic SSL status check
+                    log "INFO" "SSL Certificate Status Report"
+                    echo
+                    log "INFO" "Configuration:"
+                    echo "  SSL Path: $ssl_path"
+                    echo "  Domain: $domain"
+                    echo
+                    
+                    if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+                        log "INFO" "Certificate Files Found:"
+                        echo "  Certificate: $ssl_path/milou.crt"
+                        echo "  Private Key: $ssl_path/milou.key"
+                        
+                        # Check expiration
+                        if command -v openssl >/dev/null 2>&1; then
+                            local exp_date
+                            exp_date=$(openssl x509 -in "$ssl_path/milou.crt" -noout -enddate 2>/dev/null | cut -d= -f2)
+                            if [[ -n "$exp_date" ]]; then
+                                echo "  Expires: $exp_date"
+                            fi
+                        fi
+                    else
+                        log "WARN" "No SSL certificates found"
+                    fi
+                fi
+                return 0
                 ;;
             --validate)
-                # Use ssl-manager for validation
-                exec ./ssl-manager.sh validate
+                if [[ -f "./ssl-manager.sh" ]]; then
+                    exec ./ssl-manager.sh validate
+                else
+                    # Fallback validation
+                    if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+                        log "SUCCESS" "SSL certificates exist"
+                        if command -v openssl >/dev/null 2>&1; then
+                            if openssl x509 -in "$ssl_path/milou.crt" -noout -text >/dev/null 2>&1; then
+                                log "SUCCESS" "Certificate is valid"
+                            else
+                                log "ERROR" "Certificate appears to be corrupted"
+                                return 1
+                            fi
+                        fi
+                    else
+                        log "ERROR" "SSL certificates not found"
+                        return 1
+                    fi
+                fi
+                return 0
                 ;;
             --clean)
-                # Use ssl-manager for cleanup
-                exec ./ssl-manager.sh clean
+                if [[ -f "./ssl-manager.sh" ]]; then
+                    exec ./ssl-manager.sh clean
+                else
+                    # Fallback clean
+                    log "STEP" "Cleaning up SSL certificates..."
+                    if [[ -d "$ssl_path" ]]; then
+                        find "$ssl_path" -name "*.crt" -o -name "*.key" -o -name "*.pem" | while read -r file; do
+                            log "INFO" "Removing: $file"
+                            rm -f "$file"
+                        done
+                        log "SUCCESS" "SSL cleanup completed"
+                    else
+                        log "INFO" "No SSL directory found to clean"
+                    fi
+                fi
+                return 0
                 ;;
             --consolidate)
-                # Use ssl-manager for consolidation
-                exec ./ssl-manager.sh consolidate
+                if [[ -f "./ssl-manager.sh" ]]; then
+                    exec ./ssl-manager.sh consolidate
+                else
+                    log "WARN" "Consolidation requires ssl-manager.sh"
+                    return 1
+                fi
                 ;;
             --help)
                 show_ssl_help
@@ -469,19 +696,16 @@ handle_ssl() {
         esac
     done
     
-    # Default action: run SSL setup with new production-ready system
-    log "STEP" "SSL Certificate Management"
+    # Default action: SSL setup
+    log "STEP" "SSL Certificate Management for domain: $domain"
     
-    # Ensure SSL path exists
     mkdir -p "$ssl_path"
     
-    # Use the production-ready SSL setup
     if setup_ssl "$ssl_path" "$domain"; then
-        log "SUCCESS" "SSL certificates are ready for domain: $domain"
-        log "INFO" "Certificate location: $ssl_path/milou.crt"
-        log "INFO" "Private key location: $ssl_path/milou.key"
+        log "SUCCESS" "SSL certificates ready"
+        log "INFO" "📄 Certificate: $ssl_path/milou.crt"
+        log "INFO" "🔑 Private key: $ssl_path/milou.key"
         
-        # Validate the setup
         if check_ssl_expiration "$ssl_path"; then
             log "SUCCESS" "SSL certificates are valid and not expiring soon"
         fi
@@ -490,38 +714,9 @@ handle_ssl() {
     fi
 }
 
-# Show SSL help
-show_ssl_help() {
-    echo "SSL Certificate Management"
-    echo
-    echo "USAGE:"
-    echo "    $(basename "$0") ssl [OPTIONS]"
-    echo
-    echo "OPTIONS:"
-    echo "    --domain DOMAIN     Domain name (default: from .env or localhost)"
-    echo "    --ssl-path PATH     SSL certificate path (default: from .env or ./ssl)"
-    echo "    --status            Show SSL certificate status"
-    echo "    --validate          Validate existing certificates"
-    echo "    --clean             Clean up all SSL certificates"
-    echo "    --consolidate       Consolidate scattered certificates"
-    echo "    --help              Show this help"
-    echo
-    echo "EXAMPLES:"
-    echo "    $(basename "$0") ssl                            # Setup SSL for default domain"
-    echo "    $(basename "$0") ssl --domain example.com       # Setup SSL for custom domain"
-    echo "    $(basename "$0") ssl --status                   # Check certificate status"
-    echo "    $(basename "$0") ssl --validate                 # Validate certificates"
-    echo
-    echo "ADVANCED SSL MANAGEMENT:"
-    echo "    Use ./ssl-manager.sh for advanced SSL operations"
-    echo "    ./ssl-manager.sh --help for more options"
-}
-
 handle_cleanup() {
     local cleanup_type="regular"
-    local cleanup_args=()
     
-    # Parse cleanup arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --complete)
@@ -533,7 +728,6 @@ handle_cleanup() {
                 return 0
                 ;;
             *)
-                cleanup_args+=("$1")
                 shift
                 ;;
         esac
@@ -548,40 +742,7 @@ handle_cleanup() {
             log "INFO" "Performing regular Docker cleanup..."
             cleanup_docker_resources
             ;;
-        *)
-            log "ERROR" "Unknown cleanup type: $cleanup_type"
-            return 1
-            ;;
     esac
-}
-
-# Show cleanup help
-show_cleanup_help() {
-    echo "Cleanup Commands:"
-    echo
-    echo "  Regular cleanup (safe):"
-    echo "    ./milou.sh cleanup"
-    echo "    • Removes unused Docker images"
-    echo "    • Removes unused volumes (with confirmation)"
-    echo "    • Removes unused networks"
-    echo
-    echo "  Complete cleanup (destructive):"
-    echo "    ./milou.sh cleanup --complete"
-    echo "    • Removes ALL Milou containers"
-    echo "    • Removes ALL Milou images"
-    echo "    • Removes ALL Milou volumes"
-    echo "    • Removes ALL Milou networks"
-    echo "    • Removes configuration files"
-    echo "    • Removes SSL certificates (with confirmation)"
-    echo
-    echo "  Options:"
-    echo "    --force      Skip confirmation prompts (use with --complete for automation)"
-    echo "    --help       Show this help message"
-    echo
-    echo "  Examples:"
-    echo "    ./milou.sh cleanup                    # Safe cleanup"
-    echo "    ./milou.sh cleanup --complete         # Complete cleanup with prompts"
-    echo "    ./milou.sh cleanup --complete --force # Complete cleanup without prompts"
 }
 
 handle_shell() {
@@ -605,7 +766,7 @@ handle_shell() {
 }
 
 handle_debug_images() {
-    local token="$GITHUB_TOKEN"
+    local token="${GITHUB_TOKEN:-}"
     
     if [[ -z "$token" ]]; then
         log "ERROR" "GitHub token is required for image debugging"
@@ -619,21 +780,19 @@ handle_debug_images() {
 handle_diagnose() {
     log "STEP" "Running comprehensive system diagnostics..."
     
-    # Use the comprehensive Docker environment diagnosis
     if ! diagnose_docker_environment; then
         log "WARN" "Some issues were found during diagnosis"
         echo
         log "INFO" "Recommended actions:"
         log "INFO" "  • Fix critical issues shown above"
-        log "INFO" "  • Run './milou.sh setup' if configuration is missing"
-        log "INFO" "  • Run './milou.sh health' for a quick service check"
+        log "INFO" "  • Run '$0 setup' if configuration is missing"
+        log "INFO" "  • Run '$0 health' for service health check"
         return 1
     fi
     
     return 0
 }
 
-# Quick health check handler
 handle_health_check() {
     quick_health_check
 }
@@ -656,17 +815,20 @@ handle_create_user() {
         exit 0
     fi
     
-    log "INFO" "Creating dedicated milou user for secure operations..."
+    log "INFO" "Creating dedicated milou user..."
     if create_milou_user; then
         log "SUCCESS" "User created successfully!"
-        log "INFO" "You can now run: sudo -u milou $0 [command]"
+        log "INFO" "💡 Run commands as: sudo -u milou $0 [command]"
         
-        if confirm "Apply security hardening to milou user?" "Y"; then
-            harden_milou_user
-        fi
-        
-        if confirm "Switch to milou user now?" "Y"; then
-            switch_to_milou_user "$@"
+        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+            if confirm "Apply security hardening?" "Y"; then
+                harden_milou_user
+            fi
+            
+            if confirm "Switch to milou user now?" "Y"; then
+                preserve_original_command "${ORIGINAL_COMMAND:-}" "${ORIGINAL_ARGUMENTS[@]}"
+                switch_to_milou_user
+            fi
         fi
     else
         error_exit "Failed to create milou user"
@@ -680,20 +842,20 @@ handle_migrate_user() {
         exit 1
     fi
     
-    log "INFO" "Migrating existing Milou installation to dedicated user..."
+    log "INFO" "Migrating to dedicated milou user..."
     if migrate_to_milou_user; then
-        log "SUCCESS" "Migration completed successfully!"
-        log "INFO" "Your Milou installation is now owned by the milou user"
+        log "SUCCESS" "Migration completed!"
         
-        if confirm "Switch to milou user now?" "Y"; then
-            switch_to_milou_user "$@"
+        if [[ "${INTERACTIVE:-true}" == "true" ]] && confirm "Switch to milou user now?" "Y"; then
+            preserve_original_command "${ORIGINAL_COMMAND:-}" "${ORIGINAL_ARGUMENTS[@]}"
+            switch_to_milou_user
         fi
     else
-        error_exit "Failed to migrate to milou user"
+        error_exit "Migration failed"
     fi
 }
 
-# Security management handlers
+# Security handlers
 run_comprehensive_security_assessment() {
     log "STEP" "Running comprehensive security assessment..."
     
@@ -701,9 +863,8 @@ run_comprehensive_security_assessment() {
         log "SUCCESS" "Security assessment completed - no critical issues found"
         return 0
     else
-        log "WARN" "Security assessment found issues that need attention"
-        echo
-        log "INFO" "Consider running: $0 security-harden (requires sudo)"
+        log "WARN" "Security assessment found issues"
+        log "INFO" "💡 Consider running: $0 security-harden (requires sudo)"
         return 1
     fi
 }
@@ -724,47 +885,104 @@ apply_security_hardening_measures() {
     echo "  • System security settings"
     echo
     
-    if [[ "${INTERACTIVE:-true}" == "true" ]] && ! confirm "Apply security hardening measures?" "N"; then
+    if [[ "${INTERACTIVE:-true}" == "true" ]] && ! confirm "Apply security hardening?" "N"; then
         log "INFO" "Security hardening cancelled"
         exit 0
     fi
     
-    log "INFO" "Applying comprehensive security hardening..."
+    log "INFO" "Applying security hardening..."
     if harden_system; then
-        log "SUCCESS" "Security hardening completed successfully!"
-        log "INFO" "System services may need to be restarted for changes to take effect"
+        log "SUCCESS" "Security hardening completed!"
+        log "INFO" "💡 Run security assessment: $0 security-check"
         
-        if confirm "Restart Docker daemon to apply changes?" "Y"; then
+        if [[ "${INTERACTIVE:-true}" == "true" ]] && confirm "Restart Docker daemon?" "Y"; then
             systemctl restart docker || log "WARN" "Failed to restart Docker daemon"
         fi
-        
-        log "INFO" "Run security assessment again to verify improvements: $0 security-check"
     else
-        error_exit "Failed to apply security hardening"
+        error_exit "Security hardening failed"
     fi
 }
 
 generate_detailed_security_report() {
     local report_file="milou-security-report-$(date +%Y%m%d_%H%M%S).txt"
     
-    log "INFO" "Generating comprehensive security report..."
+    log "INFO" "Generating security report..."
     if create_security_report "$report_file"; then
         log "SUCCESS" "Security report generated: $report_file"
         
         if command -v less >/dev/null 2>&1 && [[ "${INTERACTIVE:-true}" == "true" ]]; then
-            if confirm "View the security report now?" "Y"; then
+            if confirm "View the report now?" "Y"; then
                 less "$report_file"
             fi
         fi
-        
-        log "INFO" "Share this report with your security team or use it for compliance"
     else
         error_exit "Failed to generate security report"
     fi
 }
 
 # =============================================================================
-# Main Function
+# Enhanced Help Functions
+# =============================================================================
+
+show_backup_help() {
+    echo "Backup Management:"
+    echo
+    echo "  Create backups:"
+    echo "    $0 backup                    # Full backup"
+    echo "    $0 backup --config-only      # Configuration only"
+    echo "    $0 backup --type config      # Same as --config-only"
+    echo
+    echo "  Manage backups:"
+    echo "    $0 backup --list             # List all backups"
+    echo "    $0 backup --clean            # Clean old backups (30 days)"
+    echo "    $0 backup --clean 7          # Clean backups older than 7 days"
+    echo
+    echo "  Restore:"
+    echo "    $0 restore backup_file.tar.gz # Restore from backup"
+}
+
+show_ssl_help() {
+    echo "SSL Certificate Management:"
+    echo
+    echo "  Basic operations:"
+    echo "    $0 ssl                       # Setup SSL for default domain"
+    echo "    $0 ssl --domain example.com  # Setup SSL for custom domain"
+    echo
+    echo "  Certificate management:"
+    echo "    $0 ssl --status              # Check certificate status"
+    echo "    $0 ssl --validate            # Validate certificates"
+    echo "    $0 ssl --clean               # Clean up certificates"
+    echo "    $0 ssl --consolidate         # Consolidate scattered certificates"
+    echo
+    echo "  Advanced:"
+    echo "    ./ssl-manager.sh --help      # Advanced SSL operations"
+}
+
+show_cleanup_help() {
+    echo "Cleanup Commands:"
+    echo
+    echo "  Regular cleanup (safe):"
+    echo "    $0 cleanup"
+    echo "    • Removes unused Docker images"
+    echo "    • Removes unused volumes (with confirmation)"
+    echo "    • Removes unused networks"
+    echo
+    echo "  Complete cleanup (destructive):"
+    echo "    $0 cleanup --complete"
+    echo "    • Removes ALL Milou containers"
+    echo "    • Removes ALL Milou images"
+    echo "    • Removes ALL Milou volumes"
+    echo "    • Removes ALL Milou networks"
+    echo "    • Removes configuration files"
+    echo "    • Removes SSL certificates (with confirmation)"
+    echo
+    echo "  Options:"
+    echo "    --force      Skip confirmation prompts"
+    echo "    --help       Show this help"
+}
+
+# =============================================================================
+# Enhanced Main Function
 # =============================================================================
 
 main() {
@@ -774,121 +992,168 @@ main() {
         exit 0
     fi
 
+    # Store original arguments for state preservation
+    local original_args=("$@")
     local command="$1"
     shift
 
-    # Extract global arguments before command-specific arguments
+    # Enhanced argument parsing with better error handling
     local -a remaining_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --verbose)
                 VERBOSE=true
+                export VERBOSE
                 shift
                 ;;
             --force)
                 FORCE=true
+                export FORCE
                 shift
                 ;;
             --dry-run)
                 DRY_RUN=true
+                export DRY_RUN
                 shift
                 ;;
             --token)
-                GITHUB_TOKEN="$2"
-                shift 2
+                if [[ -n "${2:-}" ]]; then
+                    GITHUB_TOKEN="$2"
+                    export GITHUB_TOKEN
+                    shift 2
+                else
+                    error_exit "GitHub token value is required after --token"
+                fi
                 ;;
             --domain)
-                DOMAIN="$2"
-                shift 2
+                if [[ -n "${2:-}" ]]; then
+                    DOMAIN="$2"
+                    export DOMAIN
+                    shift 2
+                else
+                    error_exit "Domain value is required after --domain"
+                fi
                 ;;
             --ssl-path)
-                SSL_PATH="$2"
-                shift 2
+                if [[ -n "${2:-}" ]]; then
+                    SSL_PATH="$2"
+                    export SSL_PATH
+                    shift 2
+                else
+                    error_exit "SSL path value is required after --ssl-path"
+                fi
                 ;;
             --email)
-                ADMIN_EMAIL="$2"
-                shift 2
+                if [[ -n "${2:-}" ]]; then
+                    ADMIN_EMAIL="$2"
+                    export ADMIN_EMAIL
+                    shift 2
+                else
+                    error_exit "Email value is required after --email"
+                fi
                 ;;
             --latest)
                 USE_LATEST_IMAGES=true
+                export USE_LATEST_IMAGES
                 shift
                 ;;
             --non-interactive)
                 INTERACTIVE=false
+                export INTERACTIVE
                 shift
                 ;;
             --auto-create-user)
                 AUTO_CREATE_USER=true
+                export AUTO_CREATE_USER
                 shift
                 ;;
             --skip-user-check)
                 SKIP_USER_CHECK=true
+                export SKIP_USER_CHECK
+                shift
+                ;;
+            --fresh-install)
+                FRESH_INSTALL=true
+                AUTO_CREATE_USER=true  # Automatically enable auto-create-user for fresh installs
+                export FRESH_INSTALL
+                export AUTO_CREATE_USER
                 shift
                 ;;
             --help|-h)
-                # Only show general help if it's a global --help
-                if [[ "$command" != "cleanup" && "$command" != "backup" && "$command" != "ssl" ]]; then
-                    show_help
-                    exit 0
-                else
-                    # Let command-specific handlers deal with --help
+                # Command-specific help
+                if [[ "$command" == "cleanup" || "$command" == "backup" || "$command" == "ssl" ]]; then
                     remaining_args+=("$1")
                     shift
+                else
+                    show_help
+                    exit 0
                 fi
                 ;;
             *)
-                # Preserve other arguments for command handlers
                 remaining_args+=("$1")
                 shift
                 ;;
         esac
     done
     
-    # Log script start
-    log "DEBUG" "Milou CLI v$SCRIPT_VERSION started with command: $command"
+    # Log script start with enhanced information
+    log "DEBUG" "Milou CLI v$SCRIPT_VERSION started"
+    log "DEBUG" "Command: $command, User: $(whoami), PID: $$"
+    log "DEBUG" "Working directory: $(pwd)"
     
+    # Check if we're resuming after user switch
+    if check_user_switch_resume; then
+        log "DEBUG" "Resuming operation after user switch"
+        command="$ORIGINAL_COMMAND"
+        # Parse the arguments from the string
+        if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
+            eval "remaining_args=($ORIGINAL_ARGUMENTS_STR)"
+        fi
+    fi
+    
+    # Enhanced command routing with error handling
     case "$command" in
         setup)
             handle_setup "${remaining_args[@]}"
             ;;
         start)
-            handle_start
+            handle_start "${remaining_args[@]}"
             ;;
         stop)
-            handle_stop
+            handle_stop "${remaining_args[@]}"
             ;;
         restart)
-            handle_restart
+            handle_restart "${remaining_args[@]}"
             ;;
         status)
-            handle_status
+            handle_status "${remaining_args[@]}"
             ;;
         detailed-status)
-            handle_detailed_status
+            handle_detailed_status "${remaining_args[@]}"
             ;;
         logs)
-            handle_logs "${remaining_args[0]}"
+            handle_logs "${remaining_args[@]}"
             ;;
         health)
-            handle_health
+            handle_health "${remaining_args[@]}"
             ;;
         health-check)
-            handle_health_check
+            handle_health_check "${remaining_args[@]}"
             ;;
         config)
-            handle_config
+            handle_config "${remaining_args[@]}"
             ;;
         validate)
-            handle_validate
+            handle_validate "${remaining_args[@]}"
             ;;
         backup)
             handle_backup "${remaining_args[@]}"
             ;;
         restore)
-            handle_restore "${remaining_args[0]}"
+            handle_restore "${remaining_args[@]}"
             ;;
         update)
-            handle_update
+            handle_update "${remaining_args[@]}"
             ;;
         ssl)
             handle_ssl "${remaining_args[@]}"
@@ -897,16 +1162,16 @@ main() {
             handle_cleanup "${remaining_args[@]}"
             ;;
         shell)
-            handle_shell "${remaining_args[0]}"
+            handle_shell "${remaining_args[@]}"
             ;;
         debug-images)
-            handle_debug_images
+            handle_debug_images "${remaining_args[@]}"
             ;;
         diagnose)
-            handle_diagnose
+            handle_diagnose "${remaining_args[@]}"
             ;;
         user-status)
-            handle_user_status
+            handle_user_status "${remaining_args[@]}"
             ;;
         create-user)
             handle_create_user "${remaining_args[@]}"
@@ -915,13 +1180,13 @@ main() {
             handle_migrate_user "${remaining_args[@]}"
             ;;
         security-check)
-            run_comprehensive_security_assessment
+            run_comprehensive_security_assessment "${remaining_args[@]}"
             ;;
         security-harden)
-            apply_security_hardening_measures
+            apply_security_hardening_measures "${remaining_args[@]}"
             ;;
         security-report)
-            generate_detailed_security_report
+            generate_detailed_security_report "${remaining_args[@]}"
             ;;
         help|--help|-h)
             show_help
@@ -929,18 +1194,51 @@ main() {
         *)
             log "ERROR" "Unknown command: $command"
             echo
-            log "INFO" "Use '$0 help' to see available commands"
+            log "INFO" "Available commands:"
+            log "INFO" "  setup, start, stop, restart, status, logs, health, config"
+            log "INFO" "  backup, restore, update, ssl, cleanup, shell, diagnose"
+            log "INFO" "  user-status, create-user, security-check"
+            echo
+            log "INFO" "Use '$0 help' for detailed information"
             exit 1
             ;;
     esac
 }
 
 # =============================================================================
-# Script Entry Point
+# Enhanced Script Entry Point
 # =============================================================================
 
-# Trap cleanup on exit
-trap 'log "DEBUG" "Script execution completed"' EXIT
+# Enhanced cleanup on exit
+cleanup_on_exit() {
+    local exit_code=$?
+    log "DEBUG" "Script execution completed with exit code: $exit_code"
+    
+    # Clean up temporary files
+    cleanup_user_management 2>/dev/null || true
+    
+    # Reset terminal if needed
+    if [[ -t 1 ]]; then
+        tput sgr0 2>/dev/null || true
+    fi
+    
+    exit $exit_code
+}
+
+# Set up signal handlers
+trap cleanup_on_exit EXIT
+trap 'log "WARN" "Script interrupted by user"; exit 130' INT TERM
+
+# Validate environment before starting
+if [[ ! -d "$SCRIPT_DIR" ]]; then
+    echo "ERROR: Script directory not found: $SCRIPT_DIR" >&2
+    exit 1
+fi
+
+if [[ ! -d "$SCRIPT_DIR/utils" ]]; then
+    echo "ERROR: Utils directory not found: $SCRIPT_DIR/utils" >&2
+    exit 1
+fi
 
 # Run main function with all arguments
 main "$@"

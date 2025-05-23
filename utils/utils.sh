@@ -5,8 +5,7 @@
 # Enhanced with comprehensive functionality and robust error handling
 # =============================================================================
 
-# Version and Constants
-readonly SCRIPT_VERSION="${VERSION:-3.0.0}"
+# Version and Constants (avoid conflicts with main script)
 readonly MIN_DOCKER_VERSION="20.10.0"
 readonly MIN_DOCKER_COMPOSE_VERSION="2.0.0"
 readonly MIN_DISK_SPACE_GB=2

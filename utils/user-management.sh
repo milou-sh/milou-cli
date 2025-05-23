@@ -424,6 +424,12 @@ switch_to_milou_user() {
         return 0
     fi
     
+    # Check for infinite loop protection
+    if [[ "${USER_SWITCH_IN_PROGRESS:-false}" == "true" ]]; then
+        log "ERROR" "User switch already in progress - this indicates a configuration issue"
+        return 1
+    fi
+    
     if ! milou_user_exists; then
         if is_running_as_root; then
             log "INFO" "Creating $MILOU_USER user for secure operations..."
@@ -557,7 +563,7 @@ switch_to_milou_user() {
             log "SUCCESS" "Milou CLI ready in $target_dir"
         fi
         
-        # Preserve important environment variables
+        # Enhanced environment variable preservation
         local -a env_vars=(
             "VERBOSE=$VERBOSE"
             "FORCE=$FORCE" 
@@ -566,6 +572,7 @@ switch_to_milou_user() {
             "AUTO_CREATE_USER=$AUTO_CREATE_USER"
             "SKIP_USER_CHECK=$SKIP_USER_CHECK"
             "USE_LATEST_IMAGES=$USE_LATEST_IMAGES"
+            "USER_SWITCH_IN_PROGRESS=true"
         )
         
         # Add GitHub token if provided (but don't log it)
@@ -585,21 +592,70 @@ switch_to_milou_user() {
             env_vars+=("ADMIN_EMAIL=$ADMIN_EMAIL")
         fi
         
-        # Prepare the execution command
+        # Preserve original command if set by enhanced main function
+        if [[ -n "${ORIGINAL_COMMAND:-}" ]]; then
+            env_vars+=("ORIGINAL_COMMAND=$ORIGINAL_COMMAND")
+        fi
+        
+        # Build the execution command with enhanced state preservation
         local exec_cmd="cd '$target_dir' && env ${env_vars[*]} '$target_dir/milou.sh'"
         
-        # Add original arguments
-        if [[ $# -gt 0 ]]; then
-            # Properly quote arguments to preserve spaces and special characters
-            local quoted_args=""
-            for arg in "$@"; do
-                quoted_args+=" $(printf '%q' "$arg")"
-            done
-            exec_cmd+="$quoted_args"
-            log "DEBUG" "Preserving arguments: $quoted_args"
+        # CRITICAL FIX: Properly handle command preservation
+        if [[ -n "${ORIGINAL_COMMAND:-}" ]]; then
+            # Use the preserved original command
+            exec_cmd+=" $ORIGINAL_COMMAND"
+            
+            # Add preserved original arguments if they exist
+            if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
+                # Use the pre-formatted string of arguments
+                exec_cmd+=" $ORIGINAL_ARGUMENTS_STR"
+                log "DEBUG" "Using preserved command: $ORIGINAL_COMMAND with arguments: $ORIGINAL_ARGUMENTS_STR"
+            elif [[ -n "${ORIGINAL_ARGUMENTS:-}" ]]; then
+                # Fallback to handling ORIGINAL_ARGUMENTS if it exists
+                if declare -p ORIGINAL_ARGUMENTS 2>/dev/null | grep -q "declare -a"; then
+                    # It's an array
+                    for arg in "${ORIGINAL_ARGUMENTS[@]}"; do
+                        exec_cmd+=" $(printf '%q' "$arg")"
+                    done
+                else
+                    # It's a string, split it properly
+                    exec_cmd+=" $ORIGINAL_ARGUMENTS"
+                fi
+                log "DEBUG" "Using preserved command: $ORIGINAL_COMMAND with fallback arguments"
+            else
+                log "DEBUG" "Using preserved command: $ORIGINAL_COMMAND (no arguments)"
+            fi
+        elif [[ $# -gt 0 ]]; then
+            # Fallback: Use current arguments but we need to figure out the original command
+            # The first argument should be the command that was passed to the original call
+            local first_arg="$1"
+            shift
+            
+            # Check if first argument looks like a command
+            case "$first_arg" in
+                setup|start|stop|restart|status|logs|health|config|validate|backup|restore|update|ssl|cleanup|shell|debug-images|diagnose|user-status|create-user|migrate-user|security-check|security-harden|security-report)
+                    exec_cmd+=" $first_arg"
+                    for arg in "$@"; do
+                        exec_cmd+=" $(printf '%q' "$arg")"
+                    done
+                    log "DEBUG" "Detected command from arguments: $first_arg"
+                    ;;
+                *)
+                    # Not a recognized command, treat all as arguments to some unknown command
+                    exec_cmd+=" $(printf '%q' "$first_arg")"
+                    for arg in "$@"; do
+                        exec_cmd+=" $(printf '%q' "$arg")"
+                    done
+                    log "DEBUG" "Using all arguments as-is: $first_arg $*"
+                    ;;
+            esac
+        else
+            # No arguments provided - this might be an issue, but let's continue
+            log "WARN" "No command or arguments provided during user switch"
         fi
         
         log "DEBUG" "Executing as $MILOU_USER in directory: $target_dir"
+        log "DEBUG" "Full command: $exec_cmd"
         
         # Execute with proper environment and working directory
         exec sudo -u "$MILOU_USER" -H bash -c "$exec_cmd"
@@ -1169,19 +1225,28 @@ show_user_status() {
         local current_user
         current_user=$(whoami)
         
+        echo "DEBUG: Checking Docker access for milou user. Current user: $current_user, Milou user: $MILOU_USER"
+        
         if [[ "$current_user" == "$MILOU_USER" ]]; then
             # We're already running as milou user, use has_docker_permissions function
+            echo "DEBUG: Running as milou user, checking permissions directly"
             if has_docker_permissions; then
+                echo "DEBUG: has_docker_permissions returned true"
                 milou_docker_access=true
+            else
+                echo "DEBUG: has_docker_permissions returned false"
             fi
         else
             # We're running as a different user, use sudo to check
+            echo "DEBUG: Running as different user, using sudo to check"
             if sudo -u "$MILOU_USER" groups 2>/dev/null | grep -q docker; then
                 if sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
                     milou_docker_access=true
                 fi
             fi
         fi
+        
+        echo "DEBUG: Final milou_docker_access value: $milou_docker_access"
         echo "  Milou user access: $([ "$milou_docker_access" == true ] && echo "Yes ✅" || echo "No ❌")"
     fi
     
@@ -1314,35 +1379,57 @@ ensure_proper_user_setup() {
     if is_running_as_root; then
         log "WARN" "Running as root - consider using dedicated user"
         
-        # Check if milou user exists and automatically switch
-        if milou_user_exists; then
-            # Automatic switch in non-interactive mode or with auto-create flag
-            if [[ "${INTERACTIVE:-true}" == "false" ]] || [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
-                log "INFO" "Automatically switching to $MILOU_USER user for better security"
-                switch_to_milou_user "$@"
-                return $?  # This should never be reached due to exec, but just in case
+        # Check if auto-create-user flag is set
+        if [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
+            log "INFO" "Auto-create-user mode enabled"
+            
+            if ! milou_user_exists; then
+                log "INFO" "Automatically creating $MILOU_USER user"
+                create_milou_user
             fi
             
-            # Interactive mode - ask user
+            log "INFO" "Automatically switching to $MILOU_USER user for better security"
+            switch_to_milou_user "$@"
+            return $?  # This should never be reached due to exec, but just in case
+        fi
+        
+        # Check if milou user exists and decide on automatic switch behavior
+        if milou_user_exists; then
+            # Interactive mode - ask user (but with better default)
             if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-                if confirm "Create and switch to $MILOU_USER user for better security?" "Y"; then
+                echo
+                echo -e "${CYAN}💡 For better security, it's recommended to run Milou as the dedicated user.${NC}"
+                if confirm "Switch to $MILOU_USER user for this operation?" "Y"; then
                     switch_to_milou_user "$@"
                     return $?  # This should never be reached due to exec, but just in case
+                else
+                    log "INFO" "Continuing as root (not recommended for production)"
                 fi
+            else
+                # Non-interactive mode - auto switch
+                log "INFO" "Non-interactive mode: automatically switching to $MILOU_USER user"
+                switch_to_milou_user "$@"
+                return $?  # This should never be reached due to exec, but just in case
             fi
         else
             # Milou user doesn't exist - offer to create it
             if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-                if confirm "Create and switch to $MILOU_USER user for better security?" "Y"; then
+                echo
+                echo -e "${CYAN}🔐 No dedicated milou user found.${NC}"
+                echo -e "${CYAN}For security and best practices, Milou should run as a dedicated user.${NC}"
+                echo
+                if confirm "Create and switch to $MILOU_USER user?" "Y"; then
                     create_milou_user
                     switch_to_milou_user "$@"
                     return $?  # This should never be reached due to exec, but just in case
+                else
+                    log "INFO" "Continuing as root (not recommended for production)"
                 fi
-            elif [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
-                log "INFO" "Automatically creating $MILOU_USER user"
-                create_milou_user
-                switch_to_milou_user "$@"
-                return $?  # This should never be reached due to exec, but just in case
+            else
+                # Non-interactive mode without auto-create-user flag
+                log "WARN" "Non-interactive mode: milou user doesn't exist"
+                log "INFO" "💡 Use --auto-create-user flag to automatically create milou user"
+                log "INFO" "💡 Or create manually: sudo $0 create-user"
             fi
         fi
     fi

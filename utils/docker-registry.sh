@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # =============================================================================
-# GitHub Container Registry and Image Management
-# Focused module for handling image operations
+# Docker Registry Utilities for Milou CLI
+# Handles GitHub Container Registry authentication and image management
 # =============================================================================
 
-# Constants
-readonly GITHUB_REGISTRY="ghcr.io/milou-sh/milou"
-readonly GITHUB_API_BASE="https://api.github.com"
+# Constants (use defaults if not already set)
+GITHUB_REGISTRY="${GITHUB_REGISTRY:-ghcr.io/milou-sh/milou}"
+GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
 
 # =============================================================================
 # GitHub Authentication Functions

@@ -622,17 +622,22 @@ switch_to_milou_user() {
         if [[ -n "${GITHUB_TOKEN:-}" ]]; then
             env_vars+=("GITHUB_TOKEN=$GITHUB_TOKEN")
             log "DEBUG" "Preserving GitHub token in environment"
+        else
+            log "WARN" "No GitHub token found to preserve during user switch"
         fi
         
         # Add domain and SSL path if provided
         if [[ -n "${DOMAIN:-}" ]]; then
             env_vars+=("DOMAIN=$DOMAIN")
+            log "DEBUG" "Preserving DOMAIN: $DOMAIN"
         fi
         if [[ -n "${SSL_PATH:-}" ]]; then
             env_vars+=("SSL_PATH=$SSL_PATH")
+            log "DEBUG" "Preserving SSL_PATH: $SSL_PATH"
         fi
         if [[ -n "${ADMIN_EMAIL:-}" ]]; then
             env_vars+=("ADMIN_EMAIL=$ADMIN_EMAIL")
+            log "DEBUG" "Preserving ADMIN_EMAIL: $ADMIN_EMAIL"
         fi
         
         # Preserve original command if set by enhanced main function
@@ -698,27 +703,51 @@ switch_to_milou_user() {
         fi
         
         # CRITICAL FIX: Ensure docker group membership is active in the new session
-        # Use newgrp docker to activate the docker group for the milou user
-        local enhanced_exec_cmd="newgrp docker -c \"$exec_cmd\""
+        # Instead of using newgrp which can hang, use a more direct approach
+        local enhanced_exec_cmd="$exec_cmd"
         
         log "DEBUG" "Executing as $MILOU_USER in directory: $target_dir"
-        log "DEBUG" "Enhanced command with docker group activation: $enhanced_exec_cmd"
         
-        # Try with newgrp first, but have fallback if it fails
-        if ! sudo -u "$MILOU_USER" -H bash -c "newgrp docker -c 'echo test'" >/dev/null 2>&1; then
-            log "WARN" "newgrp docker failed, trying alternative approach..."
-            # Alternative: use sg (set group) command if available
-            if command -v sg >/dev/null 2>&1; then
-                enhanced_exec_cmd="sg docker -c \"$exec_cmd\""
-                log "DEBUG" "Using sg command for docker group activation"
-            else
-                log "WARN" "Neither newgrp nor sg available, running without explicit docker group activation"
-                enhanced_exec_cmd="$exec_cmd"
-            fi
+        # Check if milou user has docker group access and try different approaches
+        local docker_access_method=""
+        
+        # Method 1: Check if user can access docker directly
+        if sudo -u "$MILOU_USER" groups | grep -q docker && sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
+            docker_access_method="direct"
+            log "DEBUG" "Docker access: direct (user already has active docker group)"
+        # Method 2: Try sg command (more reliable than newgrp)
+        elif command -v sg >/dev/null 2>&1 && sudo -u "$MILOU_USER" sg docker -c "docker info" >/dev/null 2>&1; then
+            enhanced_exec_cmd="sg docker -c \"$exec_cmd\""
+            docker_access_method="sg"
+            log "DEBUG" "Docker access: using sg command for group activation"
+        # Method 3: Direct sudo approach with docker group
+        elif sudo -u "$MILOU_USER" -g docker docker info >/dev/null 2>&1; then
+            # Modify the sudo command to include the docker group
+            enhanced_exec_cmd="$exec_cmd"
+            docker_access_method="sudo_group"
+            log "DEBUG" "Docker access: using sudo with docker group"
+        else
+            # Fallback: run without explicit group activation but warn
+            log "WARN" "Docker group activation methods failed, running without explicit activation"
+            log "INFO" "💡 Docker commands may fail - try logging out and back in as $MILOU_USER"
+            docker_access_method="fallback"
         fi
         
-        # Execute with proper environment and working directory
-        exec sudo -u "$MILOU_USER" -H bash -c "$enhanced_exec_cmd"
+        # Execute with the appropriate method
+        case "$docker_access_method" in
+            "direct"|"fallback")
+                exec sudo -u "$MILOU_USER" -H bash -c "$enhanced_exec_cmd"
+                ;;
+            "sg")
+                exec sudo -u "$MILOU_USER" -H bash -c "$enhanced_exec_cmd"
+                ;;
+            "sudo_group")
+                exec sudo -u "$MILOU_USER" -g docker -H bash -c "$enhanced_exec_cmd"
+                ;;
+            *)
+                exec sudo -u "$MILOU_USER" -H bash -c "$enhanced_exec_cmd"
+                ;;
+        esac
         
     else
         error_exit "Cannot switch to $MILOU_USER user without root privileges"

@@ -393,7 +393,31 @@ pull_images() {
             log "INFO" "   • Docker socket not found at /var/run/docker.sock"
         fi
         
+        # Additional debug information
+        log "DEBUG" "Docker troubleshooting details:"
+        log "DEBUG" "   • Current user: $current_user"
+        log "DEBUG" "   • User groups: $(groups 2>/dev/null || echo 'unknown')"
+        log "DEBUG" "   • Docker command location: $(which docker 2>/dev/null || echo 'not found')"
+        log "DEBUG" "   • DOCKER_HOST: ${DOCKER_HOST:-not set}"
+        
+        # Try alternative Docker access methods
+        log "DEBUG" "Attempting alternative Docker access methods..."
+        if sudo docker info >/dev/null 2>&1; then
+            log "INFO" "   • Docker works with sudo - this is a permissions issue"
+            log "INFO" "   • Solution: Fix user permissions for docker group"
+        else
+            log "INFO" "   • Docker doesn't work even with sudo - service/installation issue"
+        fi
+        
         return 1
+    else
+        # Docker is accessible - log some basic info for debugging
+        local docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+        local current_user=$(whoami)
+        log "DEBUG" "Docker access successful:"
+        log "DEBUG" "   • User: $current_user"
+        log "DEBUG" "   • Docker version: $docker_version"
+        log "DEBUG" "   • User groups: $(groups 2>/dev/null | tr ' ' ',' || echo 'unknown')"
     fi
     
     # Ensure authentication with GitHub Container Registry
@@ -408,19 +432,39 @@ pull_images() {
         
         if [[ -n "$github_user" ]]; then
             log "DEBUG" "Authenticating Docker with GitHub user: $github_user"
+            
+            # Force re-authentication to ensure it works after user switch
+            docker logout ghcr.io >/dev/null 2>&1 || true
+            
             if echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
                 log "SUCCESS" "Docker registry authentication successful"
+                
+                # Verify authentication actually works by testing a simple command
+                if docker search ghcr.io/milou-sh >/dev/null 2>&1 || docker manifest inspect ghcr.io/milou-sh/milou/backend:latest >/dev/null 2>&1; then
+                    log "DEBUG" "Docker authentication verification successful"
+                else
+                    log "WARN" "Docker authentication may not be fully functional"
+                fi
             else
                 log "ERROR" "Failed to authenticate with GitHub Container Registry"
                 log "INFO" "💡 Ensure your token has 'read:packages' scope"
+                log "INFO" "💡 Token permissions: https://github.com/settings/tokens"
+                
+                # Debug information
+                log "DEBUG" "Debugging authentication failure..."
+                log "DEBUG" "GitHub user: $github_user"
+                log "DEBUG" "Token format: $(echo "$token" | cut -c1-10)..."
+                
                 return 1
             fi
         else
             log "ERROR" "Could not determine GitHub username from token"
+            log "DEBUG" "GitHub API response was empty or invalid"
             return 1
         fi
     else
         log "WARN" "No GitHub token provided - attempting to pull without authentication"
+        log "INFO" "💡 Private images will fail without authentication"
     fi
     
     # Define the images to pull

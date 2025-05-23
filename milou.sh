@@ -151,6 +151,13 @@ show_help() {
     printf "    ${DIM}# Interactive setup (recommended)${NC}\n"
     printf "    $(basename "$0") setup\n\n"
     
+    printf "    ${DIM}# Install dependencies first, then setup${NC}\n"
+    printf "    sudo $(basename "$0") install-deps\n"
+    printf "    $(basename "$0") setup\n\n"
+    
+    printf "    ${DIM}# Automated fresh server setup${NC}\n"
+    printf "    sudo $(basename "$0") setup --fresh-install --auto-install-deps\n\n"
+    
     printf "    ${DIM}# Non-interactive setup${NC}\n"
     printf "    $(basename "$0") setup --token ghp_xxxx --domain example.com --latest\n\n"
     
@@ -198,174 +205,396 @@ handle_setup() {
     # CRITICAL FIX: Preserve command state BEFORE user management check
     preserve_original_command "setup" "$@"
     
-    # Enhanced fresh server detection for seamless setup
-    local is_fresh_server=false
-    local auto_install_deps=false
+    echo
+    echo -e "${BOLD}${PURPLE}🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION}${NC}"
+    echo -e "${BOLD}${PURPLE}═══════════════════════════════════════════════════${NC}"
+    echo
     
-    # Check for explicit fresh install flag OR auto-detect fresh server scenario
-    if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
-        is_fresh_server=true
-        auto_install_deps=true
-        log "INFO" "🆕 Fresh install mode enabled - optimizing setup experience"
-    else
-        # Auto-detect fresh server scenario
-        local fresh_indicators=0
-        
-        # Check if running as root (common for fresh servers)
-        if is_running_as_root; then
-            ((fresh_indicators++))
-        fi
-        
-        # Check if milou user doesn't exist
-        if ! milou_user_exists; then
-            ((fresh_indicators++))
-        fi
-        
-        # Check if no existing configuration
-        if [[ ! -f "$ENV_FILE" ]]; then
-            ((fresh_indicators++))
-        fi
-        
-        # Check if no existing containers
-        if ! docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null | grep -q .; then
-            ((fresh_indicators++))
-        fi
-        
-        # Check if Docker is not installed
-        if ! command -v docker >/dev/null 2>&1; then
-            ((fresh_indicators++))
-        fi
-        
-        # If 3 or more indicators, treat as fresh server
-        if [[ $fresh_indicators -ge 3 ]]; then
-            is_fresh_server=true
-            auto_install_deps=true
-            log "INFO" "🆕 Fresh server detected automatically - optimizing setup experience"
+    # Step 1: System Information and Analysis
+    log "STEP" "Step 1: System Analysis and Detection"
+    echo
+    
+    # Detect system characteristics for smart setup
+    local is_fresh_server=false
+    local needs_deps_install=false
+    local needs_user_management=false
+    local setup_mode="interactive"  # Default to interactive
+    
+    # Analyze system state
+    log "INFO" "🔍 Analyzing system state..."
+    
+    # Fresh server detection with multiple indicators
+    local fresh_indicators=0
+    local fresh_reasons=()
+    
+    log "DEBUG" "Starting fresh server detection..."
+    
+    # Temporarily disable strict error handling for system checks
+    set +euo pipefail
+    
+    # Check 1: Root user
+    if [[ $EUID -eq 0 ]]; then
+        ((fresh_indicators++))
+        fresh_reasons+=("Running as root user")
+        log "DEBUG" "Fresh indicator: Running as root"
+    fi
+    
+    # Check 2: Milou user existence
+    log "DEBUG" "Checking milou user existence..."
+    local milou_user_missing=true
+    if command -v milou_user_exists >/dev/null 2>&1; then
+        if milou_user_exists 2>/dev/null; then
+            milou_user_missing=false
         fi
     fi
     
-    # Step 0: Prerequisites Check and Installation
-    log "STEP" "Step 0: Prerequisites Check"
+    if [[ "$milou_user_missing" == "true" ]]; then
+        ((fresh_indicators++))
+        fresh_reasons+=("No dedicated milou user")
+        log "DEBUG" "Fresh indicator: No milou user"
+    fi
+    
+    # Check 3: Configuration file
+    log "DEBUG" "Checking configuration file..."
+    if [[ ! -f "${ENV_FILE:-}" ]]; then
+        ((fresh_indicators++))
+        fresh_reasons+=("No existing configuration")
+        log "DEBUG" "Fresh indicator: No config file"
+    else
+        log "DEBUG" "Found configuration file: $ENV_FILE"
+    fi
+    
+    # Check 4: Docker installation
+    log "DEBUG" "Checking Docker installation..."
+    if ! command -v docker >/dev/null 2>&1; then
+        ((fresh_indicators++))
+        fresh_reasons+=("Docker not installed")
+        needs_deps_install=true
+        log "DEBUG" "Fresh indicator: Docker not installed"
+    fi
+    
+    # Check 5: Existing containers (only if Docker is available)
+    log "DEBUG" "Checking existing containers..."
+    local has_containers=false
+    if command -v docker >/dev/null 2>&1; then
+        if docker info >/dev/null 2>&1; then
+            local container_output
+            container_output=$(docker ps -a --filter "name=static-" --quiet 2>/dev/null || echo "")
+            if [[ -n "$container_output" ]]; then
+                has_containers=true
+                log "DEBUG" "Found existing containers"
+            fi
+        else
+            log "DEBUG" "Docker daemon not accessible"
+        fi
+    fi
+    
+    if [[ "$has_containers" == "false" ]]; then
+        ((fresh_indicators++))
+        fresh_reasons+=("No existing Milou containers")
+        log "DEBUG" "Fresh indicator: No containers"
+    fi
+    
+    # Re-enable strict error handling
+    set -euo pipefail
+    
+    log "DEBUG" "Fresh indicators found: $fresh_indicators"
+    
+    # Determine if this is a fresh server (3+ indicators)
+    if [[ $fresh_indicators -ge 3 ]] || [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
+        is_fresh_server=true
+        log "INFO" "🆕 Fresh server installation detected"
+        for reason in "${fresh_reasons[@]}"; do
+            log "INFO" "   • $reason"
+        done
+    else
+        log "INFO" "🔄 Existing system setup detected"
+    fi
+    
     echo
     
-    # Quick check of prerequisites
-    local prereq_status=0
-    check_prerequisites_quick || prereq_status=$?
+    # Step 2: Prerequisites Assessment (Non-blocking)
+    log "STEP" "Step 2: Prerequisites Assessment"
+    echo
     
-    if [[ $prereq_status -eq 1 ]]; then
-        # Missing critical dependencies
-        log "WARN" "❌ Missing critical dependencies detected"
+    # Quick assessment without blocking
+    local missing_deps=()
+    local warnings=()
+    local prereq_status="good"
+    
+    # Check critical dependencies
+    if ! command -v docker >/dev/null 2>&1; then
+        missing_deps+=("Docker")
+        needs_deps_install=true
+    elif ! docker info >/dev/null 2>&1; then
+        warnings+=("Docker daemon not accessible")
+    fi
+    
+    if ! docker compose version >/dev/null 2>&1; then
+        missing_deps+=("Docker Compose")
+    fi
+    
+    # Check system tools
+    local -a tools=("curl" "wget" "jq" "openssl")
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_deps+=("$tool")
+        fi
+    done
+    
+    # Report status
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        prereq_status="missing"
+        log "WARN" "⚠️  Missing dependencies: ${missing_deps[*]}"
+    elif [[ ${#warnings[@]} -gt 0 ]]; then
+        prereq_status="warnings"
+        log "WARN" "⚠️  Warnings: ${warnings[*]}"
+    else
+        prereq_status="good"
+        log "SUCCESS" "✅ All prerequisites satisfied"
+    fi
+    
+    echo
+    
+    # Step 3: Smart Setup Mode Selection
+    log "STEP" "Step 3: Setup Mode Selection"
+    echo
+    
+    # Determine setup mode based on conditions and flags
+    if [[ -n "$GITHUB_TOKEN" ]] || [[ "${INTERACTIVE:-true}" == "false" ]]; then
+        setup_mode="non-interactive"
+        log "INFO" "🤖 Non-interactive mode selected"
+    else
+        setup_mode="interactive"
+        log "INFO" "🎯 Interactive mode selected"
+    fi
+    
+    # Handle fresh server optimization
+    if [[ "$is_fresh_server" == "true" ]]; then
+        log "INFO" "🚀 Fresh server optimizations enabled"
         
-        if [[ "$auto_install_deps" == "true" ]] || [[ "${AUTO_INSTALL_DEPS:-false}" == "true" ]]; then
-            log "INFO" "🔧 Automatically installing missing dependencies..."
+        # Auto-enable dependency installation for fresh servers
+        if [[ "$needs_deps_install" == "true" ]] && [[ "${AUTO_INSTALL_DEPS:-false}" != "true" ]]; then
+            if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
+                AUTO_INSTALL_DEPS=true
+                export AUTO_INSTALL_DEPS
+                log "INFO" "✅ Auto-dependency installation enabled"
+            fi
+        fi
+        
+        # Auto-enable user creation for fresh servers
+        if [[ "$needs_user_management" == "true" ]] && [[ "${AUTO_CREATE_USER:-false}" != "true" ]]; then
+            if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
+                AUTO_CREATE_USER=true
+                export AUTO_CREATE_USER
+                log "INFO" "✅ Auto-user creation enabled"
+            fi
+        fi
+    fi
+    
+    echo
+    
+    # Step 4: Dependencies Resolution (Optional)
+    if [[ "$prereq_status" == "missing" ]]; then
+        log "STEP" "Step 4: Dependencies Resolution"
+        echo
+        
+        local install_deps=false
+        
+        # Determine if we should install dependencies
+        if [[ "${AUTO_INSTALL_DEPS:-false}" == "true" ]]; then
+            install_deps=true
+            log "INFO" "🔧 Auto-installing dependencies..."
+        elif [[ "$setup_mode" == "interactive" ]]; then
+            echo "Missing dependencies can be installed automatically or manually."
+            echo "Dependencies needed: ${missing_deps[*]}"
+            echo
             
-            # Install prerequisites automatically
-            if install_prerequisites "true" "false" "$is_fresh_server"; then
-                log "SUCCESS" "✅ Prerequisites installed successfully"
+            if confirm "Install missing dependencies automatically?" "Y"; then
+                install_deps=true
             else
-                if [[ "$is_fresh_server" == "true" ]]; then
-                    log "ERROR" "Failed to install prerequisites automatically"
-                    log "INFO" "💡 Please install dependencies manually and run setup again"
-                    exit 1
-                else
-                    log "WARN" "Failed to install prerequisites automatically, continuing anyway..."
+                log "INFO" "📋 Manual installation will be required"
+                echo
+                log "INFO" "💡 Manual installation commands:"
+                show_manual_installation_commands
+                echo
+                
+                if ! confirm "Continue setup without installing dependencies?" "N"; then
+                    log "INFO" "Setup cancelled - please install dependencies and try again"
+                    exit 0
                 fi
             fi
         else
-            log "INFO" "🔧 Prerequisites installation required"
-            echo
-            if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-                if confirm "Install missing dependencies automatically?" "Y"; then
-                    if install_prerequisites "true" "false" "false"; then
-                        log "SUCCESS" "✅ Prerequisites installed successfully"
+            # Non-interactive mode - require dependencies
+            log "ERROR" "Missing dependencies in non-interactive mode"
+            log "INFO" "💡 Solutions:"
+            log "INFO" "  • Run: $0 setup --auto-install-deps"
+            log "INFO" "  • Run: $0 install-deps (install separately)"
+            log "INFO" "  • Install manually and retry setup"
+            exit 1
+        fi
+        
+        # Install dependencies if requested
+        if [[ "$install_deps" == "true" ]]; then
+            if [[ $EUID -eq 0 ]]; then
+                if install_prerequisites "true" "false" "true"; then
+                    log "SUCCESS" "✅ Dependencies installed successfully"
+                    prereq_status="good"
+                else
+                    log "ERROR" "Failed to install dependencies"
+                    if [[ "$setup_mode" == "interactive" ]] && confirm "Continue anyway?" "N"; then
+                        log "WARN" "Continuing with missing dependencies"
                     else
-                        log "ERROR" "Failed to install prerequisites"
-                        log "INFO" "💡 Please install dependencies manually and run setup again"
                         exit 1
                     fi
+                fi
+            else
+                log "ERROR" "Root privileges required for dependency installation"
+                log "INFO" "💡 Run: sudo $0 setup --auto-install-deps"
+                log "INFO" "💡 Or: sudo $0 install-deps && $0 setup"
+                
+                if [[ "$setup_mode" == "interactive" ]] && confirm "Continue without installing dependencies?" "N"; then
+                    log "WARN" "Continuing with missing dependencies"
                 else
-                    log "INFO" "Manual installation required"
-                    install_prerequisites "false" "false" "true"
                     exit 1
                 fi
-            else
-                log "ERROR" "Non-interactive mode requires all dependencies to be pre-installed"
-                log "INFO" "💡 Install dependencies: sudo $0 setup --auto-install-deps"
-                exit 1
             fi
         fi
-    elif [[ $prereq_status -eq 2 ]]; then
-        # Warnings only
-        log "WARN" "⚠️  Some dependency warnings detected"
-        log "INFO" "Continuing with setup..."
-    else
-        log "SUCCESS" "✅ All prerequisites are satisfied"
+        
+        echo
     fi
     
-    echo
-    
-    # Enhanced user management for setup command
+    # Step 5: User Management (For fresh servers or root users)
     if [[ "${SKIP_USER_CHECK:-false}" != "true" ]]; then
-        # For fresh server setup, be more automatic about user creation
-        if [[ "$is_fresh_server" == true ]]; then
-            log "INFO" "🔧 Setting up optimal user environment for Milou..."
+        if is_running_as_root || [[ "$is_fresh_server" == "true" ]]; then
+            log "STEP" "Step 5: User Management"
+            echo
             
-            if ! milou_user_exists; then
-                log "INFO" "Creating dedicated milou user for secure operations..."
+            if is_running_as_root && (! command -v milou_user_exists >/dev/null 2>&1 || ! milou_user_exists); then
+                local create_user=false
                 
-                # For explicit fresh install flag, be more automatic
-                if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
-                    echo
-                    echo -e "${GREEN}🚀 Fresh Install Mode: Setting up secure user environment...${NC}"
-                    create_milou_user
-                    log "SUCCESS" "✅ Milou user created! Switching to continue setup..."
-                    switch_to_milou_user "$@"
-                    return $?  # This should never be reached due to exec
-                else
-                    # Auto-detected fresh server - quick confirmation
-                    echo
-                    echo -e "${CYAN}For security and best practices, Milou should run as a dedicated user.${NC}"
-                    echo -e "${CYAN}This will create a 'milou' user and continue setup from there.${NC}"
+                if [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
+                    create_user=true
+                    log "INFO" "🔧 Auto-creating milou user..."
+                elif [[ "$setup_mode" == "interactive" ]]; then
+                    echo "For security and best practices, Milou should run as a dedicated user."
+                    echo "This will create a 'milou' user and continue setup from there."
                     echo
                     
-                    # Quick confirmation with default Yes and timeout for fresh server
-                    if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-                        if ! confirm "Create milou user and continue setup?" "Y" 10; then
-                            log "INFO" "Continuing as root (not recommended for production)"
-                        else
-                            create_milou_user
-                            log "SUCCESS" "✅ Milou user created! Switching to continue setup..."
-                            switch_to_milou_user "$@"
-                            return $?  # This should never be reached due to exec
-                        fi
+                    if confirm "Create dedicated milou user?" "Y" 10; then
+                        create_user=true
                     else
-                        # Non-interactive mode
-                        create_milou_user
-                        switch_to_milou_user "$@"
-                        return $?  # This should never be reached due to exec
+                        log "INFO" "Continuing as root (not recommended for production)"
+                    fi
+                else
+                    # Non-interactive mode - create user automatically for fresh installs
+                    if [[ "$is_fresh_server" == "true" ]]; then
+                        create_user=true
+                        log "INFO" "🔧 Creating milou user for fresh server setup..."
                     fi
                 fi
-            else
-                # Milou user exists, switch to it
-                log "INFO" "Switching to existing milou user for secure setup..."
+                
+                if [[ "$create_user" == "true" ]]; then
+                    if create_milou_user; then
+                        log "SUCCESS" "✅ Milou user created successfully"
+                        log "INFO" "🔄 Switching to milou user to continue setup..."
+                        switch_to_milou_user "$@"
+                        return $?  # This should never be reached due to exec
+                    else
+                        log "ERROR" "Failed to create milou user"
+                        if [[ "$setup_mode" == "interactive" ]] && confirm "Continue as root?" "N"; then
+                            log "WARN" "Continuing as root (not recommended)"
+                        else
+                            exit 1
+                        fi
+                    fi
+                fi
+            elif command -v milou_user_exists >/dev/null 2>&1 && milou_user_exists && is_running_as_root; then
+                log "INFO" "Milou user exists - switching for secure setup..."
                 switch_to_milou_user "$@"
                 return $?  # This should never be reached due to exec
             fi
-        else
-            # Non-fresh server, use standard user management
-            ensure_proper_user_setup "$@"
+            
+            echo
         fi
     fi
     
-    # Determine setup mode based on parameters
-    if [[ -n "$GITHUB_TOKEN" ]] || [[ "${INTERACTIVE:-true}" == "false" ]]; then
-        # Non-interactive setup
-        handle_non_interactive_setup "$@"
+    # Step 6: Execute Setup
+    log "STEP" "Step 6: Milou Configuration"
+    echo
+    
+    case "$setup_mode" in
+        "interactive")
+            log "INFO" "🎯 Starting interactive setup wizard..."
+            interactive_setup_wizard
+            ;;
+        "non-interactive")
+            log "INFO" "🤖 Starting non-interactive setup..."
+            handle_non_interactive_setup "$@"
+            ;;
+        *)
+            log "ERROR" "Unknown setup mode: $setup_mode"
+            exit 1
+            ;;
+    esac
+}
+
+# Helper function to show manual installation commands
+show_manual_installation_commands() {
+    local distro_id=""
+    local pkg_manager=""
+    
+    if command -v detect_distribution >/dev/null 2>&1; then
+        distro_id=$(detect_distribution)
+        pkg_manager=$(detect_package_manager)
     else
-        # Interactive setup - this is what continues after user switch
-        log "INFO" "🎯 Starting interactive setup wizard..."
-        interactive_setup_wizard
+        # Fallback detection
+        if command -v apt-get >/dev/null 2>&1; then
+            pkg_manager="apt"
+        elif command -v dnf >/dev/null 2>&1; then
+            pkg_manager="dnf"
+        elif command -v yum >/dev/null 2>&1; then
+            pkg_manager="yum"
+        fi
     fi
+    
+    log "INFO" "📋 Manual Installation Commands:"
+    
+    # Docker installation
+    log "INFO" "  Docker:"
+    case "$pkg_manager" in
+        "apt")
+            log "INFO" "    sudo apt-get update && sudo apt-get install -y docker.io docker-compose-plugin"
+            ;;
+        "dnf")
+            log "INFO" "    sudo dnf install -y docker docker-compose-plugin"
+            ;;
+        "yum")
+            log "INFO" "    sudo yum install -y docker docker-compose-plugin"
+            ;;
+        *)
+            log "INFO" "    curl -fsSL https://get.docker.com | sh"
+            ;;
+    esac
+    
+    # System tools
+    log "INFO" "  System tools:"
+    case "$pkg_manager" in
+        "apt")
+            log "INFO" "    sudo apt-get install -y curl wget jq openssl git"
+            ;;
+        "dnf"|"yum")
+            log "INFO" "    sudo $pkg_manager install -y curl wget jq openssl git"
+            ;;
+        *)
+            log "INFO" "    Install curl, wget, jq, openssl, git using your package manager"
+            ;;
+    esac
+    
+    # Docker service
+    log "INFO" "  Docker service:"
+    log "INFO" "    sudo systemctl enable docker && sudo systemctl start docker"
+    log "INFO" "    sudo usermod -aG docker \$USER && newgrp docker"
 }
 
 handle_non_interactive_setup() {

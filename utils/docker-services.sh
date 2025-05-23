@@ -385,57 +385,26 @@ ensure_docker_networks() {
 
 # Enhanced service startup with pre-flight checks
 start_services_with_checks() {
-    local setup_mode="${1:-false}"  # New parameter to indicate if called from setup
+    local setup_mode="${1:-false}"
     
     log "STEP" "Starting Milou services with pre-flight checks..."
     
-    # Check if configuration exists first
-    if [[ ! -f "$ENV_FILE" ]]; then
-        log "WARN" "No configuration file found. You need to run setup first."
-        if [[ "${INTERACTIVE:-true}" == "true" ]] && confirm "Would you like to run the interactive setup now?" "Y"; then
-            interactive_setup_wizard
-            return $?
+    # Check SSL certificates
+    local ssl_path
+    ssl_path=$(get_config_value "SSL_CERT_PATH" "./ssl")
+    
+    if [[ -n "$ssl_path" ]]; then
+        log "INFO" "Checking SSL certificates..."
+        if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+            if check_ssl_expiration "$ssl_path"; then
+                log "SUCCESS" "SSL certificates are valid"
+            else
+                log "WARN" "SSL certificate issues detected"
+            fi
         else
-            log "INFO" "Please run: $0 setup"
-            return 1
+            log "WARN" "SSL certificates not found at $ssl_path"
+            log "INFO" "💡 Run: $0 ssl --domain YOUR_DOMAIN"
         fi
-    fi
-    
-    # Check Docker access
-    if ! check_docker_access; then
-        return 1
-    fi
-    
-    # Check SSL certificates before starting services
-    log "INFO" "Checking SSL certificates..."
-    local ssl_path="${DEFAULT_SSL_PATH:-./ssl}"
-    if [[ -f "$ENV_FILE" ]]; then
-        # Try to get SSL path from config
-        ssl_path=$(grep "^SSL_CERT_PATH=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2 || echo "$ssl_path")
-    fi
-    
-    if [[ ! -f "$ssl_path/milou.crt" || ! -f "$ssl_path/milou.key" ]]; then
-        log "ERROR" "SSL certificate files are missing:"
-        log "ERROR" "  Expected: $ssl_path/milou.crt"
-        log "ERROR" "  Expected: $ssl_path/milou.key"
-        log "INFO" "💡 Run SSL setup: $0 ssl --domain your-domain.com"
-        log "INFO" "💡 Or run full setup: $0 setup"
-        return 1
-    fi
-    
-    # Validate SSL certificates
-    if command -v openssl >/dev/null 2>&1; then
-        if ! openssl x509 -in "$ssl_path/milou.crt" -noout >/dev/null 2>&1; then
-            log "ERROR" "SSL certificate file is invalid: $ssl_path/milou.crt"
-            return 1
-        fi
-        if ! openssl rsa -in "$ssl_path/milou.key" -check -noout >/dev/null 2>&1; then
-            log "ERROR" "SSL private key file is invalid: $ssl_path/milou.key"
-            return 1
-        fi
-        log "SUCCESS" "SSL certificates are valid"
-    else
-        log "WARN" "OpenSSL not available - skipping SSL certificate validation"
     fi
     
     # Ensure networks exist
@@ -482,45 +451,40 @@ start_services_with_checks() {
     if [[ "$is_fresh_install" == "true" ]]; then
         log "DEBUG" "Fresh installation - proceeding directly to service startup"
     else
-        # Only check for conflicts if there are actually running services that could conflict
-        local needs_conflict_handling=false
-        local conflict_reason=""
-        
         # Check for running containers that might conflict
         local running_containers
         running_containers=$(docker ps --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+        
+        local needs_conflict_handling=false
+        local conflict_reason=""
         
         if [[ -n "$running_containers" ]]; then
             needs_conflict_handling=true
             conflict_reason="running containers"
             log "WARN" "Found running Milou containers that may conflict:"
-            echo "$running_containers" | sed 's/^/  🐳 /'
-            echo
+            while IFS= read -r container; do
+                [[ -n "$container" ]] && log "WARN" "  🐳 $container"
+            done <<< "$running_containers"
         fi
         
-        # Check for port conflicts (only if not in setup mode, as setup handles this differently)
-        if [[ "$setup_mode" != "true" ]]; then
-            local -a ports_to_check=("5432" "6379" "15672" "443" "80")
-            local port_conflicts=()
-            
-            for port in "${ports_to_check[@]}"; do
-                if ! check_port_availability "$port" "service" >/dev/null 2>&1; then
-                    # Check if the port is used by our own containers
-                    local port_process
-                    port_process=$(get_port_process "$port" 2>/dev/null || echo "")
-                    
-                    # If it's not our containers, it's a real conflict
-                    if [[ ! "$port_process" =~ (static-|milou) ]]; then
-                        port_conflicts+=("$port")
-                    fi
+        # Check for port conflicts
+        local conflicting_ports=()
+        local -a ports_to_check=("80" "443" "5432" "6379" "5672" "9999")
+        
+        for port in "${ports_to_check[@]}"; do
+            if command -v netstat >/dev/null 2>&1; then
+                local port_in_use
+                port_in_use=$(netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | head -1)
+                if [[ -n "$port_in_use" && ! "$port_in_use" =~ static- ]]; then
+                    conflicting_ports+=("$port ($port_in_use)")
                 fi
-            done
-            
-            if [[ ${#port_conflicts[@]} -gt 0 ]]; then
-                needs_conflict_handling=true
-                conflict_reason="${conflict_reason:+$conflict_reason and }port conflicts"
-                log "WARN" "Found port conflicts: ${port_conflicts[*]}"
             fi
+        done
+        
+        if [[ ${#conflicting_ports[@]} -gt 0 ]]; then
+            for port_info in "${conflicting_ports[@]}"; do
+                log "WARN" "  ⚠️  Port $port_info is in use by: "
+            done
         fi
         
         # Handle conflicts if needed
@@ -543,8 +507,7 @@ start_services_with_checks() {
                     echo
                     
                     while true; do
-                        echo -ne "${CYAN}Choose option (1-3): ${NC}"
-                        read -r choice
+                        read -p "Choose option (1-3): " choice
                         case "$choice" in
                             1)
                                 log "INFO" "Stopping existing containers..."
@@ -553,9 +516,8 @@ start_services_with_checks() {
                                 ;;
                             2)
                                 log "INFO" "Force restarting - will remove existing containers..."
+                                export FORCE=true
                                 handle_conflict=true
-                                FORCE=true
-                                export FORCE
                                 break
                                 ;;
                             3)
@@ -563,51 +525,650 @@ start_services_with_checks() {
                                 return 1
                                 ;;
                             *)
-                                echo "Invalid choice. Please enter 1, 2, or 3."
+                                echo "Invalid choice. Please enter 1-3."
                                 ;;
                         esac
                     done
                 else
-                    # Non-interactive setup mode - auto-handle conflicts
-                    log "INFO" "Non-interactive setup mode - automatically stopping existing containers"
+                    # Non-interactive setup mode
+                    log "INFO" "Non-interactive setup - stopping existing containers"
                     handle_conflict=true
                 fi
             else
-                # Normal start command - be more strict
-                log "WARN" "Conflicting services detected ($conflict_reason). Use --force to override or stop services manually."
-                log "INFO" "Available options:"
-                log "INFO" "  • Run with --force to automatically stop conflicting services"
-                log "INFO" "  • Run '$0 stop' to stop current services first"
-                log "INFO" "  • Run '$0 cleanup --complete' to remove everything and start fresh"
+                # Normal start operation with conflicts
+                log "ERROR" "Cannot start services due to conflicts"
+                log "INFO" "💡 Solutions:"
+                log "INFO" "  • Use --force flag to stop existing services"
+                log "INFO" "  • Run: $0 stop (to stop Milou services)"
+                log "INFO" "  • Run: $0 restart (to restart services)"
                 return 1
             fi
             
-            # Handle the conflict if needed
             if [[ "$handle_conflict" == "true" ]]; then
-                if [[ "$FORCE" == "true" ]]; then
+                if [[ "$FORCE" == true ]]; then
                     log "INFO" "Force mode - stopping and removing existing containers..."
-                    stop_services || true
-                    # Also remove containers to ensure clean state
-                    local existing_containers
-                    existing_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
-                    if [[ -n "$existing_containers" ]]; then
-                        echo "$existing_containers" | xargs docker rm -f 2>/dev/null || true
-                        log "INFO" "Removed existing containers for clean restart"
+                    if ! stop_services; then
+                        log "WARN" "Failed to stop some services, continuing anyway..."
                     fi
                 else
-                    log "INFO" "Stopping existing services gracefully..."
+                    log "INFO" "Stopping existing containers..."
                     if ! stop_services; then
-                        log "WARN" "Failed to stop some services, but continuing anyway..."
+                        log "ERROR" "Failed to stop existing services"
+                        return 1
                     fi
                 fi
                 
-                # Brief pause to let services fully stop
+                # Wait for services to fully stop
                 log "INFO" "Waiting for services to fully stop..."
                 sleep 3
             fi
+        fi
+        
+        # Handle database migration for existing installations
+        if [[ "$setup_mode" == "true" && "${MILOU_EXISTING_VOLUMES:-false}" == "true" ]]; then
+            if ! handle_database_migration "true"; then
+                log "ERROR" "Database migration failed"
+                if [[ "${FORCE:-false}" != "true" ]]; then
+                    return 1
+                fi
+            fi
+        fi
+    fi
+    
+    # Start services
+    if start_services; then
+        log "SUCCESS" "Services started successfully with all checks passed"
+        return 0
+    else
+        log "ERROR" "Failed to start services"
+        return 1
+    fi
+}
+
+# Wait for services to be ready (alias for backward compatibility)
+wait_for_services() {
+    wait_for_services_ready
+}
+
+# =============================================================================
+# Diagnostic and Troubleshooting Functions
+# =============================================================================
+
+# Comprehensive Docker environment diagnosis
+diagnose_docker_environment() {
+    log "STEP" "Running comprehensive Docker environment diagnosis..."
+    echo
+    
+    local issues=0
+    local warnings=0
+    
+    # Check Docker daemon
+    log "INFO" "1. Docker Daemon Status:"
+    if docker info >/dev/null 2>&1; then
+        log "SUCCESS" "  ✅ Docker daemon is accessible"
+        
+        # Get Docker version
+        local docker_version
+        docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+        log "INFO" "  📦 Docker version: $docker_version"
+        
+        # Check Docker Compose
+        local compose_version
+        compose_version=$(docker compose version --short 2>/dev/null || echo "unknown")
+        log "INFO" "  📦 Docker Compose version: $compose_version"
+    else
+        log "ERROR" "  ❌ Cannot access Docker daemon"
+        ((issues++))
+        log "INFO" "    💡 Try: sudo systemctl start docker"
+        log "INFO" "    💡 Verify user permissions: sudo usermod -aG docker \$USER"
+    fi
+    echo
+    
+    # Check authentication
+    log "INFO" "2. Registry Authentication:"
+    if docker system info --format '{{.RegistryConfig}}' 2>/dev/null | grep -q "ghcr.io"; then
+        log "SUCCESS" "  ✅ GitHub Container Registry authentication configured"
+    else
+        log "WARN" "  ⚠️  No authentication found for GitHub Container Registry"
+        ((warnings++))
+    fi
+    echo
+    
+    # Check required images
+    log "INFO" "3. Required Docker Images:"
+    local -a required_images=(
+        "ghcr.io/milou-sh/milou/backend:latest"
+        "ghcr.io/milou-sh/milou/frontend:latest"
+        "ghcr.io/milou-sh/milou/engine:latest"
+        "ghcr.io/milou-sh/milou/nginx:latest"
+        "ghcr.io/milou-sh/milou/database:latest"
+    )
+    
+    for image in "${required_images[@]}"; do
+        if docker image inspect "$image" >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ $image"
         else
-            # No conflicts detected - proceed normally
-            log "DEBUG" "No service conflicts detected - proceeding with startup"
+            log "ERROR" "  ❌ $image (not found locally)"
+            ((issues++))
+        fi
+    done
+    echo
+    
+    # Check Docker Compose configuration
+    log "INFO" "4. Docker Compose Configuration:"
+    local compose_file="static/docker-compose.yml"
+    if [[ -f "$compose_file" ]]; then
+        log "SUCCESS" "  ✅ Compose file exists: $compose_file"
+        
+        if docker compose -f "$compose_file" config >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ Compose configuration is valid"
+        else
+            log "ERROR" "  ❌ Compose configuration is invalid"
+            ((issues++))
+            log "DEBUG" "  Run 'docker compose -f $compose_file config' for details"
+        fi
+    else
+        log "ERROR" "  ❌ Compose file not found: $compose_file"
+        ((issues++))
+    fi
+    echo
+    
+    # Check environment variables
+    log "INFO" "5. Environment Configuration:"
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ -f "$env_file" ]]; then
+        log "SUCCESS" "  ✅ Environment file exists: $env_file"
+        
+        # Check file permissions
+        local permissions
+        permissions=$(stat -c %a "$env_file" 2>/dev/null || echo "unknown")
+        if [[ "$permissions" == "600" ]]; then
+            log "SUCCESS" "  ✅ Environment file has secure permissions ($permissions)"
+        else
+            log "WARN" "  ⚠️  Environment file permissions could be more secure ($permissions)"
+            ((warnings++))
+            log "INFO" "    💡 Run: chmod 600 $env_file"
+        fi
+    else
+        log "ERROR" "  ❌ Environment file not found: $env_file"
+        ((issues++))
+        log "INFO" "    💡 Run setup first: ./milou.sh setup"
+    fi
+    echo
+    
+    # Check networks
+    log "INFO" "6. Docker Networks:"
+    local -a required_networks=("milou_network" "proxy")
+    for network in "${required_networks[@]}"; do
+        if docker network inspect "$network" >/dev/null 2>&1; then
+            log "SUCCESS" "  ✅ Network exists: $network"
+        else
+            log "WARN" "  ⚠️  Network missing: $network"
+            ((warnings++))
+            log "INFO" "    💡 Will be created automatically during startup"
+        fi
+    done
+    echo
+    
+    # Check system resources
+    log "INFO" "7. System Resources:"
+    local disk_space
+    disk_space=$(df -h . | awk 'NR==2 {print $4}')
+    log "INFO" "  💾 Available disk space: $disk_space"
+    
+    local memory
+    memory=$(free -h | awk 'NR==2{print $7}')
+    log "INFO" "  🧠 Available memory: $memory"
+    echo
+    
+    # Check running services
+    log "INFO" "8. Current Service Status:"
+    if docker compose -f "$compose_file" ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null; then
+        log "SUCCESS" "  ✅ Service status retrieved successfully"
+    else
+        log "WARN" "  ⚠️  Could not retrieve service status"
+        ((warnings++))
+    fi
+    echo
+    
+    # Summary
+    log "INFO" "Diagnosis Summary:"
+    log "INFO" "  🔴 Critical Issues: $issues"
+    log "INFO" "  🟡 Warnings: $warnings"
+    
+    if [[ $issues -eq 0 ]]; then
+        log "SUCCESS" "🎉 No critical issues found! System appears healthy."
+        return 0
+    else
+        log "ERROR" "⚠️  Found $issues critical issue(s) that need attention."
+        return 1
+    fi
+}
+
+# Quick health check for running services
+quick_health_check() {
+    log "INFO" "Running quick health check..."
+    
+    local compose_file="static/docker-compose.yml"
+    local healthy_services=0
+    local total_services=0
+    
+    # Check if compose file exists
+    if [[ ! -f "$compose_file" ]]; then
+        log "ERROR" "Docker Compose file not found"
+        return 1
+    fi
+    
+    # Get list of services
+    local services
+    services=$(docker compose -f "$compose_file" ps --services 2>/dev/null)
+    
+    if [[ -z "$services" ]]; then
+        log "WARN" "No services found or not running"
+        return 1
+    fi
+    
+    echo "Service Health Status:"
+    while IFS= read -r service; do
+        ((total_services++))
+        if check_service_health "$service"; then
+            echo "  ✅ $service: Healthy"
+            ((healthy_services++))
+        else
+            echo "  ❌ $service: Unhealthy or not running"
+        fi
+    done <<< "$services"
+    
+    echo
+    log "INFO" "Health Summary: $healthy_services/$total_services services healthy"
+    
+    if [[ $healthy_services -eq $total_services ]]; then
+        log "SUCCESS" "All services are healthy!"
+        return 0
+    else
+        log "WARN" "Some services are not healthy"
+        return 1
+    fi
+}
+
+# =============================================================================
+# Database User Synchronization Functions
+# =============================================================================
+
+# Synchronize database users with current configuration
+sync_database_users() {
+    local env_file="${SCRIPT_DIR}/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        log "ERROR" "Configuration file not found: $env_file"
+        return 1
+    fi
+    
+    log "STEP" "Synchronizing database users with configuration..."
+    
+    # Get current configuration values
+    local db_user db_password postgres_user postgres_password db_name
+    db_user=$(get_config_value "DB_USER" "")
+    db_password=$(get_config_value "DB_PASSWORD" "")
+    postgres_user=$(get_config_value "POSTGRES_USER" "")
+    postgres_password=$(get_config_value "POSTGRES_PASSWORD" "")
+    db_name=$(get_config_value "DB_NAME" "milou")
+    
+    if [[ -z "$db_user" || -z "$db_password" ]]; then
+        log "ERROR" "Database credentials not found in configuration"
+        return 1
+    fi
+    
+    log "INFO" "Target database user: $db_user"
+    log "INFO" "Target database: $db_name"
+    
+    # Check if database container is running
+    if ! docker ps --filter "name=static-db-1" --format "{{.Names}}" | grep -q "static-db-1"; then
+        log "WARN" "Database container is not running - user sync will be performed on next startup"
+        return 0
+    fi
+    
+    # Wait for database to be ready
+    log "INFO" "Waiting for database to be ready..."
+    local max_attempts=30
+    local attempt=0
+    
+    while [[ $attempt -lt $max_attempts ]]; do
+        if docker exec static-db-1 pg_isready -U "$postgres_user" -d "$db_name" >/dev/null 2>&1; then
+            break
+        fi
+        ((attempt++))
+        if [[ $attempt -eq $max_attempts ]]; then
+            log "ERROR" "Database did not become ready within $max_attempts seconds"
+            return 1
+        fi
+        sleep 1
+    done
+    
+    log "SUCCESS" "Database is ready"
+    
+    # Check if the target user already exists
+    local user_exists
+    user_exists=$(docker exec static-db-1 psql -U "$postgres_user" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$db_user'" 2>/dev/null || echo "")
+    
+    if [[ "$user_exists" == "1" ]]; then
+        log "INFO" "User '$db_user' already exists - updating password and permissions"
+        
+        # Update password
+        if docker exec static-db-1 psql -U "$postgres_user" -d postgres -c "ALTER USER \"$db_user\" WITH PASSWORD '$db_password';" >/dev/null 2>&1; then
+            log "SUCCESS" "Updated password for user '$db_user'"
+        else
+            log "ERROR" "Failed to update password for user '$db_user'"
+            return 1
+        fi
+    else
+        log "INFO" "Creating new user '$db_user'"
+        
+        # Create the user
+        if docker exec static-db-1 psql -U "$postgres_user" -d postgres -c "CREATE USER \"$db_user\" WITH PASSWORD '$db_password';" >/dev/null 2>&1; then
+            log "SUCCESS" "Created user '$db_user'"
+        else
+            log "ERROR" "Failed to create user '$db_user'"
+            return 1
+        fi
+    fi
+    
+    # Grant necessary permissions
+    log "INFO" "Granting permissions to user '$db_user'"
+    
+    # Create database if it doesn't exist
+    local db_exists
+    db_exists=$(docker exec static-db-1 psql -U "$postgres_user" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'" 2>/dev/null || echo "")
+    
+    if [[ "$db_exists" != "1" ]]; then
+        log "INFO" "Creating database '$db_name'"
+        if docker exec static-db-1 psql -U "$postgres_user" -d postgres -c "CREATE DATABASE \"$db_name\" WITH OWNER \"$db_user\";" >/dev/null 2>&1; then
+            log "SUCCESS" "Created database '$db_name'"
+        else
+            log "ERROR" "Failed to create database '$db_name'"
+            return 1
+        fi
+    fi
+    
+    # Grant all privileges on the database
+    if docker exec static-db-1 psql -U "$postgres_user" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"$db_name\" TO \"$db_user\";" >/dev/null 2>&1; then
+        log "SUCCESS" "Granted database privileges to '$db_user'"
+    else
+        log "WARN" "Failed to grant database privileges - may already be granted"
+    fi
+    
+    # Grant schema permissions
+    if docker exec static-db-1 psql -U "$postgres_user" -d "$db_name" -c "GRANT ALL ON SCHEMA public TO \"$db_user\"; GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO \"$db_user\"; GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO \"$db_user\";" >/dev/null 2>&1; then
+        log "SUCCESS" "Granted schema privileges to '$db_user'"
+    else
+        log "WARN" "Failed to grant schema privileges - may not be necessary yet"
+    fi
+    
+    # Test the connection
+    log "INFO" "Testing database connection with new credentials..."
+    if docker exec static-db-1 psql -U "$db_user" -d "$db_name" -c "SELECT 1;" >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Database user synchronization completed successfully"
+        return 0
+    else
+        log "ERROR" "❌ Database connection test failed - user synchronization may have issues"
+        return 1
+    fi
+}
+
+# Handle database migration for existing installations
+handle_database_migration() {
+    local preserve_data="${1:-true}"
+    
+    log "STEP" "Handling database migration for existing installation..."
+    
+    # Check if we have preserved credentials
+    if [[ "${MILOU_PRESERVED_CREDENTIALS:-false}" == "true" ]]; then
+        log "INFO" "Using preserved credentials - synchronizing database users"
+        if sync_database_users; then
+            log "SUCCESS" "Database migration completed with preserved credentials"
+            return 0
+        else
+            log "WARN" "Database user synchronization failed"
+            if [[ "${FORCE:-false}" != "true" ]]; then
+                return 1
+            fi
+        fi
+    else
+        log "INFO" "New credentials generated - database will be reinitialized"
+        if [[ "$preserve_data" == "true" ]]; then
+            log "WARN" "⚠️  Data preservation requested but credentials changed"
+            log "INFO" "💡 Consider using preserved credentials to maintain data compatibility"
+            
+            if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                echo
+                echo "Database credentials have changed, which may cause data loss."
+                echo "Options:"
+                echo "  1. Continue with new credentials (may lose existing data)"
+                echo "  2. Cancel and regenerate config with preserved credentials"
+                echo "  3. Force continue anyway"
+                echo
+                
+                while true; do
+                    read -p "Choose option (1-3): " choice
+                    case "$choice" in
+                        1)
+                            log "WARN" "Continuing with new credentials"
+                            break
+                            ;;
+                        2)
+                            log "INFO" "Please regenerate configuration with preserved credentials"
+                            log "INFO" "💡 Hint: Run setup again and choose to preserve existing configuration"
+                            return 1
+                            ;;
+                        3)
+                            log "WARN" "Force continuing with new credentials"
+                            break
+                            ;;
+                        *)
+                            echo "Invalid choice. Please enter 1-3."
+                            ;;
+                    esac
+                done
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# =============================================================================
+# Enhanced Service Startup Functions
+# =============================================================================
+
+# Enhanced start_services_with_checks to handle existing installations
+start_services_with_checks() {
+    local setup_mode="${1:-false}"
+    
+    log "STEP" "Starting Milou services with pre-flight checks..."
+    
+    # Check SSL certificates
+    local ssl_path
+    ssl_path=$(get_config_value "SSL_CERT_PATH" "./ssl")
+    
+    if [[ -n "$ssl_path" ]]; then
+        log "INFO" "Checking SSL certificates..."
+        if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+            if check_ssl_expiration "$ssl_path"; then
+                log "SUCCESS" "SSL certificates are valid"
+            else
+                log "WARN" "SSL certificate issues detected"
+            fi
+        else
+            log "WARN" "SSL certificates not found at $ssl_path"
+            log "INFO" "💡 Run: $0 ssl --domain YOUR_DOMAIN"
+        fi
+    fi
+    
+    # Ensure networks exist
+    log "INFO" "Creating required network: proxy"
+    ensure_docker_networks
+    
+    # Enhanced existing installation handling with setup mode awareness
+    # First, check if this is a truly fresh installation (no need for conflict checking)
+    local is_fresh_install=false
+    local existing_containers_count=0
+    local existing_volumes_count=0
+    local has_config=false
+    
+    # Count existing containers
+    local all_containers
+    all_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+    if [[ -n "$all_containers" ]]; then
+        existing_containers_count=$(echo "$all_containers" | wc -l)
+    fi
+    
+    # Count existing volumes
+    local existing_volumes
+    existing_volumes=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null || true)
+    if [[ -n "$existing_volumes" ]]; then
+        existing_volumes_count=$(echo "$existing_volumes" | wc -l)
+    fi
+    
+    # Check for configuration
+    if [[ -f "$ENV_FILE" ]]; then
+        has_config=true
+    fi
+    
+    # Determine if this is a fresh install
+    if [[ $existing_containers_count -eq 0 && $existing_volumes_count -eq 0 && "$has_config" == false ]]; then
+        is_fresh_install=true
+        log "DEBUG" "Fresh installation detected - skipping conflict checks"
+    elif [[ "$setup_mode" == "true" && $existing_containers_count -eq 0 ]]; then
+        # Even if we have old config/volumes, if no containers are running during setup, treat as fresh
+        is_fresh_install=true
+        log "DEBUG" "Setup mode with no running containers - treating as fresh install"
+    fi
+    
+    # Skip all conflict checking for fresh installations
+    if [[ "$is_fresh_install" == "true" ]]; then
+        log "DEBUG" "Fresh installation - proceeding directly to service startup"
+    else
+        # Check for running containers that might conflict
+        local running_containers
+        running_containers=$(docker ps --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+        
+        local needs_conflict_handling=false
+        local conflict_reason=""
+        
+        if [[ -n "$running_containers" ]]; then
+            needs_conflict_handling=true
+            conflict_reason="running containers"
+            log "WARN" "Found running Milou containers that may conflict:"
+            while IFS= read -r container; do
+                [[ -n "$container" ]] && log "WARN" "  🐳 $container"
+            done <<< "$running_containers"
+        fi
+        
+        # Check for port conflicts
+        local conflicting_ports=()
+        local -a ports_to_check=("80" "443" "5432" "6379" "5672" "9999")
+        
+        for port in "${ports_to_check[@]}"; do
+            if command -v netstat >/dev/null 2>&1; then
+                local port_in_use
+                port_in_use=$(netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | head -1)
+                if [[ -n "$port_in_use" && ! "$port_in_use" =~ static- ]]; then
+                    conflicting_ports+=("$port ($port_in_use)")
+                fi
+            fi
+        done
+        
+        if [[ ${#conflicting_ports[@]} -gt 0 ]]; then
+            for port_info in "${conflicting_ports[@]}"; do
+                log "WARN" "  ⚠️  Port $port_info is in use by: "
+            done
+        fi
+        
+        # Handle conflicts if needed
+        if [[ "$needs_conflict_handling" == "true" ]]; then
+            local handle_conflict=false
+            
+            if [[ "$FORCE" == true ]]; then
+                log "WARN" "Force mode enabled - stopping existing services first"
+                handle_conflict=true
+            elif [[ "$setup_mode" == "true" ]]; then
+                # During setup, be more permissive about existing installations
+                log "INFO" "Setup mode detected - handling $conflict_reason..."
+                
+                if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                    echo "During setup, we need to handle existing containers."
+                    echo "Options:"
+                    echo "  1. Stop existing containers and proceed (recommended)"
+                    echo "  2. Force restart (stop and remove containers)"
+                    echo "  3. Cancel setup"
+                    echo
+                    
+                    while true; do
+                        read -p "Choose option (1-3): " choice
+                        case "$choice" in
+                            1)
+                                log "INFO" "Stopping existing containers..."
+                                handle_conflict=true
+                                break
+                                ;;
+                            2)
+                                log "INFO" "Force restarting - will remove existing containers..."
+                                export FORCE=true
+                                handle_conflict=true
+                                break
+                                ;;
+                            3)
+                                log "INFO" "Setup cancelled by user"
+                                return 1
+                                ;;
+                            *)
+                                echo "Invalid choice. Please enter 1-3."
+                                ;;
+                        esac
+                    done
+                else
+                    # Non-interactive setup mode
+                    log "INFO" "Non-interactive setup - stopping existing containers"
+                    handle_conflict=true
+                fi
+            else
+                # Normal start operation with conflicts
+                log "ERROR" "Cannot start services due to conflicts"
+                log "INFO" "💡 Solutions:"
+                log "INFO" "  • Use --force flag to stop existing services"
+                log "INFO" "  • Run: $0 stop (to stop Milou services)"
+                log "INFO" "  • Run: $0 restart (to restart services)"
+                return 1
+            fi
+            
+            if [[ "$handle_conflict" == "true" ]]; then
+                if [[ "$FORCE" == true ]]; then
+                    log "INFO" "Force mode - stopping and removing existing containers..."
+                    if ! stop_services; then
+                        log "WARN" "Failed to stop some services, continuing anyway..."
+                    fi
+                else
+                    log "INFO" "Stopping existing containers..."
+                    if ! stop_services; then
+                        log "ERROR" "Failed to stop existing services"
+                        return 1
+                    fi
+                fi
+                
+                # Wait for services to fully stop
+                log "INFO" "Waiting for services to fully stop..."
+                sleep 3
+            fi
+        fi
+        
+        # Handle database migration for existing installations
+        if [[ "$setup_mode" == "true" && "${MILOU_EXISTING_VOLUMES:-false}" == "true" ]]; then
+            if ! handle_database_migration "true"; then
+                log "ERROR" "Database migration failed"
+                if [[ "${FORCE:-false}" != "true" ]]; then
+                    return 1
+                fi
+            fi
         fi
     fi
     

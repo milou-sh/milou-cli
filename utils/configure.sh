@@ -60,412 +60,16 @@ generate_config() {
     local ssl_path=${2:-./ssl}
     local admin_email="${3:-}"
     
-    log "STEP" "Generating secure configuration..."
-    
-    # Validate inputs first
-    if ! validate_config_inputs "$domain" "$ssl_path" "$admin_email"; then
-        error_exit "Configuration input validation failed"
-    fi
-    
-    # Generate secure credentials with enhanced entropy
-    log "DEBUG" "Generating secure credentials with enhanced entropy..."
-    local db_user="milou_$(generate_secure_random 8 "alphanumeric")"
-    local db_password=$(generate_secure_random 32 "safe")
-    local redis_password=$(generate_secure_random 32 "safe")
-    local session_secret=$(generate_secure_random 64 "safe")
-    local encryption_key=$(generate_secure_random 32 "hex")
-    local jwt_secret=$(generate_secure_random 64 "safe")
-    local rabbitmq_user="milou_$(generate_secure_random 6 "alphanumeric")"
-    local rabbitmq_password=$(generate_secure_random 32 "safe")
-    local api_key=$(generate_secure_random 40 "safe")
-    
-    # Determine ports with conflict checking
-    local ssl_port="443"
-    local api_port="9999"
-    local http_port="80"
-    
-    # Check for port conflicts and suggest alternatives
-    if command_exists netstat true && netstat -tlnp 2>/dev/null | grep -q ":443 "; then
-        log "WARN" "Port 443 is already in use, SSL might have conflicts"
-    fi
-    
-    # Set environment based on domain
-    local node_env="production"
-    if [[ "$domain" == "localhost" ]]; then
-        node_env="development"
-    fi
-    
-    # Create comprehensive configuration with enhanced security
-    log "DEBUG" "Creating comprehensive configuration file..."
-    
-    cat > "${SCRIPT_DIR}/.env" << EOF
-# =============================================================================
-# Milou Application Environment Configuration - Enhanced Edition
-# Generated on $(date)
-# CLI Version: ${SCRIPT_VERSION:-3.0.0}
-# Domain: $domain
-# =============================================================================
-
-# =============================================================================
-# METADATA AND VERSIONING
-# =============================================================================
-MILOU_VERSION=${SCRIPT_VERSION:-3.0.0}
-MILOU_GENERATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-MILOU_DOMAIN=$domain
-MILOU_SSL_PATH=$ssl_path
-MILOU_ADMIN_EMAIL=$admin_email
-MILOU_ENVIRONMENT=$node_env
-
-# =============================================================================
-# SERVER CONFIGURATION
-# =============================================================================
-SERVER_NAME=$domain
-CUSTOMER_DOMAIN_NAME=$domain
-DOMAIN=$domain
-SSL_PORT=$ssl_port
-HTTP_PORT=$http_port
-SSL_CERT_PATH=$ssl_path
-CORS_ORIGIN=https://$domain
-NODE_ENV=$node_env
-
-# =============================================================================
-# API CONFIGURATION
-# =============================================================================
-PORT=$api_port
-API_PORT=$api_port
-API_URL=https://$domain/api
-API_BASE_URL=https://$domain/api
-VITE_API_URL=/api
-API_KEY=$api_key
-API_VERSION=v1
-
-# =============================================================================
-# DATABASE CONFIGURATION (PostgreSQL)
-# =============================================================================
-DB_HOST=db
-DB_PORT=5432
-DB_USER=$db_user
-DB_PASSWORD=$db_password
-DB_NAME=milou
-DB_CHARSET=utf8
-DB_COLLATION=utf8_unicode_ci
-DATABASE_URI=postgresql+psycopg2://$db_user:$db_password@db:5432/milou
-DATABASE_URL=postgresql://$db_user:$db_password@db:5432/milou
-
-# PostgreSQL specific settings
-POSTGRES_USER=$db_user
-POSTGRES_PASSWORD=$db_password
-POSTGRES_DB=milou
-POSTGRES_HOST=db
-POSTGRES_PORT=5432
-
-# Connection pool settings
-DB_POOL_SIZE=20
-DB_POOL_MAX_OVERFLOW=30
-DB_POOL_TIMEOUT=30
-DB_POOL_RECYCLE=3600
-
-# =============================================================================
-# REDIS CONFIGURATION
-# =============================================================================
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_PASSWORD=$redis_password
-REDIS_DB=0
-REDIS_SESSION_TTL=3600
-REDIS_MAX_RETRIES=3
-REDIS_CONNECT_TIMEOUT=10000
-REDIS_COMMAND_TIMEOUT=5000
-REDIS_CLEANUP_ENABLED=true
-REDIS_CLEANUP_INTERVAL=3600
-REDIS_URL=redis://:$redis_password@redis:6379/0
-
-# Redis cluster settings (for future scaling)
-REDIS_CLUSTER_ENABLED=false
-REDIS_SENTINEL_ENABLED=false
-
-# =============================================================================
-# RABBITMQ CONFIGURATION
-# =============================================================================
-RABBITMQ_HOST=rabbitmq
-RABBITMQ_PORT=5672
-RABBITMQ_USER=$rabbitmq_user
-RABBITMQ_PASSWORD=$rabbitmq_password
-RABBITMQ_VHOST=/
-RABBITMQ_URL=amqp://$rabbitmq_user:$rabbitmq_password@rabbitmq:5672/
-RABBITMQ_MANAGEMENT_PORT=15672
-
-# Message queue settings
-RABBITMQ_EXCHANGE=milou_exchange
-RABBITMQ_QUEUE_PREFIX=milou_
-RABBITMQ_PREFETCH_COUNT=10
-RABBITMQ_HEARTBEAT=60
-
-# =============================================================================
-# SECURITY CONFIGURATION (Enhanced)
-# =============================================================================
-SESSION_SECRET=$session_secret
-ENCRYPTION_KEY=$encryption_key
-JWT_SECRET=$jwt_secret
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION=24h
-JWT_REFRESH_EXPIRATION=7d
-BCRYPT_ROUNDS=12
-HASH_ALGORITHM=sha256
-
-# API Security
-API_RATE_LIMIT=1000
-API_RATE_WINDOW=3600
-API_MAX_REQUESTS_PER_IP=100
-
-# Password policy
-PASSWORD_MIN_LENGTH=8
-PASSWORD_REQUIRE_UPPERCASE=true
-PASSWORD_REQUIRE_LOWERCASE=true
-PASSWORD_REQUIRE_NUMBERS=true
-PASSWORD_REQUIRE_SYMBOLS=true
-
-# Session security
-SESSION_SECURE_COOKIES=true
-SESSION_HTTP_ONLY=true
-SESSION_SAME_SITE=strict
-SESSION_TIMEOUT=3600
-
-# =============================================================================
-# SSL/TLS CONFIGURATION (Enhanced)
-# =============================================================================
-SSL_ENABLED=true
-SSL_CERT_FILE=$ssl_path/milou.crt
-SSL_KEY_FILE=$ssl_path/milou.key
-SSL_CA_FILE=$ssl_path/ca.crt
-SSL_PROTOCOLS=TLSv1.2,TLSv1.3
-SSL_CIPHERS=ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS
-SSL_PREFER_SERVER_CIPHERS=true
-SSL_STAPLING=true
-SSL_STAPLING_VERIFY=true
-
-# HSTS Configuration
-HSTS_ENABLED=true
-HSTS_MAX_AGE=31536000
-HSTS_INCLUDE_SUBDOMAINS=true
-HSTS_PRELOAD=true
-
-# =============================================================================
-# LOGGING CONFIGURATION (Enhanced)
-# =============================================================================
-LOG_LEVEL=info
-LOG_FORMAT=json
-LOG_FILE=/app/logs/milou.log
-LOG_MAX_SIZE=100MB
-LOG_MAX_FILES=5
-LOG_COMPRESSION=true
-
-# Application logging
-APP_LOG_LEVEL=info
-ACCESS_LOG_ENABLED=true
-ERROR_LOG_ENABLED=true
-DEBUG_LOG_ENABLED=false
-
-# Audit logging
-AUDIT_LOG_ENABLED=true
-AUDIT_LOG_FILE=/app/logs/audit.log
-AUDIT_LOG_RETENTION=90
-
-# =============================================================================
-# PERFORMANCE CONFIGURATION (Enhanced)
-# =============================================================================
-MAX_UPLOAD_SIZE=100MB
-REQUEST_TIMEOUT=30s
-KEEP_ALIVE_TIMEOUT=5s
-WORKER_PROCESSES=auto
-WORKER_CONNECTIONS=1024
-
-# Caching
-CACHE_ENABLED=true
-CACHE_TTL=3600
-CACHE_MAX_SIZE=512MB
-
-# Compression
-COMPRESSION_ENABLED=true
-COMPRESSION_LEVEL=6
-COMPRESSION_MIN_SIZE=1024
-
-# =============================================================================
-# SECURITY HEADERS (Enhanced)
-# =============================================================================
-SECURITY_HEADERS_ENABLED=true
-HSTS_MAX_AGE=31536000
-X_FRAME_OPTIONS=DENY
-X_CONTENT_TYPE_OPTIONS=nosniff
-X_XSS_PROTECTION=1; mode=block
-REFERRER_POLICY=strict-origin-when-cross-origin
-
-# Content Security Policy
-CSP_ENABLED=true
-CSP_DEFAULT_SRC="'self'"
-CSP_SCRIPT_SRC="'self' 'unsafe-inline'"
-CSP_STYLE_SRC="'self' 'unsafe-inline'"
-CSP_IMG_SRC="'self' data: https:"
-CSP_FONT_SRC="'self'"
-CSP_CONNECT_SRC="'self'"
-CSP_FRAME_ANCESTORS="'none'"
-
-# =============================================================================
-# FEATURE FLAGS AND TOGGLES
-# =============================================================================
-ENABLE_ANALYTICS=true
-ENABLE_MONITORING=true
-ENABLE_RATE_LIMITING=true
-ENABLE_COMPRESSION=true
-ENABLE_CACHING=true
-ENABLE_DEBUG_MODE=false
-ENABLE_MAINTENANCE_MODE=false
-
-# API Features
-ENABLE_API_VERSIONING=true
-ENABLE_API_DOCUMENTATION=true
-ENABLE_API_RATE_LIMITING=true
-
-# =============================================================================
-# MONITORING AND HEALTH CHECKS (Enhanced)
-# =============================================================================
-HEALTH_CHECK_INTERVAL=30
-HEALTH_CHECK_TIMEOUT=10
-HEALTH_CHECK_PATH=/health
-METRICS_ENABLED=true
-METRICS_PORT=8080
-METRICS_PATH=/metrics
-
-# Application monitoring
-APM_ENABLED=false
-APM_SERVICE_NAME=milou
-APM_ENVIRONMENT=$node_env
-
-# Alerting
-ALERT_EMAIL_ENABLED=false
-ALERT_EMAIL_RECIPIENTS=$admin_email
-ALERT_WEBHOOK_ENABLED=false
-
-# =============================================================================
-# BACKUP AND MAINTENANCE (Enhanced)
-# =============================================================================
-BACKUP_ENABLED=true
-BACKUP_SCHEDULE="0 2 * * *"
-BACKUP_RETENTION_DAYS=30
-BACKUP_COMPRESSION=true
-BACKUP_ENCRYPTION=true
-
-# Maintenance windows
-MAINTENANCE_WINDOW_START="02:00"
-MAINTENANCE_WINDOW_END="04:00"
-MAINTENANCE_TIMEZONE=UTC
-
-# =============================================================================
-# EXTERNAL INTEGRATIONS
-# =============================================================================
-# Email configuration (if needed)
-SMTP_HOST=localhost
-SMTP_PORT=587
-SMTP_SECURE=true
-SMTP_USER=
-SMTP_PASSWORD=
-EMAIL_FROM=$admin_email
-
-# Storage configuration
-STORAGE_TYPE=local
-STORAGE_PATH=/app/storage
-AWS_S3_BUCKET=
-AWS_S3_REGION=
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-
-# =============================================================================
-# DEVELOPMENT AND DEBUGGING
-# =============================================================================
-DEBUG=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
-VERBOSE_LOGGING=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
-PROFILING_ENABLED=false
-HOT_RELOAD_ENABLED=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
-
-# Testing
-TEST_DATABASE_URL=postgresql://$db_user:$db_password@db:5432/milou_test
-TEST_REDIS_URL=redis://:$redis_password@redis:6379/1
-
-# =============================================================================
-# DOCKER AND CONTAINER SETTINGS
-# =============================================================================
-COMPOSE_PROJECT_NAME=static
-COMPOSE_HTTP_TIMEOUT=120
-DOCKER_BUILDKIT=1
-COMPOSE_DOCKER_CLI_BUILD=1
-
-# Resource limits
-MEMORY_LIMIT=2g
-CPU_LIMIT=2
-SWAP_LIMIT=1g
-
-# =============================================================================
-# TIMEZONE AND LOCALIZATION
-# =============================================================================
-TZ=UTC
-LOCALE=en_US.UTF-8
-LANGUAGE=en_US
-LC_ALL=en_US.UTF-8
-
-# =============================================================================
-# SECURITY WARNING AND INSTRUCTIONS
-# =============================================================================
-# This file contains sensitive information including passwords and secrets.
-# 
-# SECURITY GUIDELINES:
-# • NEVER commit this file to version control!
-# • NEVER share this file via insecure channels!
-# • Store backups in encrypted form only!
-# • Rotate secrets regularly!
-# • Use different secrets for different environments!
-# 
-# File permissions are automatically set to 600 (owner read/write only).
-# =============================================================================
-EOF
-
-    # Set secure file permissions immediately
-    if ! chmod 600 "${SCRIPT_DIR}/.env"; then
-        log "WARN" "Could not set secure permissions on .env file"
+    # Check if this is an existing installation
+    if detect_existing_installation; then
+        # Fresh installation - use new credentials
+        log "DEBUG" "Fresh installation detected - generating new credentials"
+        generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "never"
     else
-        log "DEBUG" "Set secure permissions (600) on .env file"
+        # Existing installation - preserve credentials
+        log "DEBUG" "Existing installation detected - preserving credentials where possible"
+        generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"
     fi
-    
-    # Verify configuration was created successfully
-    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-        local config_size=$(wc -c < "${SCRIPT_DIR}/.env")
-        log "SUCCESS" "Configuration generated successfully (${config_size} bytes)"
-        log "INFO" "Configuration saved to: ${SCRIPT_DIR}/.env"
-        log "INFO" "${LOCK_EMOJI} File permissions set to 600 (secure)"
-        
-        # Create a backup of the configuration
-        if ! mkdir -p "${CONFIG_DIR}/backups"; then
-            log "WARN" "Could not create backup directory"
-        else
-            local backup_file="${CONFIG_DIR}/backups/env_$(date +%Y%m%d%H%M%S).backup"
-            if cp "${SCRIPT_DIR}/.env" "$backup_file" 2>/dev/null; then
-                chmod 600 "$backup_file" 2>/dev/null
-                log "DEBUG" "Configuration backup created: $backup_file"
-            else
-                log "WARN" "Could not create configuration backup"
-            fi
-        fi
-        
-        # Validate the generated configuration
-        if validate_config; then
-            log "SUCCESS" "Generated configuration passed validation"
-        else
-            log "WARN" "Generated configuration has validation warnings"
-        fi
-    else
-        error_exit "Failed to create configuration file"
-    fi
-    
-    return 0
 }
 
 # =============================================================================
@@ -1010,4 +614,617 @@ migrate_config() {
 # Enhanced validate_configuration function for backward compatibility
 validate_configuration() {
     validate_config
+}
+
+# =============================================================================
+# Configuration Preservation and Migration Functions
+# =============================================================================
+
+# Detect existing Milou installation and configuration
+detect_existing_installation() {
+    local env_file="${SCRIPT_DIR}/.env"
+    local has_config=false
+    local has_containers=false
+    local has_volumes=false
+    local config_age_days=0
+    
+    # Check for configuration file
+    if [[ -f "$env_file" ]]; then
+        has_config=true
+        # Calculate age in days
+        if command -v stat >/dev/null 2>&1; then
+            local file_modified
+            file_modified=$(stat -c %Y "$env_file" 2>/dev/null || stat -f %m "$env_file" 2>/dev/null || echo "0")
+            local current_time=$(date +%s)
+            config_age_days=$(( (current_time - file_modified) / 86400 ))
+        fi
+    fi
+    
+    # Check for existing containers
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local container_count
+        container_count=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
+        if [[ $container_count -gt 0 ]]; then
+            has_containers=true
+        fi
+        
+        # Check for existing volumes
+        local volume_count
+        volume_count=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null | wc -l || echo "0")
+        if [[ $volume_count -gt 0 ]]; then
+            has_volumes=true
+        fi
+    fi
+    
+    # Set global detection results
+    export MILOU_EXISTING_CONFIG="$has_config"
+    export MILOU_EXISTING_CONTAINERS="$has_containers"
+    export MILOU_EXISTING_VOLUMES="$has_volumes"
+    export MILOU_CONFIG_AGE_DAYS="$config_age_days"
+    
+    # Return codes: 0 = fresh install, 1 = existing installation
+    if [[ "$has_config" == "true" || "$has_containers" == "true" || "$has_volumes" == "true" ]]; then
+        return 1  # Existing installation detected
+    else
+        return 0  # Fresh installation
+    fi
+}
+
+# Show existing installation summary
+show_existing_installation_summary() {
+    local env_file="${SCRIPT_DIR}/.env"
+    
+    echo
+    log "INFO" "📋 Existing Installation Summary:"
+    
+    if [[ "${MILOU_EXISTING_CONFIG:-false}" == "true" ]]; then
+        log "INFO" "  • Configuration file: Found (${MILOU_CONFIG_AGE_DAYS:-0} days old)"
+        
+        # Show key configuration details
+        if [[ -f "$env_file" ]]; then
+            local domain ssl_path
+            domain=$(get_config_value "SERVER_NAME" "unknown")
+            ssl_path=$(get_config_value "SSL_CERT_PATH" "unknown")
+            log "INFO" "    - Domain: $domain"
+            log "INFO" "    - SSL Path: $ssl_path"
+        fi
+    else
+        log "INFO" "  • Configuration file: Not found"
+    fi
+    
+    if [[ "${MILOU_EXISTING_CONTAINERS:-false}" == "true" ]]; then
+        log "INFO" "  • Docker containers: Found"
+        # Show running containers
+        if command -v docker >/dev/null 2>&1; then
+            local running_containers
+            running_containers=$(docker ps --filter "name=static-" --format "{{.Names}} ({{.Status}})" 2>/dev/null || echo "")
+            if [[ -n "$running_containers" ]]; then
+                log "INFO" "    Running services:"
+                while IFS= read -r container; do
+                    [[ -n "$container" ]] && log "INFO" "      🐳 $container"
+                done <<< "$running_containers"
+            fi
+        fi
+    else
+        log "INFO" "  • Docker containers: None found"
+    fi
+    
+    if [[ "${MILOU_EXISTING_VOLUMES:-false}" == "true" ]]; then
+        log "INFO" "  • Data volumes: Found"
+        if command -v docker >/dev/null 2>&1; then
+            local volumes
+            volumes=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null || echo "")
+            if [[ -n "$volumes" ]]; then
+                log "INFO" "    Data volumes:"
+                while IFS= read -r volume; do
+                    [[ -n "$volume" ]] && log "INFO" "      💾 $volume"
+                done <<< "$volumes"
+            fi
+        fi
+    else
+        log "INFO" "  • Data volumes: None found"
+    fi
+    
+    echo
+}
+
+# Preserve existing database credentials from current configuration
+preserve_database_credentials() {
+    local env_file="${SCRIPT_DIR}/.env"
+    local preserved_vars=()
+    
+    if [[ ! -f "$env_file" ]]; then
+        log "DEBUG" "No existing configuration to preserve"
+        return 1
+    fi
+    
+    log "DEBUG" "Preserving database credentials from existing configuration..."
+    
+    # Database credentials to preserve
+    local -a db_vars=(
+        "DB_USER"
+        "DB_PASSWORD" 
+        "POSTGRES_USER"
+        "POSTGRES_PASSWORD"
+        "DATABASE_URI"
+        "DATABASE_URL"
+    )
+    
+    # Redis credentials
+    local -a redis_vars=(
+        "REDIS_PASSWORD"
+        "REDIS_URL"
+    )
+    
+    # RabbitMQ credentials  
+    local -a rabbitmq_vars=(
+        "RABBITMQ_USER"
+        "RABBITMQ_PASSWORD"
+        "RABBITMQ_URL"
+    )
+    
+    # Security keys and secrets
+    local -a security_vars=(
+        "SESSION_SECRET"
+        "ENCRYPTION_KEY"
+        "JWT_SECRET"
+        "API_KEY"
+    )
+    
+    # Store all preserved variables in global associative array
+    declare -gA PRESERVED_CONFIG=()
+    
+    for var in "${db_vars[@]}" "${redis_vars[@]}" "${rabbitmq_vars[@]}" "${security_vars[@]}"; do
+        local value
+        value=$(get_config_value "$var" "")
+        if [[ -n "$value" ]]; then
+            PRESERVED_CONFIG["$var"]="$value"
+            preserved_vars+=("$var")
+            log "DEBUG" "Preserved $var"
+        fi
+    done
+    
+    if [[ ${#preserved_vars[@]} -gt 0 ]]; then
+        log "SUCCESS" "Preserved ${#preserved_vars[@]} configuration values"
+        log "DEBUG" "Preserved variables: ${preserved_vars[*]}"
+        return 0
+    else
+        log "WARN" "No configuration values found to preserve"
+        return 1
+    fi
+}
+
+# Generate configuration with preserved credentials
+generate_config_with_preservation() {
+    local domain=${1:-localhost}
+    local ssl_path=${2:-./ssl}
+    local admin_email="${3:-}"
+    local preserve_mode="${4:-auto}"  # auto, force, never
+    
+    log "STEP" "Generating configuration with credential preservation..."
+    
+    # First try to preserve existing credentials
+    local has_preserved=false
+    if [[ "$preserve_mode" == "auto" || "$preserve_mode" == "force" ]]; then
+        if preserve_database_credentials; then
+            has_preserved=true
+            log "INFO" "✅ Existing credentials preserved"
+        elif [[ "$preserve_mode" == "force" ]]; then
+            log "ERROR" "Failed to preserve credentials in force mode"
+            return 1
+        fi
+    fi
+    
+    # Validate inputs first
+    if ! validate_config_inputs "$domain" "$ssl_path" "$admin_email"; then
+        error_exit "Configuration input validation failed"
+    fi
+    
+    # Generate new credentials only for missing ones
+    log "DEBUG" "Generating secure credentials (preserving existing when available)..."
+    
+    local db_user db_password redis_password session_secret encryption_key
+    local jwt_secret rabbitmq_user rabbitmq_password api_key
+    
+    if [[ "$has_preserved" == "true" ]]; then
+        # Use preserved values or generate new ones
+        db_user="${PRESERVED_CONFIG[DB_USER]:-milou_$(generate_secure_random 8 "alphanumeric")}"
+        db_password="${PRESERVED_CONFIG[DB_PASSWORD]:-$(generate_secure_random 32 "safe")}"
+        redis_password="${PRESERVED_CONFIG[REDIS_PASSWORD]:-$(generate_secure_random 32 "safe")}"
+        session_secret="${PRESERVED_CONFIG[SESSION_SECRET]:-$(generate_secure_random 64 "safe")}"
+        encryption_key="${PRESERVED_CONFIG[ENCRYPTION_KEY]:-$(generate_secure_random 32 "hex")}"
+        jwt_secret="${PRESERVED_CONFIG[JWT_SECRET]:-$(generate_secure_random 64 "safe")}"
+        rabbitmq_user="${PRESERVED_CONFIG[RABBITMQ_USER]:-milou_$(generate_secure_random 6 "alphanumeric")}"
+        rabbitmq_password="${PRESERVED_CONFIG[RABBITMQ_PASSWORD]:-$(generate_secure_random 32 "safe")}"
+        api_key="${PRESERVED_CONFIG[API_KEY]:-$(generate_secure_random 40 "safe")}"
+        
+        log "INFO" "🔄 Using preserved database user: $db_user"
+        log "INFO" "🔄 Using preserved RabbitMQ user: $rabbitmq_user"
+        log "DEBUG" "Preserved secrets will maintain compatibility with existing data"
+    else
+        # Generate all new credentials
+        db_user="milou_$(generate_secure_random 8 "alphanumeric")"
+        db_password=$(generate_secure_random 32 "safe")
+        redis_password=$(generate_secure_random 32 "safe")
+        session_secret=$(generate_secure_random 64 "safe")
+        encryption_key=$(generate_secure_random 32 "hex")
+        jwt_secret=$(generate_secure_random 64 "safe")
+        rabbitmq_user="milou_$(generate_secure_random 6 "alphanumeric")"
+        rabbitmq_password=$(generate_secure_random 32 "safe")
+        api_key=$(generate_secure_random 40 "safe")
+        
+        log "INFO" "🆕 Generated new database user: $db_user"
+        log "INFO" "🆕 Generated new RabbitMQ user: $rabbitmq_user"
+    fi
+    
+    # Continue with rest of the existing generate_config function...
+    # [The rest remains the same as the original generate_config function]
+    
+    # Determine ports with conflict checking
+    local ssl_port="443"
+    local api_port="9999"
+    local http_port="80"
+    
+    # Check for port conflicts and suggest alternatives
+    if command_exists netstat true && netstat -tlnp 2>/dev/null | grep -q ":443 "; then
+        log "WARN" "Port 443 is already in use, SSL might have conflicts"
+    fi
+    
+    # Set environment based on domain
+    local node_env="production"
+    if [[ "$domain" == "localhost" ]]; then
+        node_env="development"
+    fi
+    
+    # Create comprehensive configuration with enhanced security
+    log "DEBUG" "Creating comprehensive configuration file..."
+    
+    cat > "${SCRIPT_DIR}/.env" << EOF
+# =============================================================================
+# Milou Application Environment Configuration - Enhanced Edition
+# Generated on $(date)
+# CLI Version: ${SCRIPT_VERSION:-3.0.0}
+# Domain: $domain
+# Preservation Mode: $preserve_mode
+# =============================================================================
+
+# =============================================================================
+# METADATA AND VERSIONING
+# =============================================================================
+MILOU_VERSION=${SCRIPT_VERSION:-3.0.0}
+MILOU_GENERATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MILOU_DOMAIN=$domain
+MILOU_SSL_PATH=$ssl_path
+MILOU_ADMIN_EMAIL=$admin_email
+MILOU_ENVIRONMENT=$node_env
+MILOU_PRESERVE_MODE=$preserve_mode
+MILOU_PRESERVED_CREDENTIALS=$has_preserved
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+SERVER_NAME=$domain
+CUSTOMER_DOMAIN_NAME=$domain
+DOMAIN=$domain
+SSL_PORT=$ssl_port
+HTTP_PORT=$http_port
+SSL_CERT_PATH=$ssl_path
+CORS_ORIGIN=https://$domain
+NODE_ENV=$node_env
+
+# =============================================================================
+# API CONFIGURATION
+# =============================================================================
+PORT=$api_port
+API_PORT=$api_port
+API_URL=https://$domain/api
+API_BASE_URL=https://$domain/api
+VITE_API_URL=/api
+API_KEY=$api_key
+API_VERSION=v1
+
+# =============================================================================
+# DATABASE CONFIGURATION (PostgreSQL)
+# =============================================================================
+DB_HOST=db
+DB_PORT=5432
+DB_USER=$db_user
+DB_PASSWORD=$db_password
+DB_NAME=milou
+DB_CHARSET=utf8
+DB_COLLATION=utf8_unicode_ci
+DATABASE_URI=postgresql+psycopg2://$db_user:$db_password@db:5432/milou
+DATABASE_URL=postgresql://$db_user:$db_password@db:5432/milou
+
+# PostgreSQL specific settings
+POSTGRES_USER=$db_user
+POSTGRES_PASSWORD=$db_password
+POSTGRES_DB=milou
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+# Connection pool settings
+DB_POOL_SIZE=20
+DB_POOL_MAX_OVERFLOW=30
+DB_POOL_TIMEOUT=30
+DB_POOL_RECYCLE=3600
+
+# =============================================================================
+# REDIS CONFIGURATION
+# =============================================================================
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=$redis_password
+REDIS_DB=0
+REDIS_SESSION_TTL=3600
+REDIS_MAX_RETRIES=3
+REDIS_CONNECT_TIMEOUT=10000
+REDIS_COMMAND_TIMEOUT=5000
+REDIS_CLEANUP_ENABLED=true
+REDIS_CLEANUP_INTERVAL=3600
+REDIS_URL=redis://:$redis_password@redis:6379/0
+
+# Redis cluster settings (for future scaling)
+REDIS_CLUSTER_ENABLED=false
+REDIS_SENTINEL_ENABLED=false
+
+# =============================================================================
+# RABBITMQ CONFIGURATION
+# =============================================================================
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_USER=$rabbitmq_user
+RABBITMQ_PASSWORD=$rabbitmq_password
+RABBITMQ_VHOST=/
+RABBITMQ_URL=amqp://$rabbitmq_user:$rabbitmq_password@rabbitmq:5672/
+RABBITMQ_MANAGEMENT_PORT=15672
+
+# Message queue settings
+RABBITMQ_EXCHANGE=milou_exchange
+RABBITMQ_QUEUE_PREFIX=milou_
+RABBITMQ_PREFETCH_COUNT=10
+RABBITMQ_HEARTBEAT=60
+
+# =============================================================================
+# SECURITY CONFIGURATION (Enhanced)
+# =============================================================================
+SESSION_SECRET=$session_secret
+ENCRYPTION_KEY=$encryption_key
+JWT_SECRET=$jwt_secret
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION=24h
+JWT_REFRESH_EXPIRATION=7d
+BCRYPT_ROUNDS=12
+HASH_ALGORITHM=sha256
+
+# API Security
+API_RATE_LIMIT=1000
+API_RATE_WINDOW=3600
+API_MAX_REQUESTS_PER_IP=100
+
+# Password policy
+PASSWORD_MIN_LENGTH=8
+PASSWORD_REQUIRE_UPPERCASE=true
+PASSWORD_REQUIRE_LOWERCASE=true
+PASSWORD_REQUIRE_NUMBERS=true
+PASSWORD_REQUIRE_SYMBOLS=true
+
+# Session security
+SESSION_SECURE_COOKIES=true
+SESSION_HTTP_ONLY=true
+SESSION_SAME_SITE=strict
+SESSION_TIMEOUT=3600
+
+# =============================================================================
+# SSL/TLS CONFIGURATION (Enhanced)
+# =============================================================================
+SSL_ENABLED=true
+SSL_CERT_FILE=milou.crt
+SSL_KEY_FILE=milou.key
+SSL_PROTOCOLS=TLSv1.2,TLSv1.3
+SSL_CIPHERS=ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS
+SSL_PREFER_SERVER_CIPHERS=on
+SSL_SESSION_CACHE=shared:SSL:10m
+SSL_SESSION_TIMEOUT=10m
+
+# HSTS (HTTP Strict Transport Security)
+HSTS_ENABLED=true
+HSTS_MAX_AGE=31536000
+HSTS_INCLUDE_SUBDOMAINS=true
+HSTS_PRELOAD=true
+
+# =============================================================================
+# LOGGING CONFIGURATION (Enhanced)
+# =============================================================================
+LOG_LEVEL=info
+LOG_FORMAT=combined
+LOG_TO_FILE=true
+LOG_TO_CONSOLE=true
+LOG_ROTATION=daily
+LOG_MAX_SIZE=100MB
+LOG_MAX_FILES=30
+
+# Component-specific logging
+BACKEND_LOG_LEVEL=info
+FRONTEND_LOG_LEVEL=warn
+ENGINE_LOG_LEVEL=info
+NGINX_LOG_LEVEL=warn
+
+# Debug logging (for development)
+DEBUG_SQL_QUERIES=false
+DEBUG_HTTP_REQUESTS=false
+DEBUG_WEBSOCKETS=false
+
+# =============================================================================
+# SECURITY HEADERS AND CSP
+# =============================================================================
+CSP_ENABLED=true
+CSP_DEFAULT_SRC="'self'"
+CSP_SCRIPT_SRC="'self' 'unsafe-inline' 'unsafe-eval'"
+CSP_STYLE_SRC="'self' 'unsafe-inline'"
+CSP_IMG_SRC="'self' data: https:"
+CSP_FONT_SRC="'self'"
+CSP_CONNECT_SRC="'self'"
+CSP_FRAME_ANCESTORS="'none'"
+
+# =============================================================================
+# FEATURE FLAGS AND TOGGLES
+# =============================================================================
+ENABLE_ANALYTICS=true
+ENABLE_MONITORING=true
+ENABLE_RATE_LIMITING=true
+ENABLE_COMPRESSION=true
+ENABLE_CACHING=true
+ENABLE_DEBUG_MODE=false
+ENABLE_MAINTENANCE_MODE=false
+
+# API Features
+ENABLE_API_VERSIONING=true
+ENABLE_API_DOCUMENTATION=true
+ENABLE_API_RATE_LIMITING=true
+
+# =============================================================================
+# MONITORING AND HEALTH CHECKS (Enhanced)
+# =============================================================================
+HEALTH_CHECK_INTERVAL=30
+HEALTH_CHECK_TIMEOUT=10
+HEALTH_CHECK_PATH=/health
+METRICS_ENABLED=true
+METRICS_PORT=8080
+METRICS_PATH=/metrics
+
+# Application monitoring
+APM_ENABLED=false
+APM_SERVICE_NAME=milou
+APM_ENVIRONMENT=$node_env
+
+# Alerting
+ALERT_EMAIL_ENABLED=false
+ALERT_EMAIL_RECIPIENTS=$admin_email
+ALERT_WEBHOOK_ENABLED=false
+
+# =============================================================================
+# BACKUP AND MAINTENANCE (Enhanced)
+# =============================================================================
+BACKUP_ENABLED=true
+BACKUP_SCHEDULE="0 2 * * *"
+BACKUP_RETENTION_DAYS=30
+BACKUP_COMPRESSION=true
+BACKUP_ENCRYPTION=true
+
+# Maintenance windows
+MAINTENANCE_WINDOW_START="02:00"
+MAINTENANCE_WINDOW_END="04:00"
+MAINTENANCE_TIMEZONE=UTC
+
+# =============================================================================
+# EXTERNAL INTEGRATIONS
+# =============================================================================
+# Email configuration (if needed)
+SMTP_HOST=localhost
+SMTP_PORT=587
+SMTP_SECURE=true
+SMTP_USER=
+SMTP_PASSWORD=
+EMAIL_FROM=$admin_email
+
+# Storage configuration
+STORAGE_TYPE=local
+STORAGE_PATH=/app/storage
+AWS_S3_BUCKET=
+AWS_S3_REGION=
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+
+# =============================================================================
+# DEVELOPMENT AND DEBUGGING
+# =============================================================================
+DEBUG=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
+VERBOSE_LOGGING=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
+PROFILING_ENABLED=false
+HOT_RELOAD_ENABLED=$([[ "$node_env" == "development" ]] && echo "true" || echo "false")
+
+# Testing
+TEST_DATABASE_URL=postgresql://$db_user:$db_password@db:5432/milou_test
+TEST_REDIS_URL=redis://:$redis_password@redis:6379/1
+
+# =============================================================================
+# DOCKER AND CONTAINER SETTINGS
+# =============================================================================
+COMPOSE_PROJECT_NAME=static
+COMPOSE_HTTP_TIMEOUT=120
+DOCKER_BUILDKIT=1
+COMPOSE_DOCKER_CLI_BUILD=1
+
+# Resource limits
+MEMORY_LIMIT=2g
+CPU_LIMIT=2
+SWAP_LIMIT=1g
+
+# =============================================================================
+# TIMEZONE AND LOCALIZATION
+# =============================================================================
+TZ=UTC
+LOCALE=en_US.UTF-8
+LANGUAGE=en_US
+LC_ALL=en_US.UTF-8
+
+# =============================================================================
+# SECURITY WARNING AND INSTRUCTIONS
+# =============================================================================
+# This file contains sensitive information including passwords and secrets.
+# 
+# SECURITY GUIDELINES:
+# • NEVER commit this file to version control!
+# • NEVER share this file via insecure channels!
+# • Store backups in encrypted form only!
+# • Rotate secrets regularly!
+# • Use different secrets for different environments!
+# 
+# File permissions are automatically set to 600 (owner read/write only).
+# =============================================================================
+EOF
+
+    # Set secure file permissions immediately
+    if ! chmod 600 "${SCRIPT_DIR}/.env"; then
+        log "WARN" "Could not set secure permissions on .env file"
+    else
+        log "DEBUG" "Set secure permissions (600) on .env file"
+    fi
+    
+    # Verify configuration was created successfully
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        local config_size=$(wc -c < "${SCRIPT_DIR}/.env")
+        log "SUCCESS" "Configuration generated successfully (${config_size} bytes)"
+        log "INFO" "Configuration saved to: ${SCRIPT_DIR}/.env"
+        log "INFO" "${LOCK_EMOJI} File permissions set to 600 (secure)"
+        
+        if [[ "$has_preserved" == "true" ]]; then
+            log "SUCCESS" "✅ Preserved existing credentials for seamless upgrade"
+        fi
+        
+        # Create a backup of the configuration
+        if ! mkdir -p "${CONFIG_DIR}/backups"; then
+            log "WARN" "Could not create backup directory"
+        else
+            local backup_file="${CONFIG_DIR}/backups/env_$(date +%Y%m%d%H%M%S).backup"
+            if cp "${SCRIPT_DIR}/.env" "$backup_file" 2>/dev/null; then
+                chmod 600 "$backup_file" 2>/dev/null
+                log "DEBUG" "Configuration backup created: $backup_file"
+            else
+                log "WARN" "Could not create configuration backup"
+            fi
+        fi
+        
+        # Validate the generated configuration
+        if validate_config; then
+            log "SUCCESS" "Generated configuration passed validation"
+        else
+            log "WARN" "Generated configuration has validation warnings"
+        fi
+    else
+        error_exit "Failed to create configuration file"
+    fi
+    
+    return 0
 }

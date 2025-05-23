@@ -310,7 +310,7 @@ validate_images_exist() {
 # Image Pulling Functions
 # =============================================================================
 
-# Enhanced Docker image pulling (SIMPLIFIED VERSION)
+# Enhanced Docker image pulling with progress feedback
 pull_images() {
     local token="$1"
     local use_latest="${2:-false}"
@@ -345,48 +345,113 @@ pull_images() {
         tag="v1.0.0"
     fi
     
-    # Pull all images using the known working pattern
+    echo
+    log "INFO" "📥 Starting Docker image downloads..."
+    echo
+    
+    # Pull all images with real-time progress feedback
     for image_key in "${!image_configs[@]}"; do
         ((current++))
         local image_name="${image_configs[$image_key]}"
         local image_url="ghcr.io/milou-sh/milou/$image_name:$tag"
         
-        log "INFO" "[$current/$total_images] Pulling $image_name:$tag..."
+        echo -e "${BOLD}${BLUE}📦 [$current/$total_images] Pulling $image_name:$tag${NC}"
+        echo -e "${DIM}Image: $image_url${NC}"
+        echo
         
-        # Simple pull - no complex fallbacks needed since we know the pattern works
+        # Pull with progress - using docker pull with --progress=plain for better visibility
         local pull_output
-        if pull_output=$(docker pull "$image_url" 2>&1); then
-            log "SUCCESS" "✅ Successfully pulled: $image_url"
+        local pull_exit_code
+        
+        # For interactive terminals, show real-time progress
+        if [[ -t 1 && "${VERBOSE:-false}" != "true" ]]; then
+            # Interactive mode with live progress
+            if docker pull --progress=plain "$image_url" 2>&1 | while IFS= read -r line; do
+                # Filter and format progress output for better readability
+                if [[ "$line" =~ ^#[0-9]+ ]]; then
+                    # Layer progress lines - show simplified version
+                    local layer_info=$(echo "$line" | sed -E 's/^#[0-9]+ //' | cut -d' ' -f1-2)
+                    if [[ "$layer_info" =~ (Downloading|Extracting|Pull complete) ]]; then
+                        echo -e "\r${DIM}  └─ $layer_info...${NC}" | head -c 80
+                    fi
+                elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
+                    echo -e "\r${DIM}  └─ $line${NC}" | head -c 80
+                fi
+            done; then
+                pull_exit_code=0
+            else
+                pull_exit_code=$?
+            fi
+            echo # New line after progress
+        else
+            # Non-interactive mode or verbose mode - capture output
+            pull_output=$(docker pull "$image_url" 2>&1)
+            pull_exit_code=$?
+            
+            if [[ "${VERBOSE:-false}" == "true" ]]; then
+                echo "$pull_output"
+            else
+                # Show simplified progress for non-interactive
+                echo "$pull_output" | grep -E "(Pulling|Download|Pull complete|Already exists)" | while read -r line; do
+                    echo -e "${DIM}  └─ $line${NC}"
+                done
+            fi
+        fi
+        
+        if [[ $pull_exit_code -eq 0 ]]; then
+            echo -e "${GREEN}  ✅ Successfully pulled: $image_name:$tag${NC}"
             successful_images+=("$image_url")
         else
-            log "ERROR" "❌ Failed to pull: $image_url"
+            echo -e "${RED}  ❌ Failed to pull: $image_name:$tag${NC}"
             pull_errors["$image_name"]="$pull_output"
             failed_images+=("$image_name:$tag")
-            log "DEBUG" "Error details: $pull_output"
+            if [[ "${VERBOSE:-false}" == "true" ]]; then
+                log "DEBUG" "Error details: $pull_output"
+            fi
         fi
+        
+        echo # Spacing between images
     done
     
-    # Simple reporting
+    # Summary reporting
     echo
-    log "INFO" "Image Pull Summary:"
-    log "INFO" "  Successful: ${#successful_images[@]}/$total_images"
-    log "INFO" "  Failed: ${#failed_images[@]}/$total_images"
+    echo -e "${BOLD}📊 Image Pull Summary:${NC}"
+    echo -e "  ${GREEN}✅ Successful: ${#successful_images[@]}/$total_images${NC}"
+    echo -e "  ${RED}❌ Failed: ${#failed_images[@]}/$total_images${NC}"
+    echo
     
     if [[ ${#successful_images[@]} -gt 0 ]]; then
-        log "INFO" "Successfully pulled images:"
+        echo -e "${BOLD}${GREEN}Successfully pulled images:${NC}"
         for img in "${successful_images[@]}"; do
             echo "  ✅ $img"
         done
+        echo
     fi
     
     if [[ ${#failed_images[@]} -gt 0 ]]; then
-        log "WARN" "Failed to pull images:"
+        echo -e "${BOLD}${RED}Failed to pull images:${NC}"
         for img in "${failed_images[@]}"; do
             echo "  ❌ $img"
         done
+        echo
+        
+        # Show detailed errors if verbose mode
+        if [[ "${VERBOSE:-false}" == "true" ]]; then
+            echo -e "${BOLD}${RED}Error Details:${NC}"
+            for image_name in "${!pull_errors[@]}"; do
+                echo -e "${BOLD}$image_name:${NC}"
+                echo "${pull_errors[$image_name]}" | sed 's/^/  /'
+                echo
+            done
+        else
+            echo -e "${DIM}💡 Run with --verbose to see detailed error information${NC}"
+            echo
+        fi
+        
         return 1
     else
-        log "SUCCESS" "All Docker images pulled successfully!"
+        echo -e "${BOLD}${GREEN}🎉 All Docker images pulled successfully!${NC}"
+        echo
         return 0
     fi
 }

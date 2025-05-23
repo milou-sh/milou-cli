@@ -683,7 +683,7 @@ handle_non_interactive_setup() {
     
     # Enhanced service startup
     log "STEP" "Starting services..."
-    if start_services_with_checks; then
+    if start_services_with_checks "true"; then
         log "SUCCESS" "${ROCKET_EMOJI} Non-interactive setup complete!"
         log "INFO" "🌐 Access your instance at: https://$domain"
         if [[ "$domain" == "localhost" ]]; then

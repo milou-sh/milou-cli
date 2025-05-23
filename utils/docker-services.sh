@@ -140,6 +140,31 @@ show_service_status() {
     fi
 }
 
+# Check if services are currently running
+check_services_running() {
+    local compose_file="static/docker-compose.yml"
+    
+    cd "$SCRIPT_DIR" || {
+        log "ERROR" "Cannot change to script directory"
+        return 1
+    }
+    
+    if [[ ! -f "$compose_file" ]]; then
+        log "DEBUG" "Docker Compose file not found: $compose_file"
+        return 1
+    fi
+    
+    # Check if any containers are running
+    local running_containers
+    running_containers=$(docker compose -f "$compose_file" ps --services --filter "status=running" 2>/dev/null | wc -l)
+    
+    if [[ "$running_containers" -gt 0 ]]; then
+        return 0  # Services are running
+    else
+        return 1  # No services running
+    fi
+}
+
 # Check the status of all services
 check_service_status() {
     log "INFO" "Service Status:"
@@ -360,6 +385,8 @@ ensure_docker_networks() {
 
 # Enhanced service startup with pre-flight checks
 start_services_with_checks() {
+    local setup_mode="${1:-false}"  # New parameter to indicate if called from setup
+    
     log "STEP" "Starting Milou services with pre-flight checks..."
     
     # Check if configuration exists first
@@ -412,21 +439,105 @@ start_services_with_checks() {
     fi
     
     # Ensure networks exist
+    log "INFO" "Creating required network: proxy"
     ensure_docker_networks
     
-    # Check for existing installation and handle conflicts
+    # Enhanced existing installation handling with setup mode awareness
     if ! check_existing_installation >/dev/null 2>&1; then
         # Existing installation found
+        local handle_conflict=false
+        
         if [[ "$FORCE" == true ]]; then
             log "WARN" "Force mode enabled - stopping existing services first"
-            stop_services || true  # Don't fail if stop fails
+            handle_conflict=true
+        elif [[ "$setup_mode" == "true" ]]; then
+            # During setup, be more permissive about existing installations
+            log "INFO" "Setup mode detected - checking for actual conflicts..."
+            
+            # Check if services are actually running and conflicting
+            local running_containers
+            running_containers=$(docker ps --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+            
+            if [[ -n "$running_containers" ]]; then
+                log "WARN" "Found running containers that may conflict:"
+                echo "$running_containers" | sed 's/^/  🐳 /'
+                echo
+                
+                if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                    echo "During setup, we need to handle existing containers."
+                    echo "Options:"
+                    echo "  1. Stop existing containers and proceed (recommended)"
+                    echo "  2. Force restart (stop and remove containers)"
+                    echo "  3. Cancel setup"
+                    echo
+                    
+                    while true; do
+                        echo -ne "${CYAN}Choose option (1-3): ${NC}"
+                        read -r choice
+                        case "$choice" in
+                            1)
+                                log "INFO" "Stopping existing containers..."
+                                handle_conflict=true
+                                break
+                                ;;
+                            2)
+                                log "INFO" "Force restarting - will remove existing containers..."
+                                handle_conflict=true
+                                FORCE=true
+                                export FORCE
+                                break
+                                ;;
+                            3)
+                                log "INFO" "Setup cancelled by user"
+                                return 1
+                                ;;
+                            *)
+                                echo "Invalid choice. Please enter 1, 2, or 3."
+                                ;;
+                        esac
+                    done
+                else
+                    # Non-interactive setup mode - auto-handle conflicts
+                    log "INFO" "Non-interactive setup mode - automatically stopping existing containers"
+                    handle_conflict=true
+                fi
+            else
+                # No running containers - just old artifacts, safe to proceed
+                log "INFO" "Found old installation artifacts but no running services - proceeding..."
+                handle_conflict=false
+            fi
         else
+            # Normal start command - be more strict
             log "WARN" "Existing installation detected. Use --force to override or stop services manually."
             log "INFO" "Available options:"
             log "INFO" "  • Run with --force to automatically stop conflicting services"
             log "INFO" "  • Run '$0 stop' to stop current services first"
             log "INFO" "  • Run '$0 cleanup --complete' to remove everything and start fresh"
             return 1
+        fi
+        
+        # Handle the conflict if needed
+        if [[ "$handle_conflict" == "true" ]]; then
+            if [[ "$FORCE" == "true" ]]; then
+                log "INFO" "Force mode - stopping and removing existing containers..."
+                stop_services || true
+                # Also remove containers to ensure clean state
+                local existing_containers
+                existing_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+                if [[ -n "$existing_containers" ]]; then
+                    echo "$existing_containers" | xargs docker rm -f 2>/dev/null || true
+                    log "INFO" "Removed existing containers for clean restart"
+                fi
+            else
+                log "INFO" "Stopping existing services gracefully..."
+                if ! stop_services; then
+                    log "WARN" "Failed to stop some services, but continuing anyway..."
+                fi
+            fi
+            
+            # Brief pause to let services fully stop
+            log "INFO" "Waiting for services to fully stop..."
+            sleep 3
         fi
     fi
     

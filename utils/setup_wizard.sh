@@ -519,7 +519,7 @@ interactive_setup_wizard() {
     echo -e "${BOLD}Step 11: Start Services${NC}"
     if confirm "Start services now?" "Y"; then
         show_progress "Starting services" 2
-        if start_services_with_checks; then
+        if start_services_with_checks "true"; then
             echo
             log "SUCCESS" "${ROCKET_EMOJI} Setup complete! Milou is now running."
             log "INFO" "Access your instance at: https://$domain"

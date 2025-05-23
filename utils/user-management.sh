@@ -154,13 +154,17 @@ setup_milou_user_environment() {
         chown "$MILOU_USER:$MILOU_GROUP" "$milou_home"
     fi
     
-    # Create necessary directories
+    log "DEBUG" "Setting up environment for $MILOU_USER in $milou_home"
+    
+    # Create necessary directories with proper structure
     local -a dirs=(
         "$milou_home/.milou"
         "$milou_home/.milou/backups"
         "$milou_home/.milou/cache"
         "$milou_home/.milou/logs"
         "$milou_home/.milou/ssl"
+        "$milou_home/.milou/config"
+        "$milou_home/bin"
     )
     
     for dir in "${dirs[@]}"; do
@@ -168,48 +172,242 @@ setup_milou_user_environment() {
             mkdir -p "$dir"
             chown "$MILOU_USER:$MILOU_GROUP" "$dir"
             chmod 750 "$dir"
+            log "DEBUG" "Created directory: $dir"
         fi
     done
     
-    # Create a basic .bashrc if it doesn't exist
-    if [[ ! -f "$milou_home/.bashrc" ]]; then
-        cat > "$milou_home/.bashrc" << 'EOF'
-# .bashrc for milou user
+    # Create or update .bashrc with enhanced configuration
+    local bashrc_file="$milou_home/.bashrc"
+    log "DEBUG" "Setting up bashrc: $bashrc_file"
+    
+    # Backup existing bashrc
+    if [[ -f "$bashrc_file" ]]; then
+        cp "$bashrc_file" "$bashrc_file.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+    fi
+    
+    cat > "$bashrc_file" << 'EOF'
+# .bashrc for milou user - Enhanced Milou CLI Environment
 
 # Source system bashrc
 [[ -f /etc/bashrc ]] && source /etc/bashrc
+[[ -f ~/.bash_profile ]] && source ~/.bash_profile
 
-# Milou-specific environment
+# Milou-specific environment variables
 export MILOU_HOME="$HOME"
 export MILOU_CONFIG="$HOME/.milou"
-export PATH="$PATH:/usr/local/bin"
+export MILOU_USER="milou"
+
+# Detect Milou CLI location
+if [[ -d "$HOME/milou-cli" ]]; then
+    export MILOU_CLI_HOME="$HOME/milou-cli"
+elif [[ -d "/opt/milou-cli" ]]; then
+    export MILOU_CLI_HOME="/opt/milou-cli"
+elif [[ -d "/usr/local/milou-cli" ]]; then
+    export MILOU_CLI_HOME="/usr/local/milou-cli"
+else
+    # Try to find it in common locations
+    for location in "$HOME"/* "/opt"/* "/usr/local"/*; do
+        if [[ -d "$location" && -f "$location/milou.sh" ]]; then
+            export MILOU_CLI_HOME="$location"
+            break
+        fi
+    done
+fi
+
+# Add Milou CLI to PATH
+if [[ -n "$MILOU_CLI_HOME" && -d "$MILOU_CLI_HOME" ]]; then
+    export PATH="$MILOU_CLI_HOME:$PATH"
+else
+    echo "⚠️  Warning: Milou CLI location not found"
+fi
+
+# Add user bin directory to PATH
+[[ -d "$HOME/bin" ]] && export PATH="$HOME/bin:$PATH"
+
+# Docker environment optimization
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+export DOCKER_CLI_HINTS=false
+
+# General environment improvements
+export PATH="$PATH:/usr/local/bin:/usr/local/sbin"
+export EDITOR="${EDITOR:-nano}"
+export PAGER="${PAGER:-less}"
+
+# Shell options for better experience
+set -o vi 2>/dev/null || true  # Enable vi mode if available
+shopt -s histappend 2>/dev/null || true  # Append to history
+shopt -s checkwinsize 2>/dev/null || true  # Check window size after commands
+
+# History configuration
+export HISTCONTROL=ignoreboth
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+
+# Colorful output
+export CLICOLOR=1
+export LS_COLORS="di=1;34:ln=1;36:so=1;35:pi=1;33:ex=1;32:bd=1;33:cd=1;33:su=1;31:sg=1;31:tw=1;34:ow=1;34"
+
+# Enhanced aliases
+alias ll='ls -la --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias ls='ls --color=auto'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias grep='grep --color=auto'
+
+# Milou-specific aliases and functions
+if [[ -n "$MILOU_CLI_HOME" && -f "$MILOU_CLI_HOME/milou.sh" ]]; then
+    alias milou='$MILOU_CLI_HOME/milou.sh'
+    alias mstart='milou start'
+    alias mstop='milou stop'
+    alias mrestart='milou restart'
+    alias mstatus='milou status'
+    alias mlogs='milou logs'
+    alias mhealth='milou health'
+    alias mconfig='milou config'
+    alias mbackup='milou backup'
+    alias mssl='milou ssl'
+    alias msecurity='milou security-check'
+    
+    # Helpful functions
+    mcd() {
+        cd "$MILOU_CLI_HOME" || return 1
+    }
+    
+    mlog() {
+        tail -f "$MILOU_CONFIG/milou.log"
+    }
+    
+    mseclog() {
+        tail -f "$MILOU_CONFIG/security.log"
+    }
+else
+    echo "⚠️  Milou CLI not found - aliases not set"
+fi
+
+# Docker helper functions
+dps() {
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+dlogs() {
+    if [[ $# -eq 0 ]]; then
+        docker compose logs -f
+    else
+        docker compose logs -f "$@"
+    fi
+}
+
+dexec() {
+    if [[ $# -lt 1 ]]; then
+        echo "Usage: dexec <container> [command]"
+        return 1
+    fi
+    local container="$1"
+    shift
+    local cmd="${*:-/bin/bash}"
+    docker exec -it "$container" $cmd
+}
+
+# Welcome message
+if [[ $- == *i* ]]; then  # Only in interactive shells
+    echo "🚀 Welcome to Milou CLI Environment!"
+    echo "📁 Home: $MILOU_HOME"
+    echo "⚙️  Config: $MILOU_CONFIG"
+    if [[ -n "$MILOU_CLI_HOME" ]]; then
+        echo "🔧 CLI: $MILOU_CLI_HOME"
+        echo "💡 Use 'milou --help' for available commands"
+        echo "📖 Quick commands: mstart, mstop, mstatus, mlogs"
+    fi
+    echo
+fi
+EOF
+
+    # Set proper ownership and permissions for bashrc
+    chown "$MILOU_USER:$MILOU_GROUP" "$bashrc_file"
+    chmod 644 "$bashrc_file"
+    
+    # Create a profile file for non-interactive shells
+    local profile_file="$milou_home/.profile"
+    cat > "$profile_file" << EOF
+# .profile for milou user
+# This file is sourced by non-interactive shells
+
+# Milou environment
+export MILOU_HOME="$milou_home"
+export MILOU_CONFIG="$milou_home/.milou"
+export MILOU_USER="milou"
+
+# Add Milou CLI to PATH if it exists
+if [[ -d "$milou_home/milou-cli" ]]; then
+    export MILOU_CLI_HOME="$milou_home/milou-cli"
+    export PATH="$milou_home/milou-cli:\$PATH"
+fi
+
+# Add user bin to PATH
+[[ -d "$milou_home/bin" ]] && export PATH="$milou_home/bin:\$PATH"
 
 # Docker environment
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
-
-# Aliases
-alias ll='ls -la'
-alias la='ls -A'
-alias l='ls -CF'
-alias ..='cd ..'
-
-# Milou shortcuts
-alias milou='$HOME/milou-cli/milou.sh'
-alias mstart='milou start'
-alias mstop='milou stop'
-alias mstatus='milou status'
-alias mlogs='milou logs'
-
-echo "Welcome to Milou CLI environment!"
-echo "Use 'milou --help' for available commands"
 EOF
-        chown "$MILOU_USER:$MILOU_GROUP" "$milou_home/.bashrc"
-        chmod 644 "$milou_home/.bashrc"
+    
+    chown "$MILOU_USER:$MILOU_GROUP" "$profile_file"
+    chmod 644 "$profile_file"
+    
+    # Create a helpful milou command symlink in bin directory
+    local bin_symlink="$milou_home/bin/milou"
+    if [[ -d "$milou_home/milou-cli" && -f "$milou_home/milou-cli/milou.sh" ]]; then
+        ln -sf "$milou_home/milou-cli/milou.sh" "$bin_symlink" 2>/dev/null || true
+        chown -h "$MILOU_USER:$MILOU_GROUP" "$bin_symlink" 2>/dev/null || true
+    fi
+    
+    # Create initial configuration file template
+    local config_template="$milou_home/.milou/config/milou.conf"
+    if [[ ! -f "$config_template" ]]; then
+        cat > "$config_template" << EOF
+# Milou CLI Configuration
+# This file contains default settings for the milou user
+
+# Logging
+LOG_LEVEL=INFO
+LOG_TO_FILE=true
+
+# Security
+AUTO_SECURITY_CHECKS=true
+SECURITY_HARDENING=false
+
+# Docker
+DOCKER_CLEANUP_ON_STOP=false
+DOCKER_PRUNE_FREQUENCY=weekly
+
+# Backup
+AUTO_BACKUP=false
+BACKUP_RETENTION_DAYS=30
+
+# SSL
+SSL_AUTO_RENEWAL=true
+SSL_CHECK_FREQUENCY=daily
+
+# Updates
+AUTO_UPDATE_CHECK=true
+UPDATE_CHECK_FREQUENCY=daily
+EOF
+        chown "$MILOU_USER:$MILOU_GROUP" "$config_template"
+        chmod 640 "$config_template"
     fi
     
     # Set proper ownership for home directory
     chown -R "$MILOU_USER:$MILOU_GROUP" "$milou_home"
+    
+    # Secure sensitive directories
+    chmod 700 "$milou_home/.milou"
+    
+    log "SUCCESS" "Environment setup completed for $MILOU_USER"
+    log "INFO" "Configuration directory: $milou_home/.milou"
+    log "INFO" "CLI location will be auto-detected on login"
 }
 
 # =============================================================================
@@ -237,35 +435,181 @@ switch_to_milou_user() {
     
     log "INFO" "Switching to $MILOU_USER user for secure operations..."
     
-    # Copy current script arguments and environment
-    local script_path
-    script_path=$(readlink -f "${BASH_SOURCE[0]}")
-    local script_dir
-    script_dir=$(dirname "$script_path")
+    # Enhanced script path detection - find the main script directory
+    local script_path script_dir original_script_path
+    
+    # First, try to determine if we have SCRIPT_DIR from the main script
+    if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/milou.sh" ]]; then
+        script_dir="$SCRIPT_DIR"
+        script_path="$SCRIPT_DIR/milou.sh"
+        log "DEBUG" "Using SCRIPT_DIR from main script: $script_dir"
+    else
+        # Fallback: detect from current script location
+        script_path="${BASH_SOURCE[0]}"
+        
+        # Handle symlinks and relative paths
+        if [[ -L "$script_path" ]]; then
+            original_script_path=$(readlink -f "$script_path")
+            log "DEBUG" "Script is a symlink: $script_path -> $original_script_path"
+            script_path="$original_script_path"
+        else
+            script_path=$(readlink -f "$script_path")
+        fi
+        
+        # If we're in utils directory, go up one level
+        script_dir=$(dirname "$script_path")
+        if [[ "$(basename "$script_dir")" == "utils" ]]; then
+            script_dir=$(dirname "$script_dir")
+            log "DEBUG" "Detected utils directory, using parent: $script_dir"
+        fi
+        
+        # Verify we found the main script
+        if [[ ! -f "$script_dir/milou.sh" ]]; then
+            # Try to find milou.sh in common locations
+            local -a search_paths=(
+                "$(pwd)"
+                "$(dirname "$(pwd)")"
+                "/opt/milou-cli"
+                "/usr/local/milou-cli"
+                "$HOME/milou-cli"
+            )
+            
+            for search_path in "${search_paths[@]}"; do
+                if [[ -f "$search_path/milou.sh" ]]; then
+                    script_dir="$search_path"
+                    break
+                fi
+            done
+        fi
+        
+        script_path="$script_dir/milou.sh"
+    fi
+    
+    log "DEBUG" "Detected script directory: $script_dir"
+    log "DEBUG" "Main script path: $script_path"
+    
+    # Validate script directory
+    if [[ ! -f "$script_path" ]]; then
+        error_exit "Cannot locate main script: $script_path"
+    fi
+    
+    if [[ ! -d "$script_dir/utils" ]]; then
+        error_exit "Cannot locate utils directory: $script_dir/utils"
+    fi
     
     # Ensure milou user has access to the script directory
     if is_running_as_root; then
-        # Copy the entire milou-cli directory to milou user's home if needed
-        local milou_home
+        local milou_home target_dir
         milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
-        local target_dir="$milou_home/milou-cli"
+        
+        if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
+            error_exit "Milou user home directory not found or inaccessible: $milou_home"
+        fi
+        
+        target_dir="$milou_home/milou-cli"
+        
+        # Smart copying strategy
+        local needs_copy=false
+        local needs_update=false
         
         if [[ ! -d "$target_dir" ]]; then
             log "INFO" "Copying Milou CLI to $MILOU_USER home directory..."
-            cp -r "$script_dir" "$milou_home/"
-            chown -R "$MILOU_USER:$MILOU_GROUP" "$target_dir"
-            chmod +x "$target_dir/milou.sh"
+            needs_copy=true
+        else
+            # Check if update is needed by comparing modification times
+            local source_mtime target_mtime
+            source_mtime=$(stat -c %Y "$script_path" 2>/dev/null || echo "0")
+            target_mtime=$(stat -c %Y "$target_dir/milou.sh" 2>/dev/null || echo "0")
+            
+            if [[ $source_mtime -gt $target_mtime ]]; then
+                log "INFO" "Updating Milou CLI in $MILOU_USER home directory (source is newer)..."
+                needs_update=true
+            else
+                log "DEBUG" "Milou CLI in $MILOU_USER directory is up-to-date"
+            fi
         fi
         
-        # Switch to milou user and re-execute the script
-        log "DEBUG" "Executing as $MILOU_USER: $target_dir/milou.sh $*"
-        exec sudo -u "$MILOU_USER" -H "$target_dir/milou.sh" "$@"
+        # Perform copy or update
+        if [[ "$needs_copy" == true || "$needs_update" == true ]]; then
+            # Create backup if updating
+            if [[ "$needs_update" == true && -d "$target_dir" ]]; then
+                local backup_dir="${target_dir}.backup.$(date +%Y%m%d_%H%M%S)"
+                log "DEBUG" "Creating backup: $backup_dir"
+                mv "$target_dir" "$backup_dir" || log "WARN" "Failed to create backup"
+            fi
+            
+            # Copy the CLI
+            if ! cp -r "$script_dir" "$milou_home/"; then
+                error_exit "Failed to copy Milou CLI to $milou_home"
+            fi
+            
+            # Set proper ownership and permissions
+            if ! chown -R "$MILOU_USER:$MILOU_GROUP" "$target_dir"; then
+                error_exit "Failed to set ownership for $target_dir"
+            fi
+            
+            # Make scripts executable
+            find "$target_dir" -name "*.sh" -exec chmod +x {} \; 2>/dev/null || log "WARN" "Some scripts may not be executable"
+            
+            # Secure sensitive files
+            find "$target_dir" -name "*.env" -o -name "*.key" -o -name "*.pem" | xargs chmod 600 2>/dev/null || true
+            
+            log "SUCCESS" "Milou CLI ready in $target_dir"
+        fi
+        
+        # Preserve important environment variables
+        local -a env_vars=(
+            "VERBOSE=$VERBOSE"
+            "FORCE=$FORCE" 
+            "DRY_RUN=$DRY_RUN"
+            "INTERACTIVE=$INTERACTIVE"
+            "AUTO_CREATE_USER=$AUTO_CREATE_USER"
+            "SKIP_USER_CHECK=$SKIP_USER_CHECK"
+            "USE_LATEST_IMAGES=$USE_LATEST_IMAGES"
+        )
+        
+        # Add GitHub token if provided (but don't log it)
+        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+            env_vars+=("GITHUB_TOKEN=$GITHUB_TOKEN")
+            log "DEBUG" "Preserving GitHub token in environment"
+        fi
+        
+        # Add domain and SSL path if provided
+        if [[ -n "${DOMAIN:-}" ]]; then
+            env_vars+=("DOMAIN=$DOMAIN")
+        fi
+        if [[ -n "${SSL_PATH:-}" ]]; then
+            env_vars+=("SSL_PATH=$SSL_PATH")
+        fi
+        if [[ -n "${ADMIN_EMAIL:-}" ]]; then
+            env_vars+=("ADMIN_EMAIL=$ADMIN_EMAIL")
+        fi
+        
+        # Prepare the execution command
+        local exec_cmd="cd '$target_dir' && env ${env_vars[*]} '$target_dir/milou.sh'"
+        
+        # Add original arguments
+        if [[ $# -gt 0 ]]; then
+            # Properly quote arguments to preserve spaces and special characters
+            local quoted_args=""
+            for arg in "$@"; do
+                quoted_args+=" $(printf '%q' "$arg")"
+            done
+            exec_cmd+="$quoted_args"
+            log "DEBUG" "Preserving arguments: $quoted_args"
+        fi
+        
+        log "DEBUG" "Executing as $MILOU_USER in directory: $target_dir"
+        
+        # Execute with proper environment and working directory
+        exec sudo -u "$MILOU_USER" -H bash -c "$exec_cmd"
+        
     else
         error_exit "Cannot switch to $MILOU_USER user without root privileges"
     fi
 }
 
-# Migrate existing installation to milou user
+# Enhanced migration with better error handling and validation
 migrate_to_milou_user() {
     log "STEP" "Migrating existing installation to $MILOU_USER user..."
     
@@ -280,41 +624,108 @@ migrate_to_milou_user() {
     local milou_home
     milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
     
-    # Migrate configuration files
+    if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
+        error_exit "Milou user home directory not found: $milou_home"
+    fi
+    
+    # Create target directories
+    local target_config_dir="$milou_home/.milou"
+    mkdir -p "$target_config_dir"/{backups,cache,logs,ssl}
+    
+    # Migrate configuration files with validation
+    local migrated_files=0
+    
     if [[ -f "$ENV_FILE" ]]; then
-        log "INFO" "Migrating configuration files..."
-        local target_config_dir="$milou_home/.milou"
-        mkdir -p "$target_config_dir"
+        log "INFO" "Migrating configuration file: $ENV_FILE"
+        if cp "$ENV_FILE" "$target_config_dir/" && chmod 600 "$target_config_dir/.env"; then
+            ((migrated_files++))
+            log "SUCCESS" "Configuration file migrated"
+        else
+            log "WARN" "Failed to migrate configuration file"
+        fi
+    fi
+    
+    # Migrate configuration directory contents
+    if [[ -d "$CONFIG_DIR" && "$CONFIG_DIR" != "$target_config_dir" ]]; then
+        log "INFO" "Migrating configuration directory contents..."
+        local config_count=0
         
-        # Copy .env file
-        cp "$ENV_FILE" "$target_config_dir/"
-        
-        # Migrate other config files
-        local -a config_files=("$CONFIG_DIR"/* "$BACKUP_DIR"/* "$CACHE_DIR"/*)
-        for file in "${config_files[@]}"; do
-            [[ -f "$file" ]] && cp "$file" "$target_config_dir/"
+        for item in "$CONFIG_DIR"/*; do
+            [[ -e "$item" ]] || continue
+            local basename=$(basename "$item")
+            
+            # Skip if it's the target directory itself
+            [[ "$item" -ef "$target_config_dir" ]] && continue
+            
+            if cp -r "$item" "$target_config_dir/"; then
+                ((config_count++))
+                log "DEBUG" "Migrated: $basename"
+            else
+                log "WARN" "Failed to migrate: $basename"
+            fi
         done
         
-        # Set ownership
-        chown -R "$MILOU_USER:$MILOU_GROUP" "$target_config_dir"
-        chmod -R 750 "$target_config_dir"
-        
-        log "SUCCESS" "Configuration migrated to $target_config_dir"
+        if [[ $config_count -gt 0 ]]; then
+            ((migrated_files++))
+            log "SUCCESS" "Migrated $config_count configuration items"
+        fi
     fi
     
-    # Migrate SSL certificates
+    # Migrate SSL certificates with validation
     if [[ -d "./ssl" ]]; then
         log "INFO" "Migrating SSL certificates..."
-        cp -r "./ssl" "$milou_home/"
-        chown -R "$MILOU_USER:$MILOU_GROUP" "$milou_home/ssl"
-        chmod -R 750 "$milou_home/ssl"
-        log "SUCCESS" "SSL certificates migrated to $milou_home/ssl"
+        local ssl_target="$milou_home/ssl"
+        
+        if cp -r "./ssl" "$milou_home/" && chown -R "$MILOU_USER:$MILOU_GROUP" "$ssl_target"; then
+            chmod -R 750 "$ssl_target"
+            find "$ssl_target" -name "*.key" -exec chmod 600 {} \; 2>/dev/null || true
+            ((migrated_files++))
+            log "SUCCESS" "SSL certificates migrated to $ssl_target"
+        else
+            log "WARN" "Failed to migrate SSL certificates"
+        fi
     fi
     
-    # Ensure Docker volumes have correct permissions
+    # Migrate backups if they exist
+    if [[ -d "$BACKUP_DIR" && "$BACKUP_DIR" != "$target_config_dir/backups" ]]; then
+        log "INFO" "Migrating backup files..."
+        local backup_count=0
+        
+        for backup in "$BACKUP_DIR"/*; do
+            [[ -e "$backup" ]] || continue
+            if cp "$backup" "$target_config_dir/backups/"; then
+                ((backup_count++))
+            fi
+        done
+        
+        if [[ $backup_count -gt 0 ]]; then
+            log "SUCCESS" "Migrated $backup_count backup files"
+        fi
+    fi
+    
+    # Set final ownership and permissions
+    chown -R "$MILOU_USER:$MILOU_GROUP" "$target_config_dir"
+    chmod -R 750 "$target_config_dir"
+    
+    # Secure sensitive files
+    find "$target_config_dir" -name "*.env" -o -name "*.key" -o -name "*.pem" | xargs chmod 600 2>/dev/null || true
+    
+    # Ensure Docker permissions are correct
     fix_docker_permissions
     
+    # Update milou user's bashrc to point to the right directories
+    local milou_bashrc="$milou_home/.bashrc"
+    if [[ -f "$milou_bashrc" ]]; then
+        # Update paths in bashrc
+        sed -i "s|export MILOU_CONFIG=.*|export MILOU_CONFIG=\"$target_config_dir\"|" "$milou_bashrc"
+        chown "$MILOU_USER:$MILOU_GROUP" "$milou_bashrc"
+    fi
+    
     log "SUCCESS" "Migration to $MILOU_USER user completed"
+    log "INFO" "Migrated $migrated_files categories of files"
+    log "INFO" "Configuration directory: $target_config_dir"
+    
+    return 0
 }
 
 # Fix Docker permissions for milou user
@@ -433,7 +844,161 @@ EOF
 }
 
 # =============================================================================
-# User Management Interface
+# User Environment Validation
+# =============================================================================
+
+# Validate milou user environment and CLI accessibility
+validate_milou_user_environment() {
+    log "DEBUG" "Validating milou user environment..."
+    
+    if ! milou_user_exists; then
+        log "ERROR" "Milou user does not exist"
+        return 1
+    fi
+    
+    local milou_home issues=0
+    milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
+    
+    if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
+        log "ERROR" "Milou user home directory not found: $milou_home"
+        ((issues++))
+    fi
+    
+    # Check CLI accessibility
+    local cli_locations=(
+        "$milou_home/milou-cli/milou.sh"
+        "$milou_home/bin/milou"
+        "/opt/milou-cli/milou.sh"
+        "/usr/local/milou-cli/milou.sh"
+    )
+    
+    local cli_found=false
+    for cli_path in "${cli_locations[@]}"; do
+        if [[ -f "$cli_path" && -x "$cli_path" ]]; then
+            log "SUCCESS" "Milou CLI found at: $cli_path"
+            cli_found=true
+            break
+        fi
+    done
+    
+    if [[ "$cli_found" != true ]]; then
+        log "ERROR" "Milou CLI not found in expected locations"
+        log "INFO" "💡 Checked: ${cli_locations[*]}"
+        ((issues++))
+    fi
+    
+    # Check configuration directory
+    local config_dir="$milou_home/.milou"
+    if [[ ! -d "$config_dir" ]]; then
+        log "WARN" "Configuration directory missing: $config_dir"
+        ((issues++))
+    else
+        log "SUCCESS" "Configuration directory exists: $config_dir"
+        
+        # Check subdirectories
+        local -a required_dirs=("backups" "cache" "logs" "ssl" "config")
+        for dir in "${required_dirs[@]}"; do
+            if [[ ! -d "$config_dir/$dir" ]]; then
+                log "WARN" "Missing configuration subdirectory: $config_dir/$dir"
+            fi
+        done
+    fi
+    
+    # Check Docker permissions
+    if ! sudo -u "$MILOU_USER" groups 2>/dev/null | grep -q docker; then
+        log "WARN" "Milou user not in docker group"
+        ((issues++))
+    else
+        log "SUCCESS" "Milou user has docker group membership"
+    fi
+    
+    # Test Docker access
+    if ! sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
+        log "WARN" "Milou user cannot access Docker daemon"
+        ((issues++))
+    else
+        log "SUCCESS" "Milou user can access Docker daemon"
+    fi
+    
+    # Check environment files
+    local -a env_files=("$milou_home/.bashrc" "$milou_home/.profile")
+    for env_file in "${env_files[@]}"; do
+        if [[ -f "$env_file" ]]; then
+            if grep -q "MILOU_" "$env_file"; then
+                log "SUCCESS" "Milou environment configured in: $(basename "$env_file")"
+            else
+                log "WARN" "Milou environment not found in: $(basename "$env_file")"
+            fi
+        else
+            log "WARN" "Environment file missing: $(basename "$env_file")"
+        fi
+    done
+    
+    if [[ $issues -eq 0 ]]; then
+        log "SUCCESS" "Milou user environment validation passed"
+        return 0
+    else
+        log "WARN" "Milou user environment validation found $issues issues"
+        return 1
+    fi
+}
+
+# Test milou user CLI functionality
+test_milou_user_cli() {
+    log "INFO" "Testing Milou CLI functionality as $MILOU_USER user..."
+    
+    if ! milou_user_exists; then
+        log "ERROR" "Milou user does not exist"
+        return 1
+    fi
+    
+    local milou_home
+    milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
+    
+    # Find CLI location
+    local cli_script=""
+    local -a possible_locations=(
+        "$milou_home/milou-cli/milou.sh"
+        "$milou_home/bin/milou"
+        "/opt/milou-cli/milou.sh"
+        "/usr/local/milou-cli/milou.sh"
+    )
+    
+    for location in "${possible_locations[@]}"; do
+        if [[ -f "$location" && -x "$location" ]]; then
+            cli_script="$location"
+            break
+        fi
+    done
+    
+    if [[ -z "$cli_script" ]]; then
+        log "ERROR" "Cannot find executable Milou CLI script"
+        return 1
+    fi
+    
+    log "DEBUG" "Testing CLI at: $cli_script"
+    
+    # Test basic help command
+    if sudo -u "$MILOU_USER" -H bash -c "cd '$milou_home' && '$cli_script' --help" >/dev/null 2>&1; then
+        log "SUCCESS" "Milou CLI help command works"
+    else
+        log "ERROR" "Milou CLI help command failed"
+        return 1
+    fi
+    
+    # Test user status command
+    if sudo -u "$MILOU_USER" -H bash -c "cd '$milou_home' && '$cli_script' user-status" >/dev/null 2>&1; then
+        log "SUCCESS" "Milou CLI user-status command works"
+    else
+        log "WARN" "Milou CLI user-status command failed"
+    fi
+    
+    log "SUCCESS" "Milou CLI functionality test completed"
+    return 0
+}
+
+# =============================================================================
+# User Management Interface (Enhanced)
 # =============================================================================
 
 # Interactive user setup
@@ -534,35 +1099,206 @@ interactive_user_setup() {
 # Show user status information
 show_user_status() {
     echo -e "${BOLD}👤 User Status Information${NC}"
+    echo "=============================="
     echo
     
     # Current user info
     local current_user
     current_user=$(whoami)
-    echo "Current user: $current_user"
-    echo "UID: $(id -u), GID: $(id -g)"
-    echo "Groups: $(groups | cut -d: -f2)"
-    echo "Running as root: $(is_running_as_root && echo "Yes" || echo "No")"
+    echo -e "${CYAN}Current User:${NC}"
+    echo "  User: $current_user"
+    echo "  UID: $(id -u), GID: $(id -g)"
+    echo "  Groups: $(groups | cut -d: -f2 | tr ' ' ', ')"
+    echo "  Running as root: $(is_running_as_root && echo "Yes" || echo "No")"
+    echo "  Home directory: $HOME"
     echo
     
     # Milou user info
+    echo -e "${CYAN}Milou User:${NC}"
     if milou_user_exists; then
-        echo "Milou user: $MILOU_USER exists"
-        echo "UID: $(id -u "$MILOU_USER"), GID: $(id -g "$MILOU_USER")"
-        echo "Home: $(getent passwd "$MILOU_USER" | cut -d: -f6)"
-        echo "Groups: $(groups "$MILOU_USER" 2>/dev/null | cut -d: -f2 || echo "unknown")"
+        local milou_home
+        milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
+        
+        echo "  Status: $MILOU_USER exists ✅"
+        echo "  UID: $(id -u "$MILOU_USER"), GID: $(id -g "$MILOU_USER")"
+        echo "  Home: $milou_home"
+        echo "  Groups: $(groups "$MILOU_USER" 2>/dev/null | cut -d: -f2 | tr ' ' ', ' || echo "unknown")"
+        
+        # Check if milou user environment is set up
+        if [[ -d "$milou_home/.milou" ]]; then
+            echo "  Environment: Configured ✅"
+        else
+            echo "  Environment: Not configured ⚠️"
+        fi
+        
+        # Check CLI accessibility
+        local cli_accessible=false
+        local cli_location=""
+        local -a cli_paths=(
+            "$milou_home/milou-cli/milou.sh"
+            "$milou_home/bin/milou"
+            "/opt/milou-cli/milou.sh"
+            "/usr/local/milou-cli/milou.sh"
+        )
+        
+        for path in "${cli_paths[@]}"; do
+            if [[ -f "$path" && -x "$path" ]]; then
+                cli_accessible=true
+                cli_location="$path"
+                break
+            fi
+        done
+        
+        if [[ "$cli_accessible" == true ]]; then
+            echo "  CLI Access: Available ✅ ($cli_location)"
+        else
+            echo "  CLI Access: Not available ❌"
+        fi
     else
-        echo "Milou user: $MILOU_USER does not exist"
+        echo "  Status: $MILOU_USER does not exist ❌"
+        echo "  💡 Run: sudo $0 create-user"
     fi
     echo
     
-    # Docker permissions
-    echo "Docker access: $(has_docker_permissions && echo "Yes" || echo "No")"
+    # Docker access info
+    echo -e "${CYAN}Docker Access:${NC}"
+    echo "  Current user access: $(has_docker_permissions && echo "Yes ✅" || echo "No ❌")"
+    
+    if milou_user_exists; then
+        local milou_docker_access=false
+        local current_user
+        current_user=$(whoami)
+        
+        if [[ "$current_user" == "$MILOU_USER" ]]; then
+            # We're already running as milou user, use has_docker_permissions function
+            if has_docker_permissions; then
+                milou_docker_access=true
+            fi
+        else
+            # We're running as a different user, use sudo to check
+            if sudo -u "$MILOU_USER" groups 2>/dev/null | grep -q docker; then
+                if sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
+                    milou_docker_access=true
+                fi
+            fi
+        fi
+        echo "  Milou user access: $([ "$milou_docker_access" == true ] && echo "Yes ✅" || echo "No ❌")"
+    fi
+    
     if command -v docker >/dev/null 2>&1; then
-        echo "Docker version: $(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',' || echo "unknown")"
-        echo "Docker daemon: $(docker info >/dev/null 2>&1 && echo "accessible" || echo "not accessible")"
+        local docker_version
+        docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',' || echo "unknown")
+        echo "  Docker version: $docker_version"
+        echo "  Docker daemon: $(docker info >/dev/null 2>&1 && echo "accessible ✅" || echo "not accessible ❌")"
+        
+        # Show running containers if accessible
+        if docker info >/dev/null 2>&1; then
+            local running_containers
+            running_containers=$(docker ps --format "{{.Names}}" 2>/dev/null | wc -l)
+            echo "  Running containers: $running_containers"
+        fi
     else
-        echo "Docker: not installed"
+        echo "  Docker: not installed ❌"
+    fi
+    echo
+    
+    # Environment and configuration info
+    echo -e "${CYAN}Environment:${NC}"
+    echo "  Script directory: $SCRIPT_DIR"
+    echo "  Config directory: $CONFIG_DIR"
+    
+    if [[ -f "$ENV_FILE" ]]; then
+        echo "  Configuration file: exists ✅"
+        local config_perms
+        config_perms=$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %A "$ENV_FILE" 2>/dev/null || echo "unknown")
+        echo "  Config permissions: $config_perms $([ "$config_perms" -le 600 ] && echo "✅" || echo "⚠️")"
+    else
+        echo "  Configuration file: missing ❌"
+    fi
+    
+    if [[ -d "./ssl" ]]; then
+        echo "  SSL directory: exists ✅"
+        local ssl_files
+        ssl_files=$(find "./ssl" -name "*.crt" -o -name "*.key" 2>/dev/null | wc -l)
+        echo "  SSL files: $ssl_files found"
+    else
+        echo "  SSL directory: missing ⚠️"
+    fi
+    echo
+    
+    # Security status
+    echo -e "${CYAN}Security Status:${NC}"
+    
+    # File permissions check
+    local security_issues=0
+    
+    if [[ -f "$ENV_FILE" ]]; then
+        local env_perms
+        env_perms=$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %A "$ENV_FILE" 2>/dev/null)
+        if [[ "$env_perms" -gt 600 ]]; then
+            echo "  Config file security: Insecure permissions ($env_perms) ⚠️"
+            ((security_issues++))
+        else
+            echo "  Config file security: Secure permissions ✅"
+        fi
+    fi
+    
+    # Check for running as root
+    if is_running_as_root; then
+        echo "  Root usage: Running as root (not recommended) ⚠️"
+        ((security_issues++))
+    else
+        echo "  Root usage: Running as non-root user ✅"
+    fi
+    
+    # Check Docker socket permissions
+    if [[ -S /var/run/docker.sock ]]; then
+        local socket_perms
+        socket_perms=$(stat -c %a /var/run/docker.sock 2>/dev/null || echo "unknown")
+        if [[ "$socket_perms" == "666" ]]; then
+            echo "  Docker socket: Too permissive ($socket_perms) ⚠️"
+            ((security_issues++))
+        else
+            echo "  Docker socket: Secure permissions ✅"
+        fi
+    fi
+    
+    echo "  Security issues found: $security_issues"
+    echo
+    
+    # Recommendations
+    if [[ $security_issues -gt 0 ]] || ! milou_user_exists || is_running_as_root; then
+        echo -e "${CYAN}Recommendations:${NC}"
+        
+        if ! milou_user_exists; then
+            echo "  • Create dedicated milou user: sudo $0 create-user"
+        fi
+        
+        if is_running_as_root && milou_user_exists; then
+            echo "  • Switch to milou user: sudo -u milou $0 [command]"
+        fi
+        
+        if [[ $security_issues -gt 0 ]]; then
+            echo "  • Run security assessment: $0 security-check"
+            echo "  • Apply security hardening: sudo $0 security-harden"
+        fi
+        
+        if ! has_docker_permissions && [[ "$current_user" != "root" ]]; then
+            echo "  • Add Docker permissions: sudo usermod -aG docker $current_user"
+        fi
+        
+        echo
+    fi
+    
+    # Quick validation
+    if milou_user_exists; then
+        echo -e "${CYAN}Environment Validation:${NC}"
+        if validate_milou_user_environment >/dev/null 2>&1; then
+            echo "  Milou user environment: Valid ✅"
+        else
+            echo "  Milou user environment: Issues found ⚠️"
+            echo "  💡 Run with --verbose for details"
+        fi
     fi
 }
 
@@ -574,32 +1310,98 @@ show_user_status() {
 ensure_proper_user_setup() {
     log "DEBUG" "Ensuring proper user setup..."
     
-    # If running as root, offer to create milou user
+    # If running as root, prioritize switching to milou user
     if is_running_as_root; then
         log "WARN" "Running as root - consider using dedicated user"
-        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-            if confirm "Create and switch to $MILOU_USER user for better security?" "Y"; then
-                if ! milou_user_exists; then
-                    create_milou_user
-                fi
+        
+        # Check if milou user exists and automatically switch
+        if milou_user_exists; then
+            # Automatic switch in non-interactive mode or with auto-create flag
+            if [[ "${INTERACTIVE:-true}" == "false" ]] || [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
+                log "INFO" "Automatically switching to $MILOU_USER user for better security"
                 switch_to_milou_user "$@"
+                return $?  # This should never be reached due to exec, but just in case
             fi
-        elif [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
-            if ! milou_user_exists; then
+            
+            # Interactive mode - ask user
+            if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                if confirm "Create and switch to $MILOU_USER user for better security?" "Y"; then
+                    switch_to_milou_user "$@"
+                    return $?  # This should never be reached due to exec, but just in case
+                fi
+            fi
+        else
+            # Milou user doesn't exist - offer to create it
+            if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                if confirm "Create and switch to $MILOU_USER user for better security?" "Y"; then
+                    create_milou_user
+                    switch_to_milou_user "$@"
+                    return $?  # This should never be reached due to exec, but just in case
+                fi
+            elif [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
+                log "INFO" "Automatically creating $MILOU_USER user"
                 create_milou_user
+                switch_to_milou_user "$@"
+                return $?  # This should never be reached due to exec, but just in case
             fi
-            switch_to_milou_user "$@"
         fi
     fi
     
-    # Validate permissions
-    if ! validate_user_permissions; then
+    # Validate permissions only if we're not switching users
+    if ! validate_user_permissions_for_setup; then
         if [[ "${INTERACTIVE:-true}" == "true" ]]; then
             interactive_user_setup "$@"
         else
-            error_exit "User permissions validation failed"
+            # In non-interactive mode, provide clear guidance but don't fail hard
+            log "WARN" "User permissions validation found issues"
+            log "INFO" "💡 Consider running: sudo -u milou $0 [command]"
+            log "INFO" "💡 Or create milou user: sudo $0 create-user"
+            # Don't exit - let the operation continue with warnings
         fi
     fi
+}
+
+# Validate user permissions specifically for setup (more lenient than general validation)
+validate_user_permissions_for_setup() {
+    log "DEBUG" "Validating user permissions for setup..."
+    
+    local current_user
+    current_user=$(whoami)
+    local critical_issues=0
+    
+    # Check Docker access - this is critical
+    if ! has_docker_permissions; then
+        log "ERROR" "Current user ($current_user) does not have Docker permissions"
+        log "INFO" "💡 Add user to docker group: sudo usermod -aG docker $current_user"
+        log "INFO" "💡 Or switch to $MILOU_USER user: sudo -u $MILOU_USER"
+        ((critical_issues++))
+    else
+        log "SUCCESS" "Docker permissions verified for user: $current_user"
+    fi
+    
+    # Check file permissions on critical paths - only fail if we can't read/write
+    local -a critical_paths=("$SCRIPT_DIR")
+    for path in "${critical_paths[@]}"; do
+        if [[ -e "$path" ]]; then
+            if [[ ! -r "$path" ]]; then
+                log "ERROR" "No read permission for: $path"
+                ((critical_issues++))
+            fi
+            if [[ -d "$path" && ! -w "$path" ]]; then
+                log "ERROR" "No write permission for directory: $path"
+                ((critical_issues++))
+            fi
+        fi
+    done
+    
+    # For setup purposes, being root is acceptable (just warn, don't count as critical issue)
+    if is_running_as_root; then
+        log "WARN" "Running as root user - not recommended for security"
+        log "INFO" "💡 Consider creating and using the $MILOU_USER user instead"
+        # Don't increment critical_issues for root - just warn
+    fi
+    
+    return $critical_issues
 }
 
 # Clean up user management resources

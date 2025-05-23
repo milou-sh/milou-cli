@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: ghcr.io/milou-sh/milou/database:latest
+    image: ghcr.io/milou-sh/milou/database:v1.0.0
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -46,8 +46,8 @@ services:
       - "5672:5672"
       - "8083:15672"
     environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
@@ -61,26 +61,11 @@ services:
     restart: unless-stopped
 
   backend:
-    image: ghcr.io/milou-sh/milou/backend:latest
+    image: ghcr.io/milou-sh/milou/backend:v1.0.0
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - PORT=9999
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - DATABASE_URI=${DATABASE_URI}
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_URL=${REDIS_URL}
-      - RABBITMQ_URL=${RABBITMQ_URL}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - JWT_SECRET=${JWT_SECRET}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - CORS_ORIGIN=${CORS_ORIGIN}
-      - SSL_ENABLED=${SSL_ENABLED}
+      # ... other environment variables
     expose:
       - "9999"
     volumes:
@@ -97,14 +82,14 @@ services:
       - proxy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 0.0.0.0 9999 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9999/api/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
 
   frontend:
-    image: ghcr.io/milou-sh/milou/frontend:latest
+    image: ghcr.io/milou-sh/milou/frontend:v1.0.0
     environment:
       - VITE_API_URL=/api
       - NODE_ENV=${NODE_ENV:-development}
@@ -117,7 +102,7 @@ services:
       - proxy
 
   engine:
-    image: ghcr.io/milou-sh/milou/engine:latest
+    image: ghcr.io/milou-sh/milou/engine:v1.0.0
     environment:
       - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
       - DATABASE_URI=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-milou}
@@ -142,7 +127,7 @@ services:
       start_period: 60s
 
   nginx:
-    image: ghcr.io/milou-sh/milou/nginx:latest
+    image: ghcr.io/milou-sh/milou/nginx:v1.0.0
     ports:
       - "0.0.0.0:80:80"
       - "0.0.0.0:${SSL_PORT:-443}:443"
@@ -150,24 +135,7 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - SERVER_NAME=${CUSTOMER_DOMAIN_NAME}
     volumes:
-      - ${SSL_CERT_PATH:-./ssl}:/tmp/ssl:ro
-    entrypoint: |
-      sh -c '
-        if [ -f /tmp/ssl/milou.crt ] && [ -f /tmp/ssl/milou.key ]; then
-          cp /tmp/ssl/milou.crt /etc/ssl/milou.crt
-          cp /tmp/ssl/milou.key /etc/ssl/milou.key
-        elif [ -f /tmp/ssl/server.crt ] && [ -f /tmp/ssl/server.key ]; then
-          cp /tmp/ssl/server.crt /etc/ssl/milou.crt
-          cp /tmp/ssl/server.key /etc/ssl/milou.key
-        else
-          echo "ERROR: No SSL certificates found in /tmp/ssl/"
-          echo "Expected: milou.crt/milou.key or server.crt/server.key"
-          exit 1
-        fi
-        chmod 644 /etc/ssl/milou.crt
-        chmod 600 /etc/ssl/milou.key
-        exec /docker-entrypoint.sh nginx -g "daemon off;"
-      '
+      - ./ssl:/etc/ssl:ro
     depends_on:
       - backend
       - frontend

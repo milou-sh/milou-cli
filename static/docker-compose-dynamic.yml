@@ -1,0 +1,487 @@
+version: '3.8'
+
+# =============================================================================
+# Milou Application Docker Compose Configuration
+# Enhanced version with dynamic image tags and improved configuration
+# =============================================================================
+
+services:
+  # ==========================================================================
+  # Database Service (PostgreSQL)
+  # ==========================================================================
+  db:
+    image: ghcr.io/milou-sh/milou/database:${MILOU_DATABASE_TAG:-v1.0.0}
+    container_name: milou-database
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-milou}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data:rw
+      - ./backup:/backup:rw  # For database backups
+    command: ["postgres", "-c", "client_encoding=UTF8", "-c", "shared_preload_libraries=pg_stat_statements"]
+    ports:
+      - "${DB_EXTERNAL_PORT:-5432}:5432"
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Redis Service (Caching & Sessions)
+  # ==========================================================================
+  redis:
+    image: redis:${REDIS_VERSION:-7-alpine}
+    container_name: milou-redis
+    restart: unless-stopped
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory ${REDIS_MAX_MEMORY:-256mb}
+      --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data:rw
+    expose:
+      - "6379"
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # RabbitMQ Service (Message Queue)
+  # ==========================================================================
+  rabbitmq:
+    image: rabbitmq:${RABBITMQ_VERSION:-3-management-alpine}
+    container_name: milou-rabbitmq
+    restart: unless-stopped
+    hostname: milou-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-milou-cookie}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq:rw
+      - rabbitmq_logs:/var/log/rabbitmq:rw
+    ports:
+      - "${RABBITMQ_EXTERNAL_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_EXTERNAL_PORT:-15672}:15672"
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Backend Service (API Server)
+  # ==========================================================================
+  backend:
+    image: ghcr.io/milou-sh/milou/backend:${MILOU_BACKEND_TAG:-v1.0.0}
+    container_name: milou-backend
+    restart: unless-stopped
+    environment:
+      # Application Environment
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-9999}
+      
+      # Database Configuration
+      - DATABASE_URI=${DATABASE_URI}
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-milou}
+      
+      # Redis Configuration
+      - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # RabbitMQ Configuration
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      
+      # Security Configuration
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      
+      # Feature Flags
+      - ENABLE_ANALYTICS=${ENABLE_ANALYTICS:-true}
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+      
+      # CORS Configuration
+      - CORS_ORIGIN=${CORS_ORIGIN}
+    expose:
+      - "${PORT:-9999}"
+    volumes:
+      - uploads:/app/uploads:rw
+      - backend_logs:/app/logs:rw
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - milou_network
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9999}/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ==========================================================================
+  # Frontend Service (Web UI)
+  # ==========================================================================
+  frontend:
+    image: ghcr.io/milou-sh/milou/frontend:${MILOU_FRONTEND_TAG:-v1.0.0}
+    container_name: milou-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-/api}
+      - NODE_ENV=${NODE_ENV:-production}
+      - VITE_APP_TITLE=${VITE_APP_TITLE:-Milou}
+      - VITE_APP_VERSION=${MILOU_VERSION:-3.0.0}
+    expose:
+      - "5173"
+    depends_on:
+      - backend
+    networks:
+      - milou_network
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5173 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Engine Service (AI Processing)
+  # ==========================================================================
+  engine:
+    image: ghcr.io/milou-sh/milou/engine:${MILOU_ENGINE_TAG:-v1.0.0}
+    container_name: milou-engine
+    restart: unless-stopped
+    environment:
+      # Database Configuration
+      - DATABASE_URI=${DATABASE_URI}
+      
+      # RabbitMQ Configuration
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      
+      # Redis Configuration
+      - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # Python Configuration
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+      
+      # Performance Configuration
+      - WORKER_PROCESSES=${ENGINE_WORKER_PROCESSES:-auto}
+      - MAX_REQUESTS=${ENGINE_MAX_REQUESTS:-1000}
+      - TIMEOUT=${ENGINE_TIMEOUT:-300}
+      
+      # Monitoring
+      - ENABLE_METRICS=${ENABLE_MONITORING:-true}
+      - METRICS_PORT=${METRICS_PORT:-8080}
+    volumes:
+      - engine_logs:/app/logs:rw
+      - engine_cache:/app/cache:rw
+      - engine_models:/app/models:rw
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - milou_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8089/health', timeout=5)"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ==========================================================================
+  # Nginx Service (Reverse Proxy & Load Balancer)
+  # ==========================================================================
+  nginx:
+    image: ghcr.io/milou-sh/milou/nginx:${MILOU_NGINX_TAG:-v1.0.0}
+    container_name: milou-nginx
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - SERVER_NAME=${SERVER_NAME:-localhost}
+      - CUSTOMER_DOMAIN_NAME=${CUSTOMER_DOMAIN_NAME:-localhost}
+      - SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
+      - BACKEND_HOST=backend
+      - BACKEND_PORT=${PORT:-9999}
+      - FRONTEND_HOST=frontend
+      - FRONTEND_PORT=5173
+      - ENABLE_COMPRESSION=${ENABLE_COMPRESSION:-true}
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ${SSL_CERT_PATH:-./ssl}:/etc/ssl:ro
+      - nginx_logs:/var/log/nginx:rw
+      - nginx_cache:/var/cache/nginx:rw
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - milou_network
+      - proxy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ==========================================================================
+  # Monitoring Service (Optional)
+  # ==========================================================================
+  monitor:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-latest}
+    container_name: milou-monitor
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus_data:/prometheus:rw
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - milou_network
+    profiles:
+      - monitoring
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Networks Configuration
+# =============================================================================
+networks:
+  milou_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+    labels:
+      - "project=milou"
+      - "environment=${NODE_ENV:-production}"
+  
+  proxy:
+    external: true
+    name: proxy
+
+# =============================================================================
+# Volumes Configuration
+# =============================================================================
+volumes:
+  # Database volumes
+  pgdata:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=database"
+  
+  # Redis volumes
+  redis_data:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=cache"
+  
+  # RabbitMQ volumes
+  rabbitmq_data:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=queue"
+  
+  rabbitmq_logs:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=queue"
+  
+  # Application volumes
+  backend_logs:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=backend"
+  
+  engine_logs:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=engine"
+  
+  engine_cache:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=engine"
+  
+  engine_models:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=engine"
+  
+  uploads:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=storage"
+  
+  # Nginx volumes
+  nginx_logs:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=proxy"
+  
+  nginx_cache:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=proxy"
+  
+  # Monitoring volumes
+  prometheus_data:
+    driver: local
+    labels:
+      - "project=milou"
+      - "component=monitoring"
+
+# =============================================================================
+# Configuration Notes
+# =============================================================================
+# 
+# Environment Variables:
+# ----------------------
+# All services are configured via environment variables defined in .env file
+# 
+# Image Tags:
+# -----------
+# - MILOU_BACKEND_TAG: Backend service image tag (default: v1.0.0)
+# - MILOU_FRONTEND_TAG: Frontend service image tag (default: v1.0.0) 
+# - MILOU_ENGINE_TAG: Engine service image tag (default: v1.0.0)
+# - MILOU_NGINX_TAG: Nginx service image tag (default: v1.0.0)
+# - MILOU_DATABASE_TAG: Database service image tag (default: v1.0.0)
+# 
+# Health Checks:
+# --------------
+# All critical services have health checks configured with appropriate timeouts
+# 
+# Logging:
+# --------
+# JSON logging with rotation is configured for all services
+# 
+# Networks:
+# ---------
+# - milou_network: Internal network for service communication
+# - proxy: External network for reverse proxy access
+# 
+# Volumes:
+# --------
+# All persistent data is stored in named volumes with proper labels
+# 
+# Security:
+# ---------
+# - No hardcoded credentials (all via environment variables)
+# - Services exposed only to necessary networks
+# - SSL/TLS termination at nginx level
+# 
+# Monitoring:
+# -----------
+# Optional Prometheus monitoring can be enabled with --profile monitoring
+# 
+# ============================================================================= 

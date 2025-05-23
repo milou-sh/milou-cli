@@ -87,6 +87,15 @@ create_milou_user() {
         fi
     fi
     
+    # Ensure docker group exists BEFORE creating user
+    if ! getent group docker >/dev/null 2>&1; then
+        log "DEBUG" "Creating docker group"
+        if ! groupadd docker; then
+            log "WARN" "Failed to create docker group, user will be created without docker access"
+            # Continue without docker group - we'll try to add it later
+        fi
+    fi
+    
     # Create user with home directory
     log "DEBUG" "Creating user: $MILOU_USER (UID: $MILOU_UID)"
     local useradd_cmd=(
@@ -94,9 +103,14 @@ create_milou_user() {
         -m                    # Create home directory
         -s /bin/bash         # Set shell
         -g "$MILOU_GROUP"    # Primary group
-        -G docker            # Add to docker group
         -c "Milou Service User"  # Comment
     )
+    
+    # Add docker group to user creation if it exists
+    if getent group docker >/dev/null 2>&1; then
+        useradd_cmd+=(-G docker)
+        log "DEBUG" "Adding user to docker group during creation"
+    fi
     
     # Try with specific UID first
     if ! "${useradd_cmd[@]}" -u "$MILOU_UID" "$MILOU_USER" 2>/dev/null; then
@@ -107,15 +121,17 @@ create_milou_user() {
         fi
     fi
     
-    # Ensure docker group exists and add user to it
-    if ! getent group docker >/dev/null 2>&1; then
-        log "DEBUG" "Creating docker group"
-        groupadd docker || log "WARN" "Failed to create docker group"
-    fi
-    
-    # Add user to docker group
-    if ! usermod -aG docker "$MILOU_USER"; then
-        log "WARN" "Failed to add $MILOU_USER to docker group"
+    # Add user to docker group if not already done and group exists
+    if getent group docker >/dev/null 2>&1; then
+        if ! groups "$MILOU_USER" 2>/dev/null | grep -q docker; then
+            log "DEBUG" "Adding $MILOU_USER to docker group"
+            if ! usermod -aG docker "$MILOU_USER"; then
+                log "WARN" "Failed to add $MILOU_USER to docker group"
+            fi
+        fi
+    else
+        log "WARN" "Docker group does not exist, user created without docker access"
+        log "INFO" "💡 Install Docker first, then run: sudo usermod -aG docker $MILOU_USER"
     fi
     
     # Set up user environment

@@ -508,8 +508,31 @@ switch_to_milou_user() {
         local milou_home target_dir
         milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
         
-        if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
-            error_exit "Milou user home directory not found or inaccessible: $milou_home"
+        # Enhanced home directory handling with automatic creation/repair
+        if [[ -z "$milou_home" ]]; then
+            log "WARN" "Milou user has no home directory configured, using /home/$MILOU_USER"
+            milou_home="/home/$MILOU_USER"
+            # Update the user's home directory in passwd
+            usermod -d "$milou_home" "$MILOU_USER" 2>/dev/null || log "WARN" "Could not update user home directory"
+        fi
+        
+        if [[ ! -d "$milou_home" ]]; then
+            log "INFO" "Creating missing home directory for migration: $milou_home"
+            if ! mkdir -p "$milou_home"; then
+                error_exit "Failed to create home directory: $milou_home"
+            fi
+            
+            # Set proper ownership and permissions
+            chown "$MILOU_USER:$MILOU_GROUP" "$milou_home"
+            chmod 750 "$milou_home"
+            
+            log "SUCCESS" "Home directory created for migration: $milou_home"
+        elif [[ ! -w "$milou_home" ]]; then
+            log "INFO" "Fixing permissions for home directory during migration: $milou_home"
+            
+            # Try to fix ownership and permissions
+            chown "$MILOU_USER:$MILOU_GROUP" "$milou_home" || log "WARN" "Could not fix ownership for $milou_home"
+            chmod 750 "$milou_home" || log "WARN" "Could not fix permissions for $milou_home"
         fi
         
         target_dir="$milou_home/milou-cli"
@@ -681,7 +704,31 @@ migrate_to_milou_user() {
     milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
     
     if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
-        error_exit "Milou user home directory not found: $milou_home"
+        if [[ -z "$milou_home" ]]; then
+            log "WARN" "Milou user has no home directory configured, using /home/$MILOU_USER"
+            milou_home="/home/$MILOU_USER"
+            # Update the user's home directory in passwd
+            usermod -d "$milou_home" "$MILOU_USER" 2>/dev/null || log "WARN" "Could not update user home directory"
+        fi
+        
+        if [[ ! -d "$milou_home" ]]; then
+            log "INFO" "Creating missing home directory for migration: $milou_home"
+            if ! mkdir -p "$milou_home"; then
+                error_exit "Failed to create home directory: $milou_home"
+            fi
+            
+            # Set proper ownership and permissions
+            chown "$MILOU_USER:$MILOU_GROUP" "$milou_home"
+            chmod 750 "$milou_home"
+            
+            log "SUCCESS" "Home directory created for migration: $milou_home"
+        fi
+    elif [[ ! -w "$milou_home" ]]; then
+        log "INFO" "Fixing permissions for home directory during migration: $milou_home"
+        
+        # Try to fix ownership and permissions
+        chown "$MILOU_USER:$MILOU_GROUP" "$milou_home" || log "WARN" "Could not fix ownership for $milou_home"
+        chmod 750 "$milou_home" || log "WARN" "Could not fix permissions for $milou_home"
     fi
     
     # Create target directories
@@ -916,8 +963,16 @@ validate_milou_user_environment() {
     milou_home=$(getent passwd "$MILOU_USER" | cut -d: -f6)
     
     if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
-        log "ERROR" "Milou user home directory not found: $milou_home"
+        if [[ -z "$milou_home" ]]; then
+            log "ERROR" "Milou user has no home directory configured"
+            log "INFO" "💡 Try: sudo usermod -d /home/$MILOU_USER $MILOU_USER"
+        else
+            log "ERROR" "Milou user home directory not found: $milou_home"
+            log "INFO" "💡 Try: sudo mkdir -p $milou_home && sudo chown $MILOU_USER:$MILOU_GROUP $milou_home"
+        fi
         ((issues++))
+        # Set a fallback home directory for subsequent checks
+        milou_home="/home/$MILOU_USER"
     fi
     
     # Check CLI accessibility

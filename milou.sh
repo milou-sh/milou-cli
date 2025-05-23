@@ -1228,55 +1228,100 @@ generate_detailed_security_report() {
 
 # System dependencies installation handler
 install_system_dependencies() {
-    local enable_firewall=false
-    local auto_install=true
+    log "INFO" "🔧 Installing system dependencies..."
     
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --enable-firewall)
-                enable_firewall=true
-                shift
-                ;;
-            --manual)
-                auto_install=false
-                shift
-                ;;
-            --help)
-                show_install_deps_help
-                return 0
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
-    
-    log "STEP" "Installing system dependencies for Milou..."
-    
-    # Check if we need root privileges
-    if [[ "$auto_install" == "true" ]] && [[ $EUID -ne 0 ]]; then
-        log "ERROR" "Root privileges required for automatic installation"
-        log "INFO" "Please run with sudo: sudo $0 install-deps"
-        log "INFO" "Or use manual mode: $0 install-deps --manual"
+    if [[ $EUID -ne 0 ]]; then
+        log "ERROR" "Root privileges required for dependency installation"
+        log "INFO" "💡 Please run: sudo $0 install-deps"
         exit 1
     fi
     
-    if install_prerequisites "$auto_install" "$enable_firewall" "false"; then
-        log "SUCCESS" "✅ System dependencies installation completed!"
-        echo
-        log "INFO" "🎯 Next Steps:"
-        log "INFO" "  • Run: $0 setup (to configure Milou)"
-        log "INFO" "  • Run: $0 diagnose (to verify installation)"
-        
-        # If user was added to docker group, suggest relogin
-        if [[ $EUID -ne 0 ]] && ! groups | grep -q docker && command -v docker >/dev/null 2>&1; then
-            echo
-            log "INFO" "⚠️  IMPORTANT: You may need to log out and back in for Docker group changes to take effect"
-            log "INFO" "💡 Or run: newgrp docker"
-        fi
+    # Source and call prerequisites installer
+    if install_prerequisites true false true; then
+        log "SUCCESS" "✅ All dependencies installed successfully"
     else
-        error_exit "System dependencies installation failed"
+        log "ERROR" "❌ Dependency installation failed"
+        exit 1
+    fi
+}
+
+# Cleanup test files that might interfere with fresh installations
+handle_cleanup_test_files() {
+    log "INFO" "🧹 Cleaning up test configuration files..."
+    
+    local removed_files=()
+    local -a test_files=(
+        "${SCRIPT_DIR}/.env"
+        "${SCRIPT_DIR}/.env.test"
+        "${SCRIPT_DIR}/.env.backup"
+        "${SCRIPT_DIR}/ssl/milou.crt"
+        "${SCRIPT_DIR}/ssl/milou.key"
+    )
+    
+    for file in "${test_files[@]}"; do
+        if [[ -f "$file" ]]; then
+            # Check if it looks like test data
+            local is_test_file=false
+            
+            if [[ "$file" =~ \.env ]]; then
+                # Check for test domain patterns
+                if grep -q "test\." "$file" 2>/dev/null || 
+                   grep -q "example\.com" "$file" 2>/dev/null ||
+                   grep -q "localhost" "$file" 2>/dev/null; then
+                    is_test_file=true
+                fi
+            elif [[ "$file" =~ \.(crt|key)$ ]]; then
+                # Check certificate for test domains
+                if command -v openssl >/dev/null 2>&1; then
+                    local cert_subject
+                    cert_subject=$(openssl x509 -in "$file" -noout -subject 2>/dev/null | grep -o 'CN=[^,]*' | cut -d'=' -f2 || echo "")
+                    if [[ "$cert_subject" =~ (test\.|example\.com|localhost|production\.example\.com) ]]; then
+                        is_test_file=true
+                    fi
+                fi
+            fi
+            
+            if [[ "$is_test_file" == "true" ]]; then
+                if [[ "${FORCE:-false}" == "true" ]] || confirm "Remove test file: $file" "Y"; then
+                    rm -f "$file"
+                    removed_files+=("$file")
+                    log "SUCCESS" "Removed: $file"
+                fi
+            else
+                log "WARN" "Skipping non-test file: $file"
+            fi
+        fi
+    done
+    
+    # Clean up test containers and volumes
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local test_containers
+        test_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || echo "")
+        if [[ -n "$test_containers" ]]; then
+            log "INFO" "Found Docker containers that may be from testing"
+            if [[ "${FORCE:-false}" == "true" ]] || confirm "Remove test containers?" "N"; then
+                echo "$test_containers" | xargs -r docker rm -f
+                log "SUCCESS" "Test containers removed"
+            fi
+        fi
+        
+        local test_volumes
+        test_volumes=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null || echo "")
+        if [[ -n "$test_volumes" ]]; then
+            log "INFO" "Found Docker volumes that may be from testing"
+            if [[ "${FORCE:-false}" == "true" ]] || confirm "Remove test volumes? (This will delete data)" "N"; then
+                echo "$test_volumes" | xargs -r docker volume rm
+                log "SUCCESS" "Test volumes removed"
+            fi
+        fi
+    fi
+    
+    if [[ ${#removed_files[@]} -gt 0 ]]; then
+        echo
+        log "SUCCESS" "🎉 Cleanup completed. Removed ${#removed_files[@]} test files"
+        log "INFO" "You can now run a fresh installation with: $0 setup --fresh-install"
+    else
+        log "INFO" "No test files found to clean up"
     fi
 }
 
@@ -1575,6 +1620,9 @@ main() {
             ;;
         install-deps)
             install_system_dependencies "${remaining_args[@]}"
+            ;;
+        cleanup-test-files)
+            handle_cleanup_test_files "${remaining_args[@]}"
             ;;
         help|--help|-h)
             show_help

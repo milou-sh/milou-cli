@@ -443,25 +443,96 @@ start_services_with_checks() {
     ensure_docker_networks
     
     # Enhanced existing installation handling with setup mode awareness
-    if ! check_existing_installation >/dev/null 2>&1; then
-        # Existing installation found
-        local handle_conflict=false
+    # First, check if this is a truly fresh installation (no need for conflict checking)
+    local is_fresh_install=false
+    local existing_containers_count=0
+    local existing_volumes_count=0
+    local has_config=false
+    
+    # Count existing containers
+    local all_containers
+    all_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+    if [[ -n "$all_containers" ]]; then
+        existing_containers_count=$(echo "$all_containers" | wc -l)
+    fi
+    
+    # Count existing volumes
+    local existing_volumes
+    existing_volumes=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null || true)
+    if [[ -n "$existing_volumes" ]]; then
+        existing_volumes_count=$(echo "$existing_volumes" | wc -l)
+    fi
+    
+    # Check for configuration
+    if [[ -f "$ENV_FILE" ]]; then
+        has_config=true
+    fi
+    
+    # Determine if this is a fresh install
+    if [[ $existing_containers_count -eq 0 && $existing_volumes_count -eq 0 && "$has_config" == false ]]; then
+        is_fresh_install=true
+        log "DEBUG" "Fresh installation detected - skipping conflict checks"
+    elif [[ "$setup_mode" == "true" && $existing_containers_count -eq 0 ]]; then
+        # Even if we have old config/volumes, if no containers are running during setup, treat as fresh
+        is_fresh_install=true
+        log "DEBUG" "Setup mode with no running containers - treating as fresh install"
+    fi
+    
+    # Skip all conflict checking for fresh installations
+    if [[ "$is_fresh_install" == "true" ]]; then
+        log "DEBUG" "Fresh installation - proceeding directly to service startup"
+    else
+        # Only check for conflicts if there are actually running services that could conflict
+        local needs_conflict_handling=false
+        local conflict_reason=""
         
-        if [[ "$FORCE" == true ]]; then
-            log "WARN" "Force mode enabled - stopping existing services first"
-            handle_conflict=true
-        elif [[ "$setup_mode" == "true" ]]; then
-            # During setup, be more permissive about existing installations
-            log "INFO" "Setup mode detected - checking for actual conflicts..."
+        # Check for running containers that might conflict
+        local running_containers
+        running_containers=$(docker ps --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+        
+        if [[ -n "$running_containers" ]]; then
+            needs_conflict_handling=true
+            conflict_reason="running containers"
+            log "WARN" "Found running Milou containers that may conflict:"
+            echo "$running_containers" | sed 's/^/  🐳 /'
+            echo
+        fi
+        
+        # Check for port conflicts (only if not in setup mode, as setup handles this differently)
+        if [[ "$setup_mode" != "true" ]]; then
+            local -a ports_to_check=("5432" "6379" "15672" "443" "80")
+            local port_conflicts=()
             
-            # Check if services are actually running and conflicting
-            local running_containers
-            running_containers=$(docker ps --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+            for port in "${ports_to_check[@]}"; do
+                if ! check_port_availability "$port" "service" >/dev/null 2>&1; then
+                    # Check if the port is used by our own containers
+                    local port_process
+                    port_process=$(get_port_process "$port" 2>/dev/null || echo "")
+                    
+                    # If it's not our containers, it's a real conflict
+                    if [[ ! "$port_process" =~ (static-|milou) ]]; then
+                        port_conflicts+=("$port")
+                    fi
+                fi
+            done
             
-            if [[ -n "$running_containers" ]]; then
-                log "WARN" "Found running containers that may conflict:"
-                echo "$running_containers" | sed 's/^/  🐳 /'
-                echo
+            if [[ ${#port_conflicts[@]} -gt 0 ]]; then
+                needs_conflict_handling=true
+                conflict_reason="${conflict_reason:+$conflict_reason and }port conflicts"
+                log "WARN" "Found port conflicts: ${port_conflicts[*]}"
+            fi
+        fi
+        
+        # Handle conflicts if needed
+        if [[ "$needs_conflict_handling" == "true" ]]; then
+            local handle_conflict=false
+            
+            if [[ "$FORCE" == true ]]; then
+                log "WARN" "Force mode enabled - stopping existing services first"
+                handle_conflict=true
+            elif [[ "$setup_mode" == "true" ]]; then
+                # During setup, be more permissive about existing installations
+                log "INFO" "Setup mode detected - handling $conflict_reason..."
                 
                 if [[ "${INTERACTIVE:-true}" == "true" ]]; then
                     echo "During setup, we need to handle existing containers."
@@ -502,42 +573,41 @@ start_services_with_checks() {
                     handle_conflict=true
                 fi
             else
-                # No running containers - just old artifacts, safe to proceed
-                log "INFO" "Found old installation artifacts but no running services - proceeding..."
-                handle_conflict=false
-            fi
-        else
-            # Normal start command - be more strict
-            log "WARN" "Existing installation detected. Use --force to override or stop services manually."
-            log "INFO" "Available options:"
-            log "INFO" "  • Run with --force to automatically stop conflicting services"
-            log "INFO" "  • Run '$0 stop' to stop current services first"
-            log "INFO" "  • Run '$0 cleanup --complete' to remove everything and start fresh"
-            return 1
-        fi
-        
-        # Handle the conflict if needed
-        if [[ "$handle_conflict" == "true" ]]; then
-            if [[ "$FORCE" == "true" ]]; then
-                log "INFO" "Force mode - stopping and removing existing containers..."
-                stop_services || true
-                # Also remove containers to ensure clean state
-                local existing_containers
-                existing_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
-                if [[ -n "$existing_containers" ]]; then
-                    echo "$existing_containers" | xargs docker rm -f 2>/dev/null || true
-                    log "INFO" "Removed existing containers for clean restart"
-                fi
-            else
-                log "INFO" "Stopping existing services gracefully..."
-                if ! stop_services; then
-                    log "WARN" "Failed to stop some services, but continuing anyway..."
-                fi
+                # Normal start command - be more strict
+                log "WARN" "Conflicting services detected ($conflict_reason). Use --force to override or stop services manually."
+                log "INFO" "Available options:"
+                log "INFO" "  • Run with --force to automatically stop conflicting services"
+                log "INFO" "  • Run '$0 stop' to stop current services first"
+                log "INFO" "  • Run '$0 cleanup --complete' to remove everything and start fresh"
+                return 1
             fi
             
-            # Brief pause to let services fully stop
-            log "INFO" "Waiting for services to fully stop..."
-            sleep 3
+            # Handle the conflict if needed
+            if [[ "$handle_conflict" == "true" ]]; then
+                if [[ "$FORCE" == "true" ]]; then
+                    log "INFO" "Force mode - stopping and removing existing containers..."
+                    stop_services || true
+                    # Also remove containers to ensure clean state
+                    local existing_containers
+                    existing_containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
+                    if [[ -n "$existing_containers" ]]; then
+                        echo "$existing_containers" | xargs docker rm -f 2>/dev/null || true
+                        log "INFO" "Removed existing containers for clean restart"
+                    fi
+                else
+                    log "INFO" "Stopping existing services gracefully..."
+                    if ! stop_services; then
+                        log "WARN" "Failed to stop some services, but continuing anyway..."
+                    fi
+                fi
+                
+                # Brief pause to let services fully stop
+                log "INFO" "Waiting for services to fully stop..."
+                sleep 3
+            fi
+        else
+            # No conflicts detected - proceed normally
+            log "DEBUG" "No service conflicts detected - proceeding with startup"
         fi
     fi
     

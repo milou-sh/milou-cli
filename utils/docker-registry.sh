@@ -355,18 +355,30 @@ pull_images() {
         local image_name="${image_configs[$image_key]}"
         local image_url="ghcr.io/milou-sh/milou/$image_name:$tag"
         
-        echo -e "${BOLD}${BLUE}📦 [$current/$total_images] Pulling $image_name:$tag${NC}"
+        echo -e "${BOLD}${BLUE}📦 [$current/$total_images] Processing $image_name:$tag${NC}"
         echo -e "${DIM}Image: $image_url${NC}"
         echo
         
-        # Pull with progress - using docker pull with --progress=plain for better visibility
-        local pull_output
-        local pull_exit_code
+        # Check if image already exists locally
+        if docker image inspect "$image_url" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✅ Image already present locally: $image_name:$tag${NC}"
+            echo -e "${DIM}  └─ Skipping download${NC}"
+            successful_images+=("$image_url")
+            echo
+            continue
+        fi
+        
+        # Initialize variables for both modes
+        local pull_output=""
+        local pull_exit_code=0
         
         # For interactive terminals, show real-time progress
         if [[ -t 1 && "${VERBOSE:-false}" != "true" ]]; then
             # Interactive mode with live progress
-            if docker pull --progress=plain "$image_url" 2>&1 | while IFS= read -r line; do
+            local temp_output
+            temp_output=$(mktemp)
+            
+            if docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
                 # Filter and format progress output for better readability
                 if [[ "$line" =~ ^#[0-9]+ ]]; then
                     # Layer progress lines - show simplified version
@@ -382,6 +394,10 @@ pull_images() {
             else
                 pull_exit_code=$?
             fi
+            
+            # Capture the output for error reporting
+            pull_output=$(cat "$temp_output" 2>/dev/null || echo "No output captured")
+            rm -f "$temp_output"
             echo # New line after progress
         else
             # Non-interactive mode or verbose mode - capture output

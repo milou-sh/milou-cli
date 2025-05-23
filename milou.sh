@@ -28,6 +28,7 @@ declare -g INTERACTIVE=true
 declare -g AUTO_CREATE_USER=false
 declare -g SKIP_USER_CHECK=false
 declare -g FRESH_INSTALL=false
+declare -g AUTO_INSTALL_DEPS=false
 
 # Enhanced state management for user switching
 declare -g ORIGINAL_COMMAND=""
@@ -56,6 +57,7 @@ source_utility "configure.sh"
 source_utility "setup_wizard.sh"
 source_utility "user-management.sh"
 source_utility "security.sh"
+source_utility "prerequisites.sh"
 
 # Create necessary directories
 mkdir -p "${CONFIG_DIR}" "${BACKUP_DIR}" "${CACHE_DIR}"
@@ -121,6 +123,7 @@ show_help() {
     printf "    ${CYAN}security-check${NC}    Run comprehensive security assessment\n"
     printf "    ${CYAN}security-harden${NC}   Apply security hardening measures (requires sudo)\n"
     printf "    ${CYAN}security-report${NC}   Generate detailed security report\n"
+    printf "    ${CYAN}install-deps${NC}      Install system dependencies (Docker, tools, etc.)\n"
     printf "    ${CYAN}help${NC}              Show this help message\n\n"
 
     printf "${BOLD}SETUP OPTIONS:${NC}\n"
@@ -130,7 +133,8 @@ show_help() {
     printf "    ${YELLOW}--email${NC} EMAIL        Admin email address\n"
     printf "    ${YELLOW}--latest${NC}             Use latest available Docker image versions\n"
     printf "    ${YELLOW}--non-interactive${NC}    Run setup without interactive prompts\n"
-    printf "    ${YELLOW}--fresh-install${NC}      Optimized mode for fresh server installations\n\n"
+    printf "    ${YELLOW}--fresh-install${NC}      Optimized mode for fresh server installations\n"
+    printf "    ${YELLOW}--auto-install-deps${NC}  Automatically install missing dependencies\n\n"
 
     printf "${BOLD}GLOBAL OPTIONS:${NC}\n"
     printf "    ${YELLOW}--verbose${NC}            Show detailed output and debug information\n"
@@ -196,15 +200,21 @@ handle_setup() {
     
     # Enhanced fresh server detection for seamless setup
     local is_fresh_server=false
-    local is_setup_command=true
+    local auto_install_deps=false
     
-    # Check for explicit fresh install flag
+    # Check for explicit fresh install flag OR auto-detect fresh server scenario
     if [[ "${FRESH_INSTALL:-false}" == "true" ]]; then
         is_fresh_server=true
+        auto_install_deps=true
         log "INFO" "🆕 Fresh install mode enabled - optimizing setup experience"
-    # Detect fresh server scenario automatically
-    elif is_running_as_root; then
+    else
+        # Auto-detect fresh server scenario
         local fresh_indicators=0
+        
+        # Check if running as root (common for fresh servers)
+        if is_running_as_root; then
+            ((fresh_indicators++))
+        fi
         
         # Check if milou user doesn't exist
         if ! milou_user_exists; then
@@ -221,12 +231,78 @@ handle_setup() {
             ((fresh_indicators++))
         fi
         
-        # If 2 or more indicators, treat as fresh server
-        if [[ $fresh_indicators -ge 2 ]]; then
+        # Check if Docker is not installed
+        if ! command -v docker >/dev/null 2>&1; then
+            ((fresh_indicators++))
+        fi
+        
+        # If 3 or more indicators, treat as fresh server
+        if [[ $fresh_indicators -ge 3 ]]; then
             is_fresh_server=true
-            log "INFO" "🆕 Fresh server detected - optimizing setup experience"
+            auto_install_deps=true
+            log "INFO" "🆕 Fresh server detected automatically - optimizing setup experience"
         fi
     fi
+    
+    # Step 0: Prerequisites Check and Installation
+    log "STEP" "Step 0: Prerequisites Check"
+    echo
+    
+    # Quick check of prerequisites
+    local prereq_status=0
+    check_prerequisites_quick || prereq_status=$?
+    
+    if [[ $prereq_status -eq 1 ]]; then
+        # Missing critical dependencies
+        log "WARN" "❌ Missing critical dependencies detected"
+        
+        if [[ "$auto_install_deps" == "true" ]] || [[ "${AUTO_INSTALL_DEPS:-false}" == "true" ]]; then
+            log "INFO" "🔧 Automatically installing missing dependencies..."
+            
+            # Install prerequisites automatically
+            if install_prerequisites "true" "false" "$is_fresh_server"; then
+                log "SUCCESS" "✅ Prerequisites installed successfully"
+            else
+                if [[ "$is_fresh_server" == "true" ]]; then
+                    log "ERROR" "Failed to install prerequisites automatically"
+                    log "INFO" "💡 Please install dependencies manually and run setup again"
+                    exit 1
+                else
+                    log "WARN" "Failed to install prerequisites automatically, continuing anyway..."
+                fi
+            fi
+        else
+            log "INFO" "🔧 Prerequisites installation required"
+            echo
+            if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                if confirm "Install missing dependencies automatically?" "Y"; then
+                    if install_prerequisites "true" "false" "false"; then
+                        log "SUCCESS" "✅ Prerequisites installed successfully"
+                    else
+                        log "ERROR" "Failed to install prerequisites"
+                        log "INFO" "💡 Please install dependencies manually and run setup again"
+                        exit 1
+                    fi
+                else
+                    log "INFO" "Manual installation required"
+                    install_prerequisites "false" "false" "true"
+                    exit 1
+                fi
+            else
+                log "ERROR" "Non-interactive mode requires all dependencies to be pre-installed"
+                log "INFO" "💡 Install dependencies: sudo $0 setup --auto-install-deps"
+                exit 1
+            fi
+        fi
+    elif [[ $prereq_status -eq 2 ]]; then
+        # Warnings only
+        log "WARN" "⚠️  Some dependency warnings detected"
+        log "INFO" "Continuing with setup..."
+    else
+        log "SUCCESS" "✅ All prerequisites are satisfied"
+    fi
+    
+    echo
     
     # Enhanced user management for setup command
     if [[ "${SKIP_USER_CHECK:-false}" != "true" ]]; then
@@ -920,6 +996,78 @@ generate_detailed_security_report() {
     fi
 }
 
+# System dependencies installation handler
+install_system_dependencies() {
+    local enable_firewall=false
+    local auto_install=true
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --enable-firewall)
+                enable_firewall=true
+                shift
+                ;;
+            --manual)
+                auto_install=false
+                shift
+                ;;
+            --help)
+                show_install_deps_help
+                return 0
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    log "STEP" "Installing system dependencies for Milou..."
+    
+    # Check if we need root privileges
+    if [[ "$auto_install" == "true" ]] && [[ $EUID -ne 0 ]]; then
+        log "ERROR" "Root privileges required for automatic installation"
+        log "INFO" "Please run with sudo: sudo $0 install-deps"
+        log "INFO" "Or use manual mode: $0 install-deps --manual"
+        exit 1
+    fi
+    
+    if install_prerequisites "$auto_install" "$enable_firewall" "false"; then
+        log "SUCCESS" "✅ System dependencies installation completed!"
+        echo
+        log "INFO" "🎯 Next Steps:"
+        log "INFO" "  • Run: $0 setup (to configure Milou)"
+        log "INFO" "  • Run: $0 diagnose (to verify installation)"
+        
+        # If user was added to docker group, suggest relogin
+        if [[ $EUID -ne 0 ]] && ! groups | grep -q docker && command -v docker >/dev/null 2>&1; then
+            echo
+            log "INFO" "⚠️  IMPORTANT: You may need to log out and back in for Docker group changes to take effect"
+            log "INFO" "💡 Or run: newgrp docker"
+        fi
+    else
+        error_exit "System dependencies installation failed"
+    fi
+}
+
+show_install_deps_help() {
+    echo "System Dependencies Installation:"
+    echo
+    echo "  Basic installation:"
+    echo "    sudo $0 install-deps                    # Install all dependencies automatically"
+    echo
+    echo "  Advanced options:"
+    echo "    sudo $0 install-deps --enable-firewall  # Also configure basic firewall rules"
+    echo "    $0 install-deps --manual                 # Show manual installation instructions"
+    echo
+    echo "  What gets installed:"
+    echo "    • Docker and Docker Compose"
+    echo "    • Required system tools (curl, wget, jq, openssl, git)"
+    echo "    • Docker service configuration"
+    echo "    • User permissions for Docker"
+    echo "    • Optional: Basic firewall configuration"
+}
+
 # =============================================================================
 # Enhanced Help Functions
 # =============================================================================
@@ -1072,11 +1220,18 @@ main() {
                 export SKIP_USER_CHECK
                 shift
                 ;;
+            --auto-install-deps)
+                AUTO_INSTALL_DEPS=true
+                export AUTO_INSTALL_DEPS
+                shift
+                ;;
             --fresh-install)
                 FRESH_INSTALL=true
                 AUTO_CREATE_USER=true  # Automatically enable auto-create-user for fresh installs
+                AUTO_INSTALL_DEPS=true  # Automatically enable auto-install-deps for fresh installs
                 export FRESH_INSTALL
                 export AUTO_CREATE_USER
+                export AUTO_INSTALL_DEPS
                 shift
                 ;;
             --help|-h)
@@ -1187,6 +1342,9 @@ main() {
             ;;
         security-report)
             generate_detailed_security_report "${remaining_args[@]}"
+            ;;
+        install-deps)
+            install_system_dependencies "${remaining_args[@]}"
             ;;
         help|--help|-h)
             show_help

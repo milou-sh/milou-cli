@@ -655,6 +655,7 @@ check_system_requirements() {
     # Check Docker installation and version
     if ! command -v docker >/dev/null 2>&1; then
         log "ERROR" "Docker is not installed"
+        log "INFO" "💡 Install automatically: $0 setup --auto-install-deps"
         log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
         log "INFO" "💡 Quick install: curl -fsSL https://get.docker.com | sh"
         ((errors++))
@@ -680,6 +681,7 @@ check_system_requirements() {
     # Check Docker Compose
     if ! docker compose version >/dev/null 2>&1; then
         log "ERROR" "Docker Compose plugin is not installed"
+        log "INFO" "💡 Install automatically: $0 setup --auto-install-deps"
         log "INFO" "💡 Install Docker Compose: https://docs.docker.com/compose/install/"
         log "INFO" "💡 Or update Docker to get the compose plugin"
         ((errors++))
@@ -707,6 +709,7 @@ check_system_requirements() {
         log "INFO" "💡 Start Docker daemon: sudo systemctl start docker"
         log "INFO" "💡 Add user to docker group: sudo usermod -aG docker \$USER && newgrp docker"
         log "INFO" "💡 Enable Docker on boot: sudo systemctl enable docker"
+        log "INFO" "💡 Auto-configure: $0 setup --auto-install-deps"
         ((errors++))
     else
         log "SUCCESS" "Docker daemon is accessible"
@@ -784,6 +787,7 @@ check_system_requirements() {
     
     if [[ ${#missing_commands[@]} -gt 0 ]]; then
         log "WARN" "Missing required commands: ${missing_commands[*]}"
+        log "INFO" "💡 Install automatically: $0 setup --auto-install-deps"
         log "INFO" "💡 Install missing commands with your package manager"
         ((warnings++))
     else
@@ -797,7 +801,19 @@ check_system_requirements() {
     log "INFO" "  ${WARNING_EMOJI} Warnings: $warnings"
     
     if [[ $errors -gt 0 ]]; then
-        error_exit "System requirements check failed ($errors errors, $warnings warnings)"
+        echo
+        log "INFO" "🚀 Quick Fix Options:"
+        log "INFO" "  • Run: $0 setup --auto-install-deps (automatic installation)"
+        log "INFO" "  • Run: $0 setup --fresh-install (fresh server optimization)"
+        log "INFO" "  • Install dependencies manually using the suggestions above"
+        echo
+        
+        if [[ "$FORCE" == true ]]; then
+            log "WARN" "Continuing with --force flag despite $errors errors"
+            return 0
+        else
+            error_exit "System requirements check failed ($errors errors, $warnings warnings)"
+        fi
     elif [[ $warnings -gt 0 ]]; then
         log "WARN" "System requirements check completed with warnings ($warnings warnings)"
         if [[ "$FORCE" != true ]]; then

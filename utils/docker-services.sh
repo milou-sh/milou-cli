@@ -12,20 +12,85 @@
 # Run docker-compose with proper env file loading
 run_docker_compose() {
     local compose_file="static/docker-compose.yml"
-    local env_file="${SCRIPT_DIR}/.env"
+    local env_file
     
-    # Ensure we're in the right directory
-    cd "$SCRIPT_DIR" || error_exit "Cannot change to script directory"
-    
-    # Check if env file exists
-    if [[ ! -f "$env_file" ]]; then
-        error_exit "Environment file not found: $env_file"
+    # Enhanced env file detection that works after user switching
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        env_file="${SCRIPT_DIR}/.env"
+    elif [[ -f "$(pwd)/.env" ]]; then
+        env_file="$(pwd)/.env"
+    elif [[ -f "${PWD}/.env" ]]; then
+        env_file="${PWD}/.env"
+    else
+        # Try to find .env in milou user home directory if we switched users
+        local milou_env_file=""
+        if [[ "$(whoami)" == "milou" ]]; then
+            milou_env_file="$HOME/milou-cli/.env"
+            if [[ -f "$milou_env_file" ]]; then
+                env_file="$milou_env_file"
+            fi
+        fi
+        
+        # Final fallback - search in common locations
+        if [[ -z "$env_file" ]]; then
+            local -a search_paths=(
+                "${SCRIPT_DIR}/.env"
+                "/home/milou/milou-cli/.env"
+                "/opt/milou-cli/.env"
+                "/usr/local/milou-cli/.env"
+                "./.env"
+            )
+            
+            for path in "${search_paths[@]}"; do
+                if [[ -f "$path" ]]; then
+                    env_file="$path"
+                    break
+                fi
+            done
+        fi
     fi
     
-    # Check if compose file exists
+    # Ensure we're in the right directory (try to resolve from env file location)
+    local working_dir
+    if [[ -n "$env_file" ]]; then
+        working_dir="$(dirname "$env_file")"
+    else
+        working_dir="${SCRIPT_DIR}"
+    fi
+    
+    if [[ -d "$working_dir" ]]; then
+        cd "$working_dir" || error_exit "Cannot change to working directory: $working_dir"
+    else
+        cd "$SCRIPT_DIR" || error_exit "Cannot change to script directory: $SCRIPT_DIR"
+    fi
+    
+    # Update compose file path relative to working directory
     if [[ ! -f "$compose_file" ]]; then
-        error_exit "Docker Compose file not found: $compose_file"
+        compose_file="$(pwd)/static/docker-compose.yml"
+        if [[ ! -f "$compose_file" ]]; then
+            error_exit "Docker Compose file not found: $compose_file"
+        fi
     fi
+    
+    # Final validation of env file
+    if [[ -z "$env_file" || ! -f "$env_file" ]]; then
+        log "ERROR" "Environment file not found!"
+        log "ERROR" "Searched paths:"
+        log "ERROR" "  - ${SCRIPT_DIR}/.env"
+        log "ERROR" "  - $(pwd)/.env"
+        log "ERROR" "  - /home/milou/milou-cli/.env"
+        error_exit "Environment file not found. Please run setup first."
+    fi
+    
+    # Validate env file has content
+    if [[ ! -s "$env_file" ]]; then
+        error_exit "Environment file is empty: $env_file"
+    fi
+    
+    # Debug logging for troubleshooting
+    log "DEBUG" "Using environment file: $env_file"
+    log "DEBUG" "Using compose file: $compose_file"
+    log "DEBUG" "Working directory: $(pwd)"
     
     # Run docker-compose with proper env file
     log "TRACE" "Running: docker compose --env-file '$env_file' -f '$compose_file' $*"

@@ -622,11 +622,39 @@ validate_configuration() {
 
 # Detect existing Milou installation and configuration
 detect_existing_installation() {
-    local env_file="${SCRIPT_DIR}/.env"
+    local env_file
     local has_config=false
     local has_containers=false
     local has_volumes=false
     local config_age_days=0
+    
+    # Enhanced env file detection that works after user switching
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        env_file="${SCRIPT_DIR}/.env"
+    elif [[ -f "$(pwd)/.env" ]]; then
+        env_file="$(pwd)/.env"
+    else
+        # Try to find .env in milou user home directory if we switched users
+        if [[ "$(whoami)" == "milou" && -f "$HOME/milou-cli/.env" ]]; then
+            env_file="$HOME/milou-cli/.env"
+        else
+            # Search in common locations
+            local -a search_paths=(
+                "${SCRIPT_DIR}/.env"
+                "/home/milou/milou-cli/.env"
+                "/opt/milou-cli/.env"
+                "/usr/local/milou-cli/.env"
+                "./.env"
+            )
+            
+            for path in "${search_paths[@]}"; do
+                if [[ -f "$path" ]]; then
+                    env_file="$path"
+                    break
+                fi
+            done
+        fi
+    fi
     
     # Check for configuration file
     if [[ -f "$env_file" ]]; then
@@ -638,6 +666,9 @@ detect_existing_installation() {
             local current_time=$(date +%s)
             config_age_days=$(( (current_time - file_modified) / 86400 ))
         fi
+        log "DEBUG" "Found existing configuration: $env_file (${config_age_days} days old)"
+    else
+        log "DEBUG" "No existing configuration found"
     fi
     
     # Check for existing containers
@@ -646,6 +677,7 @@ detect_existing_installation() {
         container_count=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
         if [[ $container_count -gt 0 ]]; then
             has_containers=true
+            log "DEBUG" "Found $container_count existing Milou containers"
         fi
         
         # Check for existing volumes
@@ -653,6 +685,7 @@ detect_existing_installation() {
         volume_count=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null | wc -l || echo "0")
         if [[ $volume_count -gt 0 ]]; then
             has_volumes=true
+            log "DEBUG" "Found $volume_count existing Milou volumes"
         fi
     fi
     
@@ -661,30 +694,34 @@ detect_existing_installation() {
     export MILOU_EXISTING_CONTAINERS="$has_containers"
     export MILOU_EXISTING_VOLUMES="$has_volumes"
     export MILOU_CONFIG_AGE_DAYS="$config_age_days"
+    export MILOU_EXISTING_ENV_FILE="$env_file"  # Store the actual path found
     
     # Return codes: 0 = fresh install, 1 = existing installation
     if [[ "$has_config" == "true" || "$has_containers" == "true" || "$has_volumes" == "true" ]]; then
+        log "DEBUG" "Existing installation detected (config: $has_config, containers: $has_containers, volumes: $has_volumes)"
         return 1  # Existing installation detected
     else
+        log "DEBUG" "Fresh installation detected"
         return 0  # Fresh installation
     fi
 }
 
 # Show existing installation summary
 show_existing_installation_summary() {
-    local env_file="${SCRIPT_DIR}/.env"
+    local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
     
     echo
     log "INFO" "📋 Existing Installation Summary:"
     
     if [[ "${MILOU_EXISTING_CONFIG:-false}" == "true" ]]; then
         log "INFO" "  • Configuration file: Found (${MILOU_CONFIG_AGE_DAYS:-0} days old)"
+        log "INFO" "    Path: $env_file"
         
         # Show key configuration details
         if [[ -f "$env_file" ]]; then
             local domain ssl_path
-            domain=$(get_config_value "SERVER_NAME" "unknown")
-            ssl_path=$(get_config_value "SSL_CERT_PATH" "unknown")
+            domain=$(grep "^SERVER_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "unknown")
+            ssl_path=$(grep "^SSL_CERT_PATH=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "unknown")
             log "INFO" "    - Domain: $domain"
             log "INFO" "    - SSL Path: $ssl_path"
         fi
@@ -730,15 +767,16 @@ show_existing_installation_summary() {
 
 # Preserve existing database credentials from current configuration
 preserve_database_credentials() {
-    local env_file="${SCRIPT_DIR}/.env"
+    # Use the detected env file path or fall back to default
+    local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
     local preserved_vars=()
     
     if [[ ! -f "$env_file" ]]; then
-        log "DEBUG" "No existing configuration to preserve"
+        log "DEBUG" "No existing configuration to preserve at: $env_file"
         return 1
     fi
     
-    log "DEBUG" "Preserving database credentials from existing configuration..."
+    log "DEBUG" "Preserving database credentials from: $env_file"
     
     # Database credentials to preserve
     local -a db_vars=(
@@ -776,7 +814,8 @@ preserve_database_credentials() {
     
     for var in "${db_vars[@]}" "${redis_vars[@]}" "${rabbitmq_vars[@]}" "${security_vars[@]}"; do
         local value
-        value=$(get_config_value "$var" "")
+        # Use the env file directly for reading values
+        value=$(grep "^${var}=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
         if [[ -n "$value" ]]; then
             PRESERVED_CONFIG["$var"]="$value"
             preserved_vars+=("$var")
@@ -785,11 +824,11 @@ preserve_database_credentials() {
     done
     
     if [[ ${#preserved_vars[@]} -gt 0 ]]; then
-        log "SUCCESS" "Preserved ${#preserved_vars[@]} configuration values"
+        log "SUCCESS" "Preserved ${#preserved_vars[@]} configuration values from: $env_file"
         log "DEBUG" "Preserved variables: ${preserved_vars[*]}"
         return 0
     else
-        log "WARN" "No configuration values found to preserve"
+        log "WARN" "No configuration values found to preserve in: $env_file"
         return 1
     fi
 }

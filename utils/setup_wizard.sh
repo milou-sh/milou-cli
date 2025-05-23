@@ -370,8 +370,14 @@ interactive_setup_wizard() {
     echo
     
     # Detect existing installation and get details
-    if ! detect_existing_installation 2>/dev/null; then
-        # Existing installation detected
+    if detect_existing_installation; then
+        # Fresh installation detected (return 0)
+        export PRESERVE_EXISTING=false
+        export FRESH_INSTALL=true
+        log "SUCCESS" "Fresh installation detected - proceeding with new setup"
+        echo
+    else
+        # Existing installation detected (return 1)
         show_existing_installation_summary
         
         echo "An existing Milou installation was detected. How would you like to proceed?"
@@ -428,12 +434,6 @@ interactive_setup_wizard() {
             esac
         done
         echo
-    else
-        # Fresh installation
-        export PRESERVE_EXISTING=false
-        export FRESH_INSTALL=true
-        log "SUCCESS" "Fresh installation detected - proceeding with new setup"
-        echo
     fi
 
     # Step 1: System Prerequisites
@@ -470,7 +470,8 @@ interactive_setup_wizard() {
     # Check if preserving existing config and get current domain
     if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
         local current_domain
-        current_domain=$(get_config_value "SERVER_NAME" "localhost" 2>/dev/null || echo "localhost")
+        local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
+        current_domain=$(grep "^SERVER_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "localhost")
         if [[ "$current_domain" != "localhost" ]]; then
             echo "Current domain: $current_domain"
             if confirm "Keep existing domain ($current_domain)?" "Y"; then
@@ -566,7 +567,8 @@ interactive_setup_wizard() {
     # Check if preserving existing and get current email
     if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
         local current_email
-        current_email=$(get_config_value "MILOU_ADMIN_EMAIL" "" 2>/dev/null || echo "")
+        local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
+        current_email=$(grep "^MILOU_ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
         if [[ -n "$current_email" ]]; then
             echo "Current admin email: $current_email"
             if confirm "Keep existing admin email ($current_email)?" "Y"; then

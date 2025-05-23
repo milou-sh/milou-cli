@@ -348,7 +348,7 @@ install_required_tools() {
     local -a missing_tools=()
     
     # Check for missing tools
-    local -a tools_to_check=("curl" "wget" "jq" "openssl" "git")
+    local -a tools_to_check=("curl" "wget" "jq" "openssl" "git" "date" "sed" "grep" "awk" "timeout")
     
     for tool in "${tools_to_check[@]}"; do
         if ! command -v "$tool" >/dev/null 2>&1; then
@@ -373,6 +373,7 @@ install_required_tools() {
                     "jq") required_packages+=("jq") ;;
                     "openssl") required_packages+=("openssl") ;;
                     "git") required_packages+=("git") ;;
+                    "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
             sudo apt-get install -y "${required_packages[@]}"
@@ -385,6 +386,7 @@ install_required_tools() {
                     "jq") required_packages+=("jq") ;;
                     "openssl") required_packages+=("openssl") ;;
                     "git") required_packages+=("git") ;;
+                    "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
             sudo $pkg_manager install -y "${required_packages[@]}"
@@ -397,6 +399,7 @@ install_required_tools() {
                     "jq") required_packages+=("jq") ;;
                     "openssl") required_packages+=("openssl") ;;
                     "git") required_packages+=("git") ;;
+                    "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
             sudo pacman -S --noconfirm "${required_packages[@]}"
@@ -409,6 +412,7 @@ install_required_tools() {
                     "jq") required_packages+=("jq") ;;
                     "openssl") required_packages+=("openssl") ;;
                     "git") required_packages+=("git") ;;
+                    "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
             sudo zypper install -y "${required_packages[@]}"

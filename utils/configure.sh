@@ -627,6 +627,7 @@ detect_existing_installation() {
     local has_containers=false
     local has_volumes=false
     local config_age_days=0
+    local is_real_installation=false
     
     # Enhanced env file detection that works after user switching
     if [[ -f "${SCRIPT_DIR}/.env" ]]; then
@@ -656,9 +657,8 @@ detect_existing_installation() {
         fi
     fi
     
-    # Check for configuration file
+    # Check for configuration file and validate if it's a real installation
     if [[ -f "$env_file" ]]; then
-        has_config=true
         # Calculate age in days
         if command -v stat >/dev/null 2>&1; then
             local file_modified
@@ -666,7 +666,23 @@ detect_existing_installation() {
             local current_time=$(date +%s)
             config_age_days=$(( (current_time - file_modified) / 86400 ))
         fi
-        log "DEBUG" "Found existing configuration: $env_file (${config_age_days} days old)"
+        
+        # Check if this looks like a real installation vs test data
+        local server_name
+        server_name=$(grep "^SERVER_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        
+        # Consider it a real installation if:
+        # 1. It has a non-test domain name, OR
+        # 2. It's older than 1 day, OR  
+        # 3. There are corresponding containers/volumes
+        if [[ -n "$server_name" && ! "$server_name" =~ ^(test\.|localhost|127\.|example\.com|test\.example\.com)$ ]] ||
+           [[ $config_age_days -gt 1 ]]; then
+            has_config=true
+            is_real_installation=true
+            log "DEBUG" "Found real configuration: $env_file (${config_age_days} days old, domain: $server_name)"
+        else
+            log "DEBUG" "Found test/temporary configuration: $env_file (domain: $server_name, age: ${config_age_days} days)"
+        fi
     else
         log "DEBUG" "No existing configuration found"
     fi
@@ -677,6 +693,7 @@ detect_existing_installation() {
         container_count=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
         if [[ $container_count -gt 0 ]]; then
             has_containers=true
+            is_real_installation=true
             log "DEBUG" "Found $container_count existing Milou containers"
         fi
         
@@ -685,6 +702,7 @@ detect_existing_installation() {
         volume_count=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null | wc -l || echo "0")
         if [[ $volume_count -gt 0 ]]; then
             has_volumes=true
+            is_real_installation=true
             log "DEBUG" "Found $volume_count existing Milou volumes"
         fi
     fi
@@ -695,13 +713,15 @@ detect_existing_installation() {
     export MILOU_EXISTING_VOLUMES="$has_volumes"
     export MILOU_CONFIG_AGE_DAYS="$config_age_days"
     export MILOU_EXISTING_ENV_FILE="$env_file"  # Store the actual path found
+    export MILOU_IS_REAL_INSTALLATION="$is_real_installation"
     
     # Return codes: 0 = fresh install, 1 = existing installation
-    if [[ "$has_config" == "true" || "$has_containers" == "true" || "$has_volumes" == "true" ]]; then
-        log "DEBUG" "Existing installation detected (config: $has_config, containers: $has_containers, volumes: $has_volumes)"
+    # Only return 1 (existing) if we found evidence of a real installation
+    if [[ "$is_real_installation" == "true" ]]; then
+        log "DEBUG" "Real installation detected (config: $has_config, containers: $has_containers, volumes: $has_volumes)"
         return 1  # Existing installation detected
     else
-        log "DEBUG" "Fresh installation detected"
+        log "DEBUG" "Fresh installation detected (test files ignored)"
         return 0  # Fresh installation
     fi
 }

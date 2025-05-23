@@ -557,25 +557,32 @@ show_certificate_info() {
     local expected_domain="$2"
     
     if [[ ! -f "$cert_file" ]] || ! command -v openssl >/dev/null 2>&1; then
+        log "WARN" "Certificate file not found or openssl not available"
         return 1
     fi
     
     log "INFO" "📄 Current Certificate Information:"
     
-    # Get certificate subject and issuer
+    # Get certificate subject and issuer with timeout and error handling
     local subject issuer not_before not_after
-    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
-    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//')
-    not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | cut -d'=' -f2)
-    not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d'=' -f2)
+    subject=$(timeout 10 openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//' || echo "")
+    issuer=$(timeout 10 openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//' || echo "")
+    not_before=$(timeout 10 openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | cut -d'=' -f2 || echo "")
+    not_after=$(timeout 10 openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d'=' -f2 || echo "")
+    
+    # Validate that we got basic certificate info
+    if [[ -z "$subject" && -z "$issuer" ]]; then
+        log "ERROR" "Failed to read certificate information"
+        return 1
+    fi
     
     # Extract Common Name from subject
     local cn
-    cn=$(echo "$subject" | grep -o 'CN=[^,]*' | cut -d'=' -f2 | sed 's/^ *//')
+    cn=$(echo "$subject" | grep -o 'CN=[^,]*' | cut -d'=' -f2 | sed 's/^ *//' | sed 's/ *$//' || echo "Unknown")
     
-    # Extract Subject Alternative Names
+    # Extract Subject Alternative Names with timeout
     local san
-    san=$(openssl x509 -in "$cert_file" -noout -ext subjectAltName 2>/dev/null | grep -v "Subject Alternative Name" | tr ',' '\n' | sed 's/^ *DNS://' | sed 's/^ *IP:/IP: /' | grep -v '^$' | sort | uniq | tr '\n' ', ' | sed 's/, $//')
+    san=$(timeout 10 openssl x509 -in "$cert_file" -noout -ext subjectAltName 2>/dev/null | grep -v "Subject Alternative Name" | tr ',' '\n' | sed 's/^ *DNS://' | sed 's/^ *IP:/IP: /' | grep -v '^$' | sort | uniq | tr '\n' ', ' | sed 's/, $//' || echo "")
     
     echo "  🏷️  Domain: ${cn:-Unknown}"
     [[ -n "$san" ]] && echo "  🔗 Alt Names: $san"
@@ -591,27 +598,61 @@ show_certificate_info() {
     fi
     echo "  📋 Type: $cert_type"
     
-    # Show validity period
+    # Show validity period with improved date parsing
     if [[ -n "$not_before" && -n "$not_after" ]]; then
-        echo "  📅 Valid: $(date -d "$not_before" "+%Y-%m-%d" 2>/dev/null || echo "$not_before") to $(date -d "$not_after" "+%Y-%m-%d" 2>/dev/null || echo "$not_after")"
+        # Try to format dates in a more readable way
+        local formatted_start formatted_end
+        formatted_start=$(echo "$not_before" | sed 's/GMT$//' | sed 's/ *$//' || echo "$not_before")
+        formatted_end=$(echo "$not_after" | sed 's/GMT$//' | sed 's/ *$//' || echo "$not_after")
         
-        # Calculate days until expiry
+        echo "  📅 Valid: $formatted_start to $formatted_end"
+        
+        # Calculate days until expiry with improved error handling
         local expiry_timestamp current_timestamp
-        expiry_timestamp=$(date -d "$not_after" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null)
-        current_timestamp=$(date +%s)
+        current_timestamp=$(date +%s 2>/dev/null || echo "")
         
-        if [[ -n "$expiry_timestamp" ]]; then
-            local days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
-            if [[ $days_until_expiry -le 0 ]]; then
-                echo "  ⚠️  Status: EXPIRED"
-            elif [[ $days_until_expiry -le 7 ]]; then
-                echo "  ⚠️  Status: Expires in $days_until_expiry days (renewal needed)"
-            elif [[ $days_until_expiry -le 30 ]]; then
-                echo "  ⚠️  Status: Expires in $days_until_expiry days"
-            else
-                echo "  ✅ Status: Valid for $days_until_expiry more days"
+        # Try different date parsing methods
+        if [[ -n "$current_timestamp" ]]; then
+            # Try GNU date format first (Linux)
+            expiry_timestamp=$(date -d "$not_after" +%s 2>/dev/null || echo "")
+            
+            # If that fails, try BSD date format (macOS)
+            if [[ -z "$expiry_timestamp" ]]; then
+                expiry_timestamp=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null || echo "")
             fi
+            
+            # If both fail, try a simpler approach with just the year
+            if [[ -z "$expiry_timestamp" ]]; then
+                local year
+                year=$(echo "$not_after" | grep -o '[0-9]\{4\}' | tail -1)
+                if [[ -n "$year" ]]; then
+                    # Basic estimation: if year is current or future, assume valid
+                    local current_year
+                    current_year=$(date +%Y 2>/dev/null || echo "")
+                    if [[ -n "$current_year" && "$year" -ge "$current_year" ]]; then
+                        echo "  ✅ Status: Certificate appears valid (expires $year)"
+                    else
+                        echo "  ⚠️  Status: Certificate may be expired (expired $year)"
+                    fi
+                fi
+            else
+                # Calculate days until expiry
+                local days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
+                if [[ $days_until_expiry -le 0 ]]; then
+                    echo "  ⚠️  Status: EXPIRED"
+                elif [[ $days_until_expiry -le 7 ]]; then
+                    echo "  ⚠️  Status: Expires in $days_until_expiry days (renewal needed)"
+                elif [[ $days_until_expiry -le 30 ]]; then
+                    echo "  ⚠️  Status: Expires in $days_until_expiry days"
+                else
+                    echo "  ✅ Status: Valid for $days_until_expiry more days"
+                fi
+            fi
+        else
+            echo "  ⚠️  Status: Unable to determine expiry"
         fi
+    else
+        echo "  ⚠️  Unable to read certificate validity dates"
     fi
     
     # Domain match check

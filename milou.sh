@@ -124,6 +124,7 @@ show_help() {
     printf "    ${CYAN}security-harden${NC}   Apply security hardening measures (requires sudo)\n"
     printf "    ${CYAN}security-report${NC}   Generate detailed security report\n"
     printf "    ${CYAN}install-deps${NC}      Install system dependencies (Docker, tools, etc.)\n"
+    printf "    ${CYAN}cleanup-test-files${NC} Remove test configuration files\n"
     printf "    ${CYAN}help${NC}              Show this help message\n\n"
 
     printf "${BOLD}SETUP OPTIONS:${NC}\n"

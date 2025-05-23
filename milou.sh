@@ -25,6 +25,7 @@ source "${SCRIPT_DIR}/utils/ssl.sh"
 source "${SCRIPT_DIR}/utils/backup.sh"
 source "${SCRIPT_DIR}/utils/update.sh"
 source "${SCRIPT_DIR}/utils/utils.sh"
+source "${SCRIPT_DIR}/utils/setup_wizard.sh"
 
 # Create config directory if it doesn't exist
 mkdir -p "${CONFIG_DIR}"
@@ -110,12 +111,16 @@ function show_usage() {
     echo "Usage: $(basename "$0") [command] [options]"
     echo ""
     echo "Commands:"
-    echo "  setup             Initial setup and configuration"
+    echo "  setup             Interactive setup wizard (recommended for first-time setup)"
     echo "  start             Start all services"
     echo "  stop              Stop all services"
     echo "  restart           Restart all services"
     echo "  status            Show status of services"
     echo "  backup            Create a backup"
+    echo "    --type TYPE     Backup type (full|config) [default: full]"
+    echo "    --config-only   Create configuration-only backup"  
+    echo "    --list          List available backups"
+    echo "    --clean [DAYS]  Clean old backups (default: 30 days)"
     echo "  restore [file]    Restore from a backup file"
     echo "  update            Update to the latest version"
     echo "  logs [service]    View logs for all or specific service"
@@ -130,9 +135,11 @@ function show_usage() {
     echo "  --domain DOMAIN   Domain name for the installation"
     echo "  --force           Force operation without confirmation"
     echo "  --verbose         Show detailed output"
+    echo "  --non-interactive Run setup without interactive prompts"
     echo ""
     echo "Examples:"
-    echo "  $(basename "$0") setup --token ghp_1234abcd... --domain example.com"
+    echo "  $(basename "$0") setup                    # Interactive setup wizard (recommended)"
+    echo "  $(basename "$0") setup --token ghp_1234abcd... --domain example.com  # Non-interactive"
     echo "  $(basename "$0") start"
     echo "  $(basename "$0") cert --ssl-path /path/to/certificates"
     echo ""
@@ -149,19 +156,18 @@ function show_usage() {
 function handle_setup() {
     log "INFO" "Starting Milou setup..."
     
-    # Check prerequisites first
-    check_prerequisites
-    
     # Parse setup-specific arguments
     local github_token=""
     local domain="localhost"
     local ssl_path="${DEFAULT_SSL_PATH}"
     local force=false
+    local interactive=true
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --token)
                 github_token="$2"
+                interactive=false
                 shift 2
                 ;;
             --domain)
@@ -176,16 +182,32 @@ function handle_setup() {
                 force=true
                 shift
                 ;;
+            --non-interactive)
+                interactive=false
+                shift
+                ;;
             *)
                 shift
                 ;;
         esac
     done
     
-    # Validate required parameters
-    if [[ -z "$github_token" ]]; then
-        error_exit "GitHub token is required for setup. Use --token to provide a GitHub Personal Access Token."
+    # If no token provided and not interactive, show help
+    if [[ -z "$github_token" && "$interactive" == "false" ]]; then
+        error_exit "GitHub token is required for non-interactive setup. Use --token to provide a GitHub Personal Access Token."
     fi
+    
+    # Run interactive setup if no arguments provided or interactive mode requested
+    if [[ "$interactive" == "true" && -z "$github_token" ]]; then
+        interactive_setup
+        return $?
+    fi
+    
+    # Non-interactive setup (original functionality)
+    log "INFO" "Running non-interactive setup..."
+    
+    # Check prerequisites first
+    check_prerequisites
     
     # Validate GitHub token format
     if ! validate_github_token "$github_token"; then
@@ -279,8 +301,41 @@ function handle_status() {
 }
 
 function handle_backup() {
-    log "INFO" "Creating backup..."
-    if create_backup; then
+    local backup_type="full"
+    
+    # Parse backup arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type)
+                backup_type="$2"
+                shift 2
+                ;;
+            --config-only)
+                backup_type="config"
+                shift
+                ;;
+            --list)
+                list_backups
+                return $?
+                ;;
+            --clean)
+                local days="${2:-30}"
+                if [[ "$2" =~ ^[0-9]+$ ]]; then
+                    shift 2
+                else
+                    shift
+                fi
+                clean_old_backups "$days"
+                return $?
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    log "INFO" "Creating $backup_type backup..."
+    if create_backup "$backup_type"; then
         log "INFO" "Backup created successfully"
     else
         error_exit "Failed to create backup"
@@ -418,7 +473,7 @@ case "$COMMAND" in
         handle_status
         ;;
     backup)
-        handle_backup
+        handle_backup "$@"
         ;;
     restore)
         handle_restore "$1"

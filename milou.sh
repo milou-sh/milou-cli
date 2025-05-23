@@ -22,7 +22,7 @@ declare -g VERBOSE=false
 declare -g FORCE=false
 declare -g DRY_RUN=false
 declare -g GITHUB_TOKEN=""
-declare -g USE_LATEST_IMAGES=false
+declare -g USE_LATEST_IMAGES=true
 declare -g SKIP_VERSION_CHECK=false
 declare -g INTERACTIVE=true
 declare -g AUTO_CREATE_USER=false
@@ -69,19 +69,33 @@ touch "${LOG_FILE}"
 
 # Save the original command and arguments for user switching
 preserve_original_command() {
-    ORIGINAL_COMMAND="${1:-}"
-    shift 2>/dev/null || true
+    # Store everything as arguments for proper reconstruction
     ORIGINAL_ARGUMENTS=("$@")
-    export ORIGINAL_COMMAND
-    # Export the arguments as a string for simpler handling in subshells
+    export ORIGINAL_COMMAND="${1:-}"
+    # Export ALL arguments including the command for simpler handling in subshells
     export ORIGINAL_ARGUMENTS_STR="$(printf '%q ' "$@")"
+    
+    # Enhanced logging with token awareness (but don't log the actual token)
+    local debug_args_str="$ORIGINAL_ARGUMENTS_STR"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        debug_args_str=$(echo "$debug_args_str" | sed 's/ghp_[A-Za-z0-9]\{36\}/***TOKEN***/g')
+    fi
+    
     log "DEBUG" "Preserved command: '$ORIGINAL_COMMAND' with ${#ORIGINAL_ARGUMENTS[@]} arguments"
+    log "DEBUG" "All arguments (sanitized): $debug_args_str"
+    
+    # Ensure the GitHub token is properly exported for user switching
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        export GITHUB_TOKEN
+        log "DEBUG" "GitHub token preserved for user switching (length: ${#GITHUB_TOKEN})"
+    fi
 }
 
 # Check if we're resuming after a user switch
 check_user_switch_resume() {
     if [[ "${USER_SWITCH_IN_PROGRESS:-false}" == "true" && -n "${ORIGINAL_COMMAND:-}" ]]; then
         log "DEBUG" "Resuming after user switch with command: $ORIGINAL_COMMAND"
+        log "DEBUG" "Original arguments: ${ORIGINAL_ARGUMENTS_STR:-none}"
         return 0
     fi
     return 1
@@ -132,7 +146,8 @@ show_help() {
     printf "    ${YELLOW}--domain${NC} DOMAIN      Domain name for the installation\n"
     printf "    ${YELLOW}--ssl-path${NC} PATH      Path to SSL certificates directory\n"
     printf "    ${YELLOW}--email${NC} EMAIL        Admin email address\n"
-    printf "    ${YELLOW}--latest${NC}             Use latest available Docker image versions\n"
+    printf "    ${YELLOW}--latest${NC}             Use latest available Docker image versions (default)\n"
+    printf "    ${YELLOW}--fixed-version${NC}      Use specific version (v1.0.0) instead of latest\n"
     printf "    ${YELLOW}--non-interactive${NC}    Run setup without interactive prompts\n"
     printf "    ${YELLOW}--fresh-install${NC}      Optimized mode for fresh server installations\n"
     printf "    ${YELLOW}--auto-install-deps${NC}  Automatically install missing dependencies\n\n"
@@ -160,7 +175,7 @@ show_help() {
     printf "    sudo $(basename "$0") setup --fresh-install --auto-install-deps\n\n"
     
     printf "    ${DIM}# Non-interactive setup${NC}\n"
-    printf "    $(basename "$0") setup --token ghp_xxxx --domain example.com --latest\n\n"
+    printf "    $(basename "$0") setup --token ghp_xxxx --domain example.com\n\n"
     
     printf "    ${DIM}# Start services${NC}\n"
     printf "    $(basename "$0") start\n\n"
@@ -203,9 +218,6 @@ show_help() {
 # =============================================================================
 
 handle_setup() {
-    # CRITICAL FIX: Preserve command state BEFORE user management check
-    preserve_original_command "setup" "$@"
-    
     echo
     echo -e "${BOLD}${PURPLE}🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION}${NC}"
     echo -e "${BOLD}${PURPLE}═══════════════════════════════════════════════════${NC}"
@@ -1415,8 +1427,10 @@ main() {
         exit 0
     fi
 
-    # Store original arguments for state preservation
+    # Store original arguments for state preservation BEFORE any parsing
     local original_args=("$@")
+    preserve_original_command "$@"
+    
     local command="$1"
     shift
 
@@ -1480,6 +1494,11 @@ main() {
                 export USE_LATEST_IMAGES
                 shift
                 ;;
+            --fixed-version)
+                USE_LATEST_IMAGES=false
+                export USE_LATEST_IMAGES
+                shift
+                ;;
             --non-interactive)
                 INTERACTIVE=false
                 export INTERACTIVE
@@ -1534,10 +1553,123 @@ main() {
     # Check if we're resuming after user switch
     if check_user_switch_resume; then
         log "DEBUG" "Resuming operation after user switch"
-        command="$ORIGINAL_COMMAND"
-        # Parse the arguments from the string
+        
+        # Re-parse the original arguments completely
         if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
-            eval "remaining_args=($ORIGINAL_ARGUMENTS_STR)"
+            log "DEBUG" "Re-parsing original arguments: $ORIGINAL_ARGUMENTS_STR"
+            
+            # Reset everything and re-parse from the original arguments
+            eval "set -- $ORIGINAL_ARGUMENTS_STR"
+            command="$1"
+            shift
+            
+            # Re-parse flags
+            remaining_args=()
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --verbose)
+                        VERBOSE=true
+                        export VERBOSE
+                        shift
+                        ;;
+                    --force)
+                        FORCE=true
+                        export FORCE
+                        shift
+                        ;;
+                    --dry-run)
+                        DRY_RUN=true
+                        export DRY_RUN
+                        shift
+                        ;;
+                    --token)
+                        # Token should already be in environment, but handle it anyway
+                        if [[ -n "${2:-}" ]]; then
+                            GITHUB_TOKEN="$2"
+                            export GITHUB_TOKEN
+                            shift 2
+                        else
+                            shift  # Skip malformed --token
+                        fi
+                        ;;
+                    --domain)
+                        if [[ -n "${2:-}" ]]; then
+                            DOMAIN="$2"
+                            export DOMAIN
+                            shift 2
+                        else
+                            shift
+                        fi
+                        ;;
+                    --ssl-path)
+                        if [[ -n "${2:-}" ]]; then
+                            SSL_PATH="$2"
+                            export SSL_PATH
+                            shift 2
+                        else
+                            shift
+                        fi
+                        ;;
+                    --email)
+                        if [[ -n "${2:-}" ]]; then
+                            ADMIN_EMAIL="$2"
+                            export ADMIN_EMAIL
+                            shift 2
+                        else
+                            shift
+                        fi
+                        ;;
+                    --latest)
+                        USE_LATEST_IMAGES=true
+                        export USE_LATEST_IMAGES
+                        shift
+                        ;;
+                    --fixed-version)
+                        USE_LATEST_IMAGES=false
+                        export USE_LATEST_IMAGES
+                        shift
+                        ;;
+                    --non-interactive)
+                        INTERACTIVE=false
+                        export INTERACTIVE
+                        shift
+                        ;;
+                    --auto-create-user)
+                        AUTO_CREATE_USER=true
+                        export AUTO_CREATE_USER
+                        shift
+                        ;;
+                    --skip-user-check)
+                        SKIP_USER_CHECK=true
+                        export SKIP_USER_CHECK
+                        shift
+                        ;;
+                    --auto-install-deps)
+                        AUTO_INSTALL_DEPS=true
+                        export AUTO_INSTALL_DEPS
+                        shift
+                        ;;
+                    --fresh-install)
+                        FRESH_INSTALL=true
+                        AUTO_CREATE_USER=true
+                        AUTO_INSTALL_DEPS=true
+                        export FRESH_INSTALL
+                        export AUTO_CREATE_USER
+                        export AUTO_INSTALL_DEPS
+                        shift
+                        ;;
+                    *)
+                        remaining_args+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+            
+            log "DEBUG" "Resumed with command: $command, verbose: $VERBOSE, remaining args: ${#remaining_args[@]}"
+        else
+            # Fallback to ORIGINAL_COMMAND only
+            command="$ORIGINAL_COMMAND"
+            remaining_args=()
         fi
     fi
     

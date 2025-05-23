@@ -564,14 +564,14 @@ interactive_setup_wizard() {
     # Step 5: Image Version Strategy
     echo -e "${BOLD}Step 5: Image Version Strategy${NC}"
     echo "Choose Docker image versioning strategy:"
-    echo "  1) Use latest available versions (recommended)"
+    echo "  1) Use latest available versions (default, recommended)"
     echo "  2) Use specific version (v1.0.0)"
     echo
-    local use_latest=false
+    local use_latest=true  # Default to latest images
     while true; do
-        echo -ne "${CYAN}Enter your choice (1-2): ${NC}"
+        echo -ne "${CYAN}Enter your choice (1-2, default: 1): ${NC}"
         read version_choice
-        case "$version_choice" in
+        case "${version_choice:-1}" in
             1) use_latest=true; break ;;
             2) use_latest=false; break ;;
             *) echo "Invalid choice. Please enter 1 or 2." ;;

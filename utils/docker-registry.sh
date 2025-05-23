@@ -338,17 +338,11 @@ pull_images() {
     local token="$1"
     local use_latest="${2:-false}"
     
-    log "STEP" "Pulling Docker images from GitHub Container Registry..."
-    
-    # Fix the log message to use robust boolean logic
-    local strategy_message="Latest versions"
-    if [[ "$use_latest" == "false" || "$use_latest" == false ]]; then
-        strategy_message="Fixed version (v1.0.0)"
-    fi
-    log "INFO" "Image versioning strategy: $strategy_message"
+    log "STEP" "Pulling Docker images from GitHub Container Registrys..."
     
     # Validate Docker access
-    if ! docker info >/dev/null 2>&1; then
+    log "DEBUG" "Validating Docker access before pulling images..."
+    if ! verify_docker_access; then
         log "ERROR" "Docker daemon is not accessible"
         
         # Provide specific diagnostics for common issues
@@ -377,53 +371,44 @@ pull_images() {
         fi
         
         # Check Docker socket permissions
-        if [[ -S /var/run/docker.sock ]]; then
-            local socket_perms socket_owner socket_group
-            socket_perms=$(stat -c %a /var/run/docker.sock 2>/dev/null || echo "unknown")
-            socket_owner=$(stat -c %U /var/run/docker.sock 2>/dev/null || echo "unknown")
-            socket_group=$(stat -c %G /var/run/docker.sock 2>/dev/null || echo "unknown")
-            log "INFO" "   • Docker socket: /var/run/docker.sock"
-            log "INFO" "   • Permissions: $socket_perms, Owner: $socket_owner, Group: $socket_group"
+        if [[ -S "/var/run/docker.sock" ]]; then
+            local socket_owner socket_group
+            socket_owner=$(stat -c '%U' /var/run/docker.sock 2>/dev/null || echo "unknown")
+            socket_group=$(stat -c '%G' /var/run/docker.sock 2>/dev/null || echo "unknown")
+            log "INFO" "   • Docker socket owned by: $socket_owner:$socket_group"
             
             if [[ "$socket_group" != "docker" ]]; then
-                log "INFO" "   • Socket group should be 'docker'"
+                log "INFO" "   • Socket group is not 'docker' - this may be the issue"
                 log "INFO" "   • Solution: sudo chgrp docker /var/run/docker.sock"
             fi
         else
             log "INFO" "   • Docker socket not found at /var/run/docker.sock"
         fi
         
-        # Additional debug information
-        log "DEBUG" "Docker troubleshooting details:"
-        log "DEBUG" "   • Current user: $current_user"
-        log "DEBUG" "   • User groups: $(groups 2>/dev/null || echo 'unknown')"
-        log "DEBUG" "   • Docker command location: $(which docker 2>/dev/null || echo 'not found')"
-        log "DEBUG" "   • DOCKER_HOST: ${DOCKER_HOST:-not set}"
-        
-        # Try alternative Docker access methods
-        log "DEBUG" "Attempting alternative Docker access methods..."
-        if sudo docker info >/dev/null 2>&1; then
-            log "INFO" "   • Docker works with sudo - this is a permissions issue"
-            log "INFO" "   • Solution: Fix user permissions for docker group"
-        else
-            log "INFO" "   • Docker doesn't work even with sudo - service/installation issue"
-        fi
-        
         return 1
-    else
-        # Docker is accessible - log some basic info for debugging
-        local docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
-        local current_user=$(whoami)
-        log "DEBUG" "Docker access successful:"
-        log "DEBUG" "   • User: $current_user"
-        log "DEBUG" "   • Docker version: $docker_version"
-        log "DEBUG" "   • User groups: $(groups 2>/dev/null | tr ' ' ',' || echo 'unknown')"
     fi
     
-    # Ensure authentication with GitHub Container Registry
-    log "DEBUG" "Ensuring GitHub Container Registry authentication..."
+    # Ensure Docker credentials are set up properly
+    log "DEBUG" "Ensuring Docker credentials are properly configured..."
+    if ! ensure_docker_credentials "$token" "false"; then
+        log "WARN" "Failed to set up Docker credentials automatically"
+        log "INFO" "💡 Attempting manual authentication..."
+        return 1
+    fi
+    
+    # Docker is accessible - log some basic info for debugging
+    local docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+    local current_user=$(whoami)
+    log "DEBUG" "Docker access successful:"
+    log "DEBUG" "   • User: $current_user"
+    log "DEBUG" "   • Docker version: $docker_version"
+    log "DEBUG" "   • User groups: $(groups 2>/dev/null | tr ' ' ',' || echo 'unknown')"
+    
+    # Authenticate with GitHub Container Registry using token
     if [[ -n "$token" ]]; then
-        # Get GitHub username for authentication
+        log "DEBUG" "Authenticating with GitHub Container Registry..."
+        
+        # Get GitHub username from the token
         local github_user
         github_user=$(curl -s -H "Authorization: Bearer $token" \
                      -H "Accept: application/vnd.github.v3+json" \
@@ -436,17 +421,37 @@ pull_images() {
             # Force re-authentication to ensure it works after user switch
             docker logout ghcr.io >/dev/null 2>&1 || true
             
-            if echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
-                log "SUCCESS" "Docker registry authentication successful"
+            # CRITICAL FIX: Try authentication multiple times with different approaches
+            local auth_success=false
+            local auth_attempts=0
+            local max_auth_attempts=3
+            
+            while [[ $auth_attempts -lt $max_auth_attempts && "$auth_success" == false ]]; do
+                ((auth_attempts++))
+                log "DEBUG" "Authentication attempt $auth_attempts/$max_auth_attempts..."
                 
-                # Verify authentication actually works by testing a simple command
-                if docker search ghcr.io/milou-sh >/dev/null 2>&1 || docker manifest inspect ghcr.io/milou-sh/milou/backend:latest >/dev/null 2>&1; then
-                    log "DEBUG" "Docker authentication verification successful"
+                if echo "$token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
+                    log "DEBUG" "Docker login successful on attempt $auth_attempts"
+                    
+                    # Verify authentication actually works by testing a simple command
+                    if docker manifest inspect ghcr.io/milou-sh/milou/backend:latest >/dev/null 2>&1; then
+                        log "DEBUG" "Docker authentication verification successful"
+                        auth_success=true
+                    else
+                        log "DEBUG" "Docker authentication verification failed, retrying..."
+                        docker logout ghcr.io >/dev/null 2>&1 || true
+                        sleep 1
+                    fi
                 else
-                    log "WARN" "Docker authentication may not be fully functional"
+                    log "DEBUG" "Docker login failed on attempt $auth_attempts"
+                    sleep 1
                 fi
+            done
+            
+            if [[ "$auth_success" == true ]]; then
+                log "SUCCESS" "Docker registry authentication successful"
             else
-                log "ERROR" "Failed to authenticate with GitHub Container Registry"
+                log "ERROR" "Failed to authenticate with GitHub Container Registry after $max_auth_attempts attempts"
                 log "INFO" "💡 Ensure your token has 'read:packages' scope"
                 log "INFO" "💡 Token permissions: https://github.com/settings/tokens"
                 
@@ -454,6 +459,20 @@ pull_images() {
                 log "DEBUG" "Debugging authentication failure..."
                 log "DEBUG" "GitHub user: $github_user"
                 log "DEBUG" "Token format: $(echo "$token" | cut -c1-10)..."
+                
+                # Additional troubleshooting for user switching scenarios
+                local current_user=$(whoami)
+                log "DEBUG" "Current user: $current_user"
+                log "DEBUG" "Docker config directory: $HOME/.docker"
+                
+                if [[ -d "$HOME/.docker" ]]; then
+                    log "DEBUG" "Docker config exists, checking permissions..."
+                    ls -la "$HOME/.docker" 2>/dev/null | head -5 | while read -r line; do
+                        log "DEBUG" "  $line"
+                    done
+                else
+                    log "DEBUG" "Docker config directory does not exist"
+                fi
                 
                 return 1
             fi
@@ -827,4 +846,130 @@ enhanced_image_check() {
     fi
     
     return 1
+}
+
+# =============================================================================
+# Docker Access Verification Functions
+# =============================================================================
+
+# Verify Docker access with comprehensive troubleshooting
+verify_docker_access() {
+    local user="${1:-$(whoami)}"
+    
+    log "DEBUG" "Verifying Docker access for user: $user"
+    
+    # Test 1: Basic Docker daemon connectivity
+    if ! docker info >/dev/null 2>&1; then
+        log "DEBUG" "Docker daemon is not accessible"
+        
+        # Detailed diagnosis
+        local current_user=$(whoami)
+        log "DEBUG" "Current user: $current_user"
+        
+        # Check if user is in docker group
+        if ! groups "$current_user" 2>/dev/null | grep -q docker; then
+            log "DEBUG" "User '$current_user' is not in docker group"
+            return 1
+        fi
+        
+        # Check Docker socket permissions
+        if [[ -S "/var/run/docker.sock" ]]; then
+            local socket_perms
+            socket_perms=$(ls -la /var/run/docker.sock 2>/dev/null || echo "unknown")
+            log "DEBUG" "Docker socket permissions: $socket_perms"
+        else
+            log "DEBUG" "Docker socket not found at /var/run/docker.sock"
+        fi
+        
+        # Check Docker service status
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-active docker >/dev/null 2>&1; then
+                log "DEBUG" "Docker service is active"
+            else
+                log "DEBUG" "Docker service is not active"
+                return 1
+            fi
+        fi
+        
+        return 1
+    fi
+    
+    # Test 2: Docker registry connectivity
+    if ! docker search --limit 1 hello-world >/dev/null 2>&1; then
+        log "DEBUG" "Docker registry connectivity test failed"
+        # This is not critical, continue
+    fi
+    
+    log "DEBUG" "Docker access verification successful for user: $user"
+    return 0
+}
+
+# Ensure Docker credentials are properly configured for current user
+ensure_docker_credentials() {
+    local github_token="$1"
+    local force_reauth="${2:-false}"
+    
+    if [[ -z "$github_token" ]]; then
+        log "DEBUG" "No GitHub token provided for Docker authentication"
+        return 0
+    fi
+    
+    local current_user=$(whoami)
+    log "DEBUG" "Ensuring Docker credentials for user: $current_user"
+    
+    # Check if Docker config directory exists
+    local docker_config_dir="$HOME/.docker"
+    if [[ ! -d "$docker_config_dir" ]]; then
+        log "DEBUG" "Creating Docker config directory: $docker_config_dir"
+        mkdir -p "$docker_config_dir"
+        chmod 700 "$docker_config_dir"
+    fi
+    
+    # Check if we already have valid credentials
+    local config_file="$docker_config_dir/config.json"
+    if [[ -f "$config_file" && "$force_reauth" != "true" ]]; then
+        if grep -q "ghcr.io" "$config_file" 2>/dev/null; then
+            log "DEBUG" "Docker credentials already exist for ghcr.io"
+            
+            # Quick test to see if they work
+            if docker manifest inspect ghcr.io/milou-sh/milou/backend:latest >/dev/null 2>&1; then
+                log "DEBUG" "Existing Docker credentials are functional"
+                return 0
+            else
+                log "DEBUG" "Existing Docker credentials are not functional, re-authenticating..."
+            fi
+        fi
+    fi
+    
+    # Authenticate with GitHub Container Registry
+    log "DEBUG" "Authenticating Docker with GitHub Container Registry..."
+    
+    # Get GitHub username
+    local github_user
+    github_user=$(curl -s -H "Authorization: Bearer $github_token" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 "$GITHUB_API_BASE/user" 2>/dev/null | \
+                 grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+    
+    if [[ -z "$github_user" ]]; then
+        log "DEBUG" "Could not determine GitHub username from token"
+        return 1
+    fi
+    
+    # Perform authentication
+    if echo "$github_token" | docker login ghcr.io -u "$github_user" --password-stdin >/dev/null 2>&1; then
+        log "DEBUG" "Docker authentication successful for user: $github_user"
+        
+        # Verify it works
+        if docker manifest inspect ghcr.io/milou-sh/milou/backend:latest >/dev/null 2>&1; then
+            log "DEBUG" "Docker authentication verification successful"
+            return 0
+        else
+            log "DEBUG" "Docker authentication verification failed"
+            return 1
+        fi
+    else
+        log "DEBUG" "Docker authentication failed"
+        return 1
+    fi
 } 

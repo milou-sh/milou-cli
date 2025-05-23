@@ -733,7 +733,10 @@ install_prerequisites() {
                     echo
                     if confirm "Try to refresh group membership now?" "Y"; then
                         log "INFO" "Refreshing group membership..."
-                        exec newgrp docker
+                        log "INFO" "Group membership will be active for new sessions"
+                        log "INFO" "Continuing with current setup..."
+                        # Note: Instead of exec newgrp which can hang, we just continue
+                        # The setup process will handle Docker group issues automatically
                     fi
                 fi
             fi

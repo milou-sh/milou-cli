@@ -443,22 +443,28 @@ pull_images() {
             
             # Disable errexit temporarily and capture both stdout and stderr
             set +e
-            {
-                docker pull --progress=plain "$image_url" 2>&1 | tee "$temp_output" | while IFS= read -r line; do
-                    # Filter and format progress output for better readability
-                    if [[ "$line" =~ ^#[0-9]+ ]]; then
-                        # Layer progress lines - show simplified version
-                        local layer_info=$(echo "$line" | sed -E 's/^#[0-9]+ //' | cut -d' ' -f1-2)
-                        if [[ "$layer_info" =~ (Downloading|Extracting|Pull complete) ]]; then
-                            echo -ne "\r${DIM}  └─ $layer_info...${NC}"
+            docker pull --progress=plain "$image_url" > "$temp_output" 2>&1 &
+            local pull_pid=$!
+            
+            # Show simplified progress while pull is running
+            while kill -0 $pull_pid 2>/dev/null; do
+                if [[ -f "$temp_output" ]]; then
+                    tail -n 5 "$temp_output" 2>/dev/null | while IFS= read -r line; do
+                        if [[ "$line" =~ ^#[0-9]+ ]]; then
+                            local layer_info=$(echo "$line" | sed -E 's/^#[0-9]+ //' | cut -d' ' -f1-2)
+                            if [[ "$layer_info" =~ (Downloading|Extracting|Pull complete) ]]; then
+                                echo -ne "\r${DIM}  └─ $layer_info...${NC}"
+                            fi
+                        elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
+                            echo -ne "\r${DIM}  └─ $line${NC}"
                         fi
-                    elif [[ "$line" =~ (Pulling|Waiting|Verifying|Download complete|Pull complete) ]]; then
-                        echo -ne "\r${DIM}  └─ $line${NC}"
-                    elif [[ "$line" =~ (Error|error|unauthorized|forbidden|not found) ]]; then
-                        echo -e "\n${RED}  └─ $line${NC}"
-                    fi
-                done
-            }
+                    done
+                fi
+                sleep 0.5
+            done
+            
+            # Wait for the process to complete and get exit code
+            wait $pull_pid
             pull_exit_code=$?
             set -e
             echo # New line after progress
@@ -468,15 +474,15 @@ pull_images() {
             
             # Disable errexit temporarily
             set +e
-            pull_output=$(docker pull "$image_url" 2>&1 | tee "$temp_output")
+            docker pull "$image_url" > "$temp_output" 2>&1
             pull_exit_code=$?
             set -e
             
             if [[ "${VERBOSE:-false}" == "true" ]]; then
-                echo "$pull_output" | sed 's/^/    /'
+                cat "$temp_output" | sed 's/^/    /'
             else
                 # Show key progress indicators for non-interactive
-                echo "$pull_output" | grep -E "(Pulling|Download|Pull complete|Already exists|Error|error|unauthorized)" | while read -r line; do
+                cat "$temp_output" | grep -E "(Pulling|Download|Pull complete|Already exists|Error|error|unauthorized)" | while read -r line; do
                     if [[ "$line" =~ (Error|error|unauthorized|forbidden|not found) ]]; then
                         echo -e "${RED}  └─ $line${NC}"
                     else

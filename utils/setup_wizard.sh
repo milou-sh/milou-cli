@@ -266,15 +266,6 @@ interactive_setup() {
         echo
     done
     
-    # Domain
-    while true; do
-        prompt_user "Domain name" "localhost" "domain"
-        if validate_input "$domain" "domain"; then
-            break
-        fi
-        echo "Please enter a valid domain name."
-    done
-    
     # SSL path
     while true; do
         prompt_user "SSL certificates directory" "./ssl" "ssl_path"
@@ -282,6 +273,15 @@ interactive_setup() {
             break
         fi
         echo "Please enter a valid SSL path."
+    done
+    
+    # Domain
+    while true; do
+        prompt_user "Domain name" "localhost" "domain"
+        if validate_input "$domain" "domain"; then
+            break
+        fi
+        echo "Please enter a valid domain name."
     done
     
     # Admin email (optional)
@@ -464,44 +464,8 @@ interactive_setup_wizard() {
     done
     echo
     
-    # Step 3: Domain Configuration
-    echo -e "${BOLD}Step 3: Domain Configuration${NC}"
-    local domain="localhost"
-    
-    # Check if preserving existing config and get current domain
-    if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
-        local current_domain
-        local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
-        current_domain=$(grep "^SERVER_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "localhost")
-        if [[ "$current_domain" != "localhost" ]]; then
-            echo "Current domain: $current_domain"
-            if confirm "Keep existing domain ($current_domain)?" "Y"; then
-                domain="$current_domain"
-            else
-                echo -ne "${CYAN}Enter new domain name: ${NC}"
-                read user_domain
-                if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
-                    domain="$user_domain"
-                fi
-            fi
-        else
-            echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
-            read user_domain
-            if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
-                domain="$user_domain"
-            fi
-        fi
-    else
-        echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
-        read user_domain
-        if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
-            domain="$user_domain"
-        fi
-    fi
-    echo
-    
-    # Step 4: SSL Configuration with Smart Detection
-    echo -e "${BOLD}Step 4: SSL Configuration${NC}"
+    # Step 3: SSL Configuration with Smart Detection
+    echo -e "${BOLD}Step 3: SSL Configuration${NC}"
     local ssl_path="./ssl"
     local ssl_choice=""
     
@@ -513,7 +477,7 @@ interactive_setup_wizard() {
         if command -v openssl >/dev/null 2>&1; then
             echo
             echo "Certificate Information:"
-            show_certificate_info "./ssl/milou.crt" "$domain"
+            show_certificate_info "./ssl/milou.crt" ""
         fi
         
         echo "SSL Certificate Options:"
@@ -561,47 +525,44 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 5: Optional Configuration
-    echo -e "${BOLD}Step 5: Optional Configuration${NC}"
-    local admin_email=""
+    # Step 4: Domain Configuration
+    echo -e "${BOLD}Step 4: Domain Configuration${NC}"
+    local domain="localhost"
     
-    # Check if preserving existing and get current email
+    # Check if preserving existing config and get current domain
     if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
-        local current_email
+        local current_domain
         local env_file="${MILOU_EXISTING_ENV_FILE:-${SCRIPT_DIR}/.env}"
-        current_email=$(grep "^MILOU_ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
-        if [[ -n "$current_email" ]]; then
-            echo "Current admin email: $current_email"
-            if confirm "Keep existing admin email ($current_email)?" "Y"; then
-                admin_email="$current_email"
+        current_domain=$(grep "^SERVER_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "localhost")
+        if [[ "$current_domain" != "localhost" ]]; then
+            echo "Current domain: $current_domain"
+            if confirm "Keep existing domain ($current_domain)?" "Y"; then
+                domain="$current_domain"
             else
-                echo -ne "${CYAN}Enter new admin email (optional): ${NC}"
-                read admin_email
-                if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
-                    log "WARN" "Invalid email format, skipping"
-                    admin_email=""
+                echo -ne "${CYAN}Enter new domain name: ${NC}"
+                read user_domain
+                if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+                    domain="$user_domain"
                 fi
             fi
         else
-            echo -ne "${CYAN}Admin email (optional): ${NC}"
-            read admin_email
-            if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
-                log "WARN" "Invalid email format, skipping"
-                admin_email=""
+            echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
+            read user_domain
+            if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+                domain="$user_domain"
             fi
         fi
     else
-        echo -ne "${CYAN}Admin email (optional): ${NC}"
-        read admin_email
-        if [[ -n "$admin_email" ]] && ! validate_input "$admin_email" "email" false; then
-            log "WARN" "Invalid email format, skipping"
-            admin_email=""
+        echo -ne "${CYAN}Domain name (default: localhost): ${NC}"
+        read user_domain
+        if [[ -n "$user_domain" ]] && validate_input "$user_domain" "domain"; then
+            domain="$user_domain"
         fi
     fi
     echo
     
-    # Step 6: Image Version Strategy
-    echo -e "${BOLD}Step 6: Image Version Strategy${NC}"
+    # Step 5: Image Version Strategy
+    echo -e "${BOLD}Step 5: Image Version Strategy${NC}"
     echo "Choose Docker image versioning strategy:"
     echo "  1) Use latest available versions (recommended)"
     echo "  2) Use specific version (v1.0.0)"
@@ -619,12 +580,11 @@ interactive_setup_wizard() {
     echo
     
     # Configuration Summary
-    echo -e "${BOLD}Step 7: Configuration Summary${NC}"
+    echo -e "${BOLD}Step 6: Configuration Summary${NC}"
     echo "Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserve existing" || echo "Fresh installation")"
-    echo "Domain: $domain"
     echo "SSL Path: $ssl_path"
     echo "SSL Certificates: $([ "$ssl_choice" == "1" ] && echo "Use existing" || echo "Generate new")"
-    echo "Admin Email: ${admin_email:-Not provided}"
+    echo "Domain: $domain"
     echo "GitHub Token: *****(provided)"
     echo "Image Strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
     echo
@@ -635,21 +595,21 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 8: Generate Configuration
-    echo -e "${BOLD}Step 8: Generating Configuration${NC}"
+    # Step 7: Generate Configuration
+    echo -e "${BOLD}Step 7: Generating Configuration${NC}"
     show_progress "Generating .env configuration file" 2
     
     # Choose configuration generation mode based on user choice
     if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
         # Use the credential preservation mode
-        if ! generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"; then
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "auto"; then
             error_exit "Failed to generate configuration with preservation"
         fi
         # Set the environment variable for later use
         export MILOU_PRESERVED_CREDENTIALS="true"
     else
         # Fresh installation - force new credentials
-        if ! generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "never"; then
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "never"; then
             error_exit "Failed to generate configuration"
         fi
         # Set the environment variable for later use
@@ -657,8 +617,8 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 9: SSL Certificate Setup (only if not using existing)
-    echo -e "${BOLD}Step 9: SSL Certificate Setup${NC}"
+    # Step 8: SSL Certificate Setup (only if not using existing)
+    echo -e "${BOLD}Step 8: SSL Certificate Setup${NC}"
     if [[ "$ssl_choice" != "1" ]]; then
         if ! setup_ssl "$ssl_path" "$domain"; then
             if ! confirm "SSL setup failed. Continue anyway?" "N"; then
@@ -670,8 +630,8 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 10: Pull Docker Images
-    echo -e "${BOLD}Step 10: Pulling Docker Images${NC}"
+    # Step 9: Pull Docker Images
+    echo -e "${BOLD}Step 9: Pulling Docker Images${NC}"
     show_progress "Validating image availability" 2
     if ! validate_images_exist "$github_token" "$use_latest"; then
         log "WARN" "Some images may not be available - continuing anyway"
@@ -683,8 +643,8 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 11: Start Services with Enhanced Handling
-    echo -e "${BOLD}Step 11: Start Services${NC}"
+    # Step 10: Start Services with Enhanced Handling
+    echo -e "${BOLD}Step 10: Start Services${NC}"
     if confirm "Start services now?" "Y"; then
         show_progress "Starting services" 2
         # Use the enhanced startup function with setup mode enabled
@@ -711,10 +671,9 @@ interactive_setup_wizard() {
             # Show setup summary
             echo -e "${BOLD}Setup Summary:${NC}"
             echo "  📝 Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Fresh installation")"
-            echo "  🌍 Domain: $domain"
             echo "  🔒 SSL: $([ "$ssl_choice" == "1" ] && echo "Using existing certificates" || echo "Generated new certificates")"
+            echo "  🌍 Domain: $domain"
             echo "  🔑 Credentials: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Generated new")"
-            echo "  📧 Admin Email: ${admin_email:-Not provided}"
             echo
         else
             echo -e "${RED}[ERROR]${NC} Failed to start services"
@@ -736,10 +695,9 @@ interactive_setup_wizard() {
         echo
         echo "Setup Summary:"
         echo "  📝 Setup Mode: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Fresh installation")"
-        echo "  🌍 Domain: $domain"
         echo "  🔒 SSL: $([ "$ssl_choice" == "1" ] && echo "Using existing certificates" || echo "Generated new certificates")"
+        echo "  🌍 Domain: $domain"
         echo "  🔑 Credentials: $([ "${PRESERVE_EXISTING:-false}" == "true" ] && echo "Preserved existing" || echo "Generated new")"
-        echo "  📧 Admin Email: ${admin_email:-Not provided}"
     fi
     
     return 0

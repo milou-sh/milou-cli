@@ -5,12 +5,92 @@
 # Production-ready, zero-interaction SSL certificate handling
 # =============================================================================
 
+# Resolve SSL path properly to avoid static folder conflicts
+resolve_ssl_path() {
+    local provided_path="$1"
+    local working_dir="${2:-$(pwd)}"
+    
+    # If path is absolute, use as-is
+    if [[ "$provided_path" = "/"* ]]; then
+        echo "$provided_path"
+        return 0
+    fi
+    
+    # Resolve relative path relative to working directory
+    local resolved_path
+    resolved_path="$(cd "$working_dir" && cd "$provided_path" 2>/dev/null && pwd)" || {
+        # If the path doesn't exist yet, create it and resolve
+        mkdir -p "$working_dir/$provided_path"
+        resolved_path="$(cd "$working_dir" && cd "$provided_path" && pwd)"
+    }
+    
+    echo "$resolved_path"
+}
+
+# Get the appropriate SSL path based on environment
+get_appropriate_ssl_path() {
+    local default_path="${1:-./ssl}"
+    local working_dir="${2:-$(pwd)}"
+    
+    # Check if we're in the milou-cli directory working with static
+    if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
+        # We're in milou-cli directory - SSL should be relative to static for Docker
+        local static_ssl_path="$working_dir/static/ssl"
+        log "DEBUG" "Detected milou-cli environment, using static-relative SSL path: $static_ssl_path"
+        echo "$static_ssl_path"
+    elif [[ "$(basename "$working_dir")" == "static" ]]; then
+        # We're in static directory - use relative path
+        local static_ssl_path="$working_dir/ssl"
+        log "DEBUG" "Detected static directory environment, using: $static_ssl_path"
+        echo "$static_ssl_path"
+    else
+        # Normal environment - resolve path normally
+        resolve_ssl_path "$default_path" "$working_dir"
+    fi
+}
+
+# Ensure SSL certificates exist in the correct location for Docker mounting
+ensure_docker_compatible_ssl() {
+    local ssl_path="$1"
+    local working_dir="${2:-$(pwd)}"
+    
+    # If we're working from milou-cli directory, ensure certificates are accessible to Docker
+    if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
+        local static_ssl_dir="$working_dir/static/ssl"
+        
+        # Create static SSL directory
+        mkdir -p "$static_ssl_dir"
+        
+        # If certificates exist in the provided path but not in static, copy them
+        if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+            if [[ "$ssl_path" != "$static_ssl_dir" ]]; then
+                log "INFO" "Copying SSL certificates to Docker-compatible location"
+                cp "$ssl_path/milou.crt" "$static_ssl_dir/milou.crt"
+                cp "$ssl_path/milou.key" "$static_ssl_dir/milou.key"
+                chmod 644 "$static_ssl_dir/milou.crt"
+                chmod 600 "$static_ssl_dir/milou.key"
+                log "SUCCESS" "SSL certificates available at: $static_ssl_dir"
+            fi
+        fi
+        
+        # Return the Docker-compatible path
+        echo "$static_ssl_dir"
+    else
+        # Return the original path
+        echo "$ssl_path"
+    fi
+}
+
 # Production-ready SSL certificate setup
 setup_ssl() {
     local ssl_path="$1"
     local domain="$2"
     
     log "STEP" "Setting up SSL certificates for domain: $domain"
+    
+    # Get the appropriate SSL path for the current environment
+    ssl_path=$(get_appropriate_ssl_path "$ssl_path" "$(pwd)")
+    log "DEBUG" "Using SSL path: $ssl_path"
     
     # Create SSL directory if it doesn't exist
     mkdir -p "$ssl_path"
@@ -27,6 +107,14 @@ setup_ssl() {
         
         if validate_ssl_certificates "$cert_file" "$key_file" "$domain"; then
             log "SUCCESS" "Existing SSL certificates are valid"
+            
+            # Ensure Docker compatibility
+            local docker_ssl_path
+            docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+            if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+                log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+            fi
+            
             return 0
         else
             log "WARN" "Existing SSL certificates are invalid, will regenerate"
@@ -40,6 +128,14 @@ setup_ssl() {
     if consolidate_existing_certificates "$ssl_path"; then
         log "SUCCESS" "SSL certificates consolidated from existing installation"
         show_certificate_info "$cert_file" "$domain"
+        
+        # Ensure Docker compatibility
+        local docker_ssl_path
+        docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+        if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+            log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+        fi
+        
         return 0
     fi
     
@@ -48,6 +144,14 @@ setup_ssl() {
         log "INFO" "Generating development self-signed certificate for localhost"
         if generate_localhost_certificate "$ssl_path"; then
             log "SUCCESS" "Development SSL certificate generated"
+            
+            # Ensure Docker compatibility
+            local docker_ssl_path
+            docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+            if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+                log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+            fi
+            
             return 0
         fi
     else
@@ -60,6 +164,14 @@ setup_ssl() {
             if generate_letsencrypt_certificate "$ssl_path" "$domain"; then
                 log "SUCCESS" "Let's Encrypt certificate obtained successfully"
                 show_certificate_info "$cert_file" "$domain"
+                
+                # Ensure Docker compatibility
+                local docker_ssl_path
+                docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+                if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+                    log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+                fi
+                
                 return 0
             else
                 log "WARN" "Let's Encrypt failed, falling back to self-signed certificate"
@@ -72,6 +184,14 @@ setup_ssl() {
         if generate_production_certificate "$ssl_path" "$domain"; then
             log "SUCCESS" "Production SSL certificate generated"
             log "WARN" "⚠️  Using self-signed certificate - for production, consider using certificates from a trusted CA"
+            
+            # Ensure Docker compatibility
+            local docker_ssl_path
+            docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+            if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+                log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+            fi
+            
             return 0
         fi
     fi
@@ -80,6 +200,14 @@ setup_ssl() {
     log "WARN" "Generating minimal fallback certificate"
     if generate_minimal_certificate "$ssl_path" "$domain"; then
         log "SUCCESS" "Minimal SSL certificate generated as fallback"
+        
+        # Ensure Docker compatibility
+        local docker_ssl_path
+        docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+        if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+            log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+        fi
+        
         return 0
     fi
     
@@ -154,13 +282,18 @@ validate_ssl_certificates() {
 # Consolidate certificates from scattered locations (migration helper)
 consolidate_existing_certificates() {
     local ssl_path="$1"
+    local working_dir="${2:-$(pwd)}"
     
-    # Priority order for certificate search
+    # Priority order for certificate search (relative to working directory)
     local cert_candidates=(
         "./certificates/server.crt"
         "./certificates/milou.crt"
         "./ssl_backup/milou.crt"
         "./ssl_backup/server.crt"
+        "./ssl/milou.crt"
+        "./ssl/server.crt"
+        "./static/ssl/milou.crt"
+        "./static/ssl/server.crt"
     )
     
     local key_candidates=(
@@ -168,6 +301,10 @@ consolidate_existing_certificates() {
         "./certificates/milou.key"
         "./ssl_backup/milou.key"
         "./ssl_backup/server.key"
+        "./ssl/milou.key"
+        "./ssl/server.key"
+        "./static/ssl/milou.key"
+        "./static/ssl/server.key"
     )
     
     # Find the first valid certificate pair
@@ -175,13 +312,17 @@ consolidate_existing_certificates() {
         local cert="${cert_candidates[$i]}"
         local key="${key_candidates[$i]}"
         
-        if [[ -f "$cert" && -f "$key" ]]; then
-            if validate_ssl_certificates "$cert" "$key" ""; then
+        # Resolve paths relative to working directory
+        local full_cert_path="$working_dir/$cert"
+        local full_key_path="$working_dir/$key"
+        
+        if [[ -f "$full_cert_path" && -f "$full_key_path" ]]; then
+            if validate_ssl_certificates "$full_cert_path" "$full_key_path" ""; then
                 log "INFO" "Found valid certificates: $cert, $key"
                 
                 # Copy to standard location
-                cp "$cert" "$ssl_path/milou.crt"
-                cp "$key" "$ssl_path/milou.key"
+                cp "$full_cert_path" "$ssl_path/milou.crt"
+                cp "$full_key_path" "$ssl_path/milou.key"
                 chmod 644 "$ssl_path/milou.crt"
                 chmod 600 "$ssl_path/milou.key"
                 
@@ -431,6 +572,10 @@ backup_ssl_certificates() {
 setup_ssl_interactive() {
     local ssl_path="$1"
     local domain="$2"
+    
+    # Get the appropriate SSL path for the current environment
+    ssl_path=$(get_appropriate_ssl_path "$ssl_path" "$(pwd)")
+    log "DEBUG" "Using SSL path for interactive setup: $ssl_path"
     
     # First try automatic setup
     if setup_ssl "$ssl_path" "$domain"; then
@@ -800,4 +945,32 @@ generate_letsencrypt_certificate() {
         log "DEBUG" "Certbot output: $certbot_output"
         return 1
     fi
+}
+
+# Validate that SSL certificates are accessible for Docker
+validate_docker_ssl_access() {
+    local ssl_path="$1"
+    local working_dir="${2:-$(pwd)}"
+    
+    local cert_file="$ssl_path/milou.crt"
+    local key_file="$ssl_path/milou.key"
+    
+    if [[ ! -f "$cert_file" || ! -f "$key_file" ]]; then
+        log "WARN" "SSL certificates not found at: $ssl_path"
+        return 1
+    fi
+    
+    # Check if we need to worry about Docker path mounting
+    if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
+        local static_ssl_dir="$working_dir/static/ssl"
+        if [[ "$ssl_path" != "$static_ssl_dir"* ]]; then
+            log "WARN" "SSL certificates may not be accessible to Docker"
+            log "INFO" "Expected location for Docker: $static_ssl_dir"
+            log "INFO" "Current location: $ssl_path"
+            return 1
+        fi
+    fi
+    
+    log "DEBUG" "SSL certificates are properly located for Docker access"
+    return 0
 } 

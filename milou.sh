@@ -913,6 +913,12 @@ handle_ssl() {
     local domain="${DOMAIN:-localhost}"
     local ssl_path="${SSL_PATH:-./ssl}"
     
+    # Get the appropriate SSL path for the current environment
+    if command -v get_appropriate_ssl_path >/dev/null 2>&1; then
+        ssl_path=$(get_appropriate_ssl_path "$ssl_path" "$(pwd)")
+        log "DEBUG" "Using SSL path: $ssl_path"
+    fi
+    
     # Parse SSL-specific arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1017,12 +1023,17 @@ handle_ssl() {
     # Default action: SSL setup
     log "STEP" "SSL Certificate Management for domain: $domain"
     
-    mkdir -p "$ssl_path"
-    
     if setup_ssl "$ssl_path" "$domain"; then
         log "SUCCESS" "SSL certificates ready"
         log "INFO" "📄 Certificate: $ssl_path/milou.crt"
         log "INFO" "🔑 Private key: $ssl_path/milou.key"
+        
+        # Validate Docker accessibility
+        if command -v validate_docker_ssl_access >/dev/null 2>&1; then
+            if validate_docker_ssl_access "$ssl_path" "$(pwd)"; then
+                log "SUCCESS" "SSL certificates are properly configured for Docker"
+            fi
+        fi
         
         if check_ssl_expiration "$ssl_path"; then
             log "SUCCESS" "SSL certificates are valid and not expiring soon"

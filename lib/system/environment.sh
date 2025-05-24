@@ -83,61 +83,50 @@ discover_environment_file() {
     fi
 }
 
-# Validate environment file completeness
+# Validate environment file completeness (using centralized validation)
 validate_environment_file() {
     local env_file="${1:-$ENV_FILE_PATH}"
     
-    if [[ ! -f "$env_file" ]]; then
-        log "ERROR" "Environment file not found: $env_file"
-        return 1
+    # Load centralized validation if available
+    if [[ -f "${BASH_SOURCE%/*}/config/validation.sh" ]]; then
+        source "${BASH_SOURCE%/*}/config/validation.sh" 2>/dev/null || true
     fi
     
-    if [[ ! -r "$env_file" ]]; then
-        log "ERROR" "Environment file not readable: $env_file"
-        return 1
-    fi
-    
-    if [[ ! -s "$env_file" ]]; then
-        log "ERROR" "Environment file is empty: $env_file"
-        return 1
-    fi
-    
-    # Check for required variables
-    local -a required_vars=(
-        "DATABASE_URI"
-        "REDIS_URL"
-        "JWT_SECRET"
-        "SESSION_SECRET"
-        "ENCRYPTION_KEY"
-        "POSTGRES_USER"
-        "POSTGRES_PASSWORD"
-        "RABBITMQ_USER"
-        "RABBITMQ_PASSWORD"
-        "REDIS_PASSWORD"
-    )
-    
-    local missing_vars=()
-    for var in "${required_vars[@]}"; do
-        if ! grep -q "^${var}=" "$env_file" 2>/dev/null; then
-            missing_vars+=("$var")
+    # Use centralized validation if available
+    if command -v validate_environment_essential >/dev/null 2>&1; then
+        if validate_environment_essential "$env_file"; then
+            ENV_FILE_VALIDATED=true
+            return 0
+        else
+            return 1
         fi
-    done
-    
-    if [[ ${#missing_vars[@]} -gt 0 ]]; then
-        log "ERROR" "Missing required environment variables: ${missing_vars[*]}"
-        log "INFO" "💡 Run setup to regenerate environment: ./milou.sh setup"
-        return 1
+    else
+        # Fallback validation for essential variables only
+        if [[ ! -f "$env_file" ]]; then
+            log "ERROR" "Environment file not found: $env_file"
+            return 1
+        fi
+        
+        if [[ ! -r "$env_file" ]]; then
+            log "ERROR" "Environment file not readable: $env_file"
+            return 1
+        fi
+        
+        if [[ ! -s "$env_file" ]]; then
+            log "ERROR" "Environment file is empty: $env_file"
+            return 1
+        fi
+        
+        # Basic syntax check
+        if ! env -i bash -n "$env_file" 2>/dev/null; then
+            log "ERROR" "Environment file has syntax errors"
+            return 1
+        fi
+        
+        ENV_FILE_VALIDATED=true
+        log "SUCCESS" "Environment file validated successfully (basic check)"
+        return 0
     fi
-    
-    # Validate syntax
-    if ! env -i bash -n "$env_file" 2>/dev/null; then
-        log "ERROR" "Environment file has syntax errors"
-        return 1
-    fi
-    
-    ENV_FILE_VALIDATED=true
-    log "SUCCESS" "Environment file validated successfully"
-    return 0
 }
 
 # Generate credential hash for change detection

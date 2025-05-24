@@ -6,14 +6,13 @@
 # =============================================================================
 
 # Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
 
-# Constants
-readonly MILOU_USER="milou"
-readonly MILOU_GROUP="milou"
-readonly MILOU_HOME="/home/$MILOU_USER"
-readonly MILOU_UID="${MILOU_UID:-1001}"
-readonly MILOU_GID="${MILOU_GID:-1001}"
+# Constants - Export for use by other modules
+export MILOU_USER="milou"
+export MILOU_GROUP="milou"
+export MILOU_HOME="/home/$MILOU_USER"
+export MILOU_UID="${MILOU_UID:-1001}"
+export MILOU_GID="${MILOU_GID:-1001}"
 
 # =============================================================================
 # Basic User Detection
@@ -192,4 +191,7 @@ export -f milou_user_exists
 export -f get_current_user_info
 export -f create_milou_user
 export -f get_milou_home
-export -f validate_milou_home 
+export -f validate_milou_home
+
+# Export constants for use by other modules
+export MILOU_USER MILOU_GROUP MILOU_HOME MILOU_UID MILOU_GID 

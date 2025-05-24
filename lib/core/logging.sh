@@ -5,27 +5,27 @@
 # Consolidates all logging functionality into a single, robust module
 # =============================================================================
 
-# Colors and Formatting
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly PURPLE='\033[0;35m'
-readonly CYAN='\033[0;36m'
-readonly WHITE='\033[1;37m'
-readonly BOLD='\033[1m'
-readonly DIM='\033[2m'
-readonly NC='\033[0m'
+# Colors and Formatting - Export for use by other modules
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export YELLOW='\033[1;33m'
+export BLUE='\033[0;34m'
+export PURPLE='\033[0;35m'
+export CYAN='\033[0;36m'
+export WHITE='\033[1;37m'
+export BOLD='\033[1m'
+export DIM='\033[2m'
+export NC='\033[0m'
 
 # Emoji Set for Better UX
-readonly SUCCESS_EMOJI="✅"
-readonly ERROR_EMOJI="❌"
-readonly WARNING_EMOJI="⚠️"
-readonly INFO_EMOJI="ℹ️"
-readonly ROCKET_EMOJI="🚀"
-readonly GEAR_EMOJI="⚙️"
-readonly LOCK_EMOJI="🔒"
-readonly MAGNIFYING_GLASS_EMOJI="🔍"
+export SUCCESS_EMOJI="✅"
+export ERROR_EMOJI="❌"
+export WARNING_EMOJI="⚠️"
+export INFO_EMOJI="ℹ️"
+export ROCKET_EMOJI="🚀"
+export GEAR_EMOJI="⚙️"
+export LOCK_EMOJI="🔒"
+export MAGNIFYING_GLASS_EMOJI="🔍"
 
 # Global Logging Configuration
 declare -g VERBOSE=${VERBOSE:-false}
@@ -149,4 +149,8 @@ error_exit() {
 }
 
 # Export functions for use by other modules
-export -f milou_log_init milou_log log error_exit 
+export -f milou_log_init milou_log log error_exit
+
+# Export color variables for use by other modules
+export RED GREEN YELLOW BLUE PURPLE CYAN WHITE BOLD DIM NC
+export SUCCESS_EMOJI ERROR_EMOJI WARNING_EMOJI INFO_EMOJI ROCKET_EMOJI GEAR_EMOJI LOCK_EMOJI MAGNIFYING_GLASS_EMOJI 

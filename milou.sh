@@ -469,13 +469,13 @@ milou_load_and_execute_command() {
         setup)
             handler_file="setup.sh"
             ;;
-        start|stop|restart|status|detailed-status|logs|health|health-check|shell)
+        start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images|diagnose)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|debug-images|diagnose|cleanup-test-files)
+        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps)
             handler_file="system.sh"
             ;;
-        user-status|create-user|migrate-user|security-check|security-harden|security-report|install-deps)
+        user-status|create-user|migrate-user|security-check|security-harden|security-report)
             handler_file="user-security.sh"
             ;;
         *)

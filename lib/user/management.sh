@@ -6,7 +6,6 @@
 # =============================================================================
 
 # Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
 
 # Source all user management modules
 source "${BASH_SOURCE%/*}/user-core.sh" 2>/dev/null || true
@@ -143,43 +142,19 @@ cleanup_user_management() {
 # Maintain backward compatibility with existing function calls
 # These functions are exported for use in other scripts
 
-# Export all core functions for backward compatibility
-export -f is_running_as_root
-export -f milou_user_exists
-export -f get_current_user_info
-export -f create_milou_user
-export -f get_milou_home
-export -f validate_milou_home
-
-# Export Docker functions
-export -f has_docker_permissions
-export -f fix_docker_permissions
-export -f copy_docker_credentials_to_milou
-export -f diagnose_docker_access
-
-# Export environment functions
-export -f setup_milou_user_environment
-export -f validate_milou_user_environment
-export -f test_milou_user_cli
-
-# Export switching functions
-export -f switch_to_milou_user
-export -f migrate_to_milou_user
-export -f ensure_proper_user_setup
-
-# Export security functions
-export -f validate_user_permissions
-export -f harden_milou_user
-export -f security_assessment
-export -f quick_security_check
-
-# Export interface functions
-export -f interactive_user_setup
-export -f show_user_status
-
-# Export main functions
+# Export functions that are defined in this module only
 export -f user_management_main
 export -f cleanup_user_management
+export -f show_user_management_help
+export -f show_user_management_info
+
+# Note: Other user functions are exported by their respective modules:
+# - user/core.sh exports core user functions
+# - user/docker.sh exports Docker-related functions  
+# - user/environment.sh exports environment functions
+# - user/switching.sh exports switching functions
+# - user/security.sh exports security functions
+# - user/interface.sh exports interface functions
 
 # =============================================================================
 # Module Information

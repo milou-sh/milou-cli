@@ -5,16 +5,14 @@
 # Automatically installs and configures all required dependencies
 # =============================================================================
 
-# Source utils for logging functions
-if [[ -z "${SCRIPT_DIR:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fi
+# This module depends on logging and utilities being already loaded
+# by the module loader system - no need to source anything manually
 
-# Import logging functions
-source "${SCRIPT_DIR}/utils/utils.sh" 2>/dev/null || {
-    echo "ERROR: Cannot source utils.sh" >&2
-    exit 1
-}
+# Validation that required functions are available
+if ! command -v log >/dev/null 2>&1; then
+    echo "ERROR: Logging functions not available - ensure core modules are loaded" >&2
+    return 1
+fi
 
 # =============================================================================
 # Distribution Detection

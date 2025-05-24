@@ -1,16 +1,15 @@
 #!/bin/bash
 
 # =============================================================================
-# Configuration Utility Functions for Milou CLI - State-of-the-Art Edition
-# Enhanced with comprehensive configuration management and security
+# Core Configuration Functions for Milou CLI
+# Extracted from configuration.sh for better maintainability
 # =============================================================================
 
-# Load all configuration sub-modules
-source "${BASH_SOURCE%/*}/config/validation.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/config/core.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/config/backup.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/config/preservation.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/config/migration.sh" 2>/dev/null || true
+# Ensure this script is sourced, not executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: This script should be sourced, not executed directly" >&2
+    exit 1
+fi
 
 # =============================================================================
 # Configuration Generation Functions
@@ -31,7 +30,7 @@ validate_config_inputs() {
     local ssl_path="$2"
     local admin_email="${3:-}"
     
-    milou_log "TRACE" "Validating configuration inputs"
+    log "TRACE" "Validating configuration inputs"
     
     # Validate domain using enhanced validation
     if ! validate_input "$domain" "domain" true; then
@@ -42,9 +41,9 @@ validate_config_inputs() {
     if [[ -n "$ssl_path" ]]; then
         local ssl_dir=$(dirname "$ssl_path")
         if [[ ! -d "$ssl_dir" ]]; then
-            milou_log "DEBUG" "Creating SSL directory: $ssl_dir"
+            log "DEBUG" "Creating SSL directory: $ssl_dir"
             if ! mkdir -p "$ssl_dir"; then
-                milou_log "ERROR" "Failed to create SSL directory: $ssl_dir"
+                log "ERROR" "Failed to create SSL directory: $ssl_dir"
                 return 1
             fi
         fi
@@ -57,7 +56,7 @@ validate_config_inputs() {
         fi
     fi
     
-    milou_log "TRACE" "Configuration inputs validation passed"
+    log "TRACE" "Configuration inputs validation passed"
     return 0
 }
 
@@ -70,11 +69,11 @@ generate_config() {
     # Check if this is an existing installation
     if detect_existing_installation; then
         # Fresh installation - use new credentials
-        milou_log "DEBUG" "Fresh installation detected - generating new credentials"
+        log "DEBUG" "Fresh installation detected - generating new credentials"
         generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "never"
     else
         # Existing installation - preserve credentials
-        milou_log "DEBUG" "Existing installation detected - preserving credentials where possible"
+        log "DEBUG" "Existing installation detected - preserving credentials where possible"
         generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"
     fi
 }
@@ -90,12 +89,12 @@ update_config_value() {
     local env_file="${SCRIPT_DIR}/.env"
     
     if [[ -z "$key" ]]; then
-        milou_log "ERROR" "Configuration key is required"
+        log "ERROR" "Configuration key is required"
         return 1
     fi
     
     if [[ ! -f "$env_file" ]]; then
-        milou_log "ERROR" "Configuration file does not exist: $env_file"
+        log "ERROR" "Configuration file does not exist: $env_file"
         return 1
     fi
     
@@ -103,10 +102,10 @@ update_config_value() {
     local backup_file
     backup_file=$(create_timestamped_backup "$env_file" "${CONFIG_DIR}/backups" "pre_update_")
     if [[ -z "$backup_file" ]]; then
-        milou_log "WARN" "Could not create backup before configuration update"
+        log "WARN" "Could not create backup before configuration update"
     fi
     
-    milou_log "DEBUG" "Updating configuration key: $key"
+    log "DEBUG" "Updating configuration key: $key"
     
     # Check if the key exists
     if grep -q "^${key}=" "$env_file"; then
@@ -114,17 +113,17 @@ update_config_value() {
         local escaped_value
         escaped_value=$(printf '%s\n' "$value" | sed 's/[[\.*^$()+?{|]/\\&/g')
         if sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$env_file"; then
-            milou_log "INFO" "Updated configuration: ${key}"
+            log "INFO" "Updated configuration: ${key}"
         else
-            milou_log "ERROR" "Failed to update configuration key: $key"
+            log "ERROR" "Failed to update configuration key: $key"
             return 1
         fi
     else
         # Add the key-value pair at the end
         if echo "${key}=${value}" >> "$env_file"; then
-            milou_log "INFO" "Added configuration: ${key}"
+            log "INFO" "Added configuration: ${key}"
         else
-            milou_log "ERROR" "Failed to add configuration key: $key"
+            log "ERROR" "Failed to add configuration key: $key"
             return 1
         fi
     fi
@@ -142,7 +141,7 @@ get_config_value() {
     local default_value="${2:-}"
     
     if [[ -z "$key" ]]; then
-        milou_log "ERROR" "Configuration key is required"
+        log "ERROR" "Configuration key is required"
         return 1
     fi
     
@@ -152,7 +151,7 @@ get_config_value() {
             echo "$default_value"
             return 0
         else
-            milou_log "DEBUG" "Configuration file not found: $env_file"
+            log "DEBUG" "Configuration file not found: $env_file"
             return 1
         fi
     fi
@@ -168,19 +167,48 @@ get_config_value() {
         echo "$default_value"
         return 0
     else
-        milou_log "DEBUG" "Configuration key not found: $key"
+        log "DEBUG" "Configuration key not found: $key"
         return 1
     fi
 }
 
-# Validate the configuration comprehensively (delegated to centralized validation)
+# Validate the configuration comprehensively
 validate_config() {
-    # Use centralized validation system for consistency
+    local env_file="${SCRIPT_DIR}/.env"
+    
+    # Use centralized validation system
     if command -v validate_environment_production >/dev/null 2>&1; then
-        validate_environment_production "${SCRIPT_DIR}/.env"
+        validate_environment_production "$env_file"
     else
-        milou_log "ERROR" "Centralized validation system not available"
-        return 1
+        # Fallback to basic validation if centralized system not available
+        log "WARN" "Centralized validation not available, using fallback"
+        
+        if [[ ! -f "$env_file" ]]; then
+            log "ERROR" "Configuration file not found: $env_file"
+            return 1
+        fi
+        
+        log "STEP" "Validating configuration..."
+        
+        # Basic file checks
+        local file_perms
+        file_perms=$(stat -c "%a" "$env_file" 2>/dev/null || stat -f "%A" "$env_file" 2>/dev/null || echo "unknown")
+        
+        if [[ "$file_perms" != "600" ]]; then
+            log "WARN" "Configuration file has insecure permissions: $file_perms"
+            log "INFO" "Setting secure permissions..."
+            if chmod 600 "$env_file"; then
+                log "SUCCESS" "Fixed file permissions to 600"
+            else
+                log "ERROR" "Failed to set secure permissions"
+                return 1
+            fi
+        else
+            log "SUCCESS" "Configuration file has secure permissions (600)"
+        fi
+        
+        log "SUCCESS" "Basic configuration validation passed"
+        return 0
     fi
 }
 
@@ -189,11 +217,11 @@ show_config() {
     local env_file="${SCRIPT_DIR}/.env"
     
     if [[ ! -f "$env_file" ]]; then
-        milou_log "ERROR" "Configuration file not found: $env_file"
+        log "ERROR" "Configuration file not found: $env_file"
         return 1
     fi
     
-    milou_log "INFO" "Current configuration (sensitive values hidden):"
+    log "INFO" "Current configuration (sensitive values hidden):"
     echo
     
     # Show configuration but hide sensitive values with better patterns
@@ -208,7 +236,7 @@ show_config() {
         "$env_file"
     
     echo
-    milou_log "INFO" "Configuration file: $env_file"
+    log "INFO" "Configuration file: $env_file"
     
     # Show enhanced file info
     if command_exists stat true; then
@@ -218,10 +246,10 @@ show_config() {
         mod_time=$(stat -c "%y" "$env_file" 2>/dev/null | cut -d'.' -f1 || stat -f "%Sm" "$env_file" 2>/dev/null || echo "unknown")
         
         echo
-        milou_log "INFO" "File information:"
-        milou_log "INFO" "  📄 Size: $file_size bytes"
-        milou_log "INFO" "  🔒 Permissions: $file_perms"
-        milou_log "INFO" "  🕒 Last modified: $mod_time"
+        log "INFO" "File information:"
+        log "INFO" "  📄 Size: $file_size bytes"
+        log "INFO" "  🔒 Permissions: $file_perms"
+        log "INFO" "  🕒 Last modified: $mod_time"
         
         # Show configuration statistics
         local total_lines config_lines comment_lines empty_lines
@@ -230,10 +258,10 @@ show_config() {
         comment_lines=$(grep -c "^#" "$env_file" 2>/dev/null || echo "0")
         empty_lines=$(grep -c "^$" "$env_file" 2>/dev/null || echo "0")
         
-        milou_log "INFO" "  📊 Total lines: $total_lines"
-        milou_log "INFO" "  ⚙️ Configuration entries: $config_lines"
-        milou_log "INFO" "  📝 Comment lines: $comment_lines"
-        milou_log "INFO" "  📄 Empty lines: $empty_lines"
+        log "INFO" "  📊 Total lines: $total_lines"
+        log "INFO" "  ⚙️ Configuration entries: $config_lines"
+        log "INFO" "  📝 Comment lines: $comment_lines"
+        log "INFO" "  📄 Empty lines: $empty_lines"
     fi
 }
 
@@ -243,21 +271,14 @@ validate_configuration() {
 }
 
 # =============================================================================
-# Configuration Module Complete
-# =============================================================================
-# All preservation, migration, backup, and validation functions are now
-# available through the loaded sub-modules:
-# - config/validation.sh - Configuration validation functions
-# - config/core.sh - Core configuration generation
-# - config/backup.sh - Backup and restore functions  
-# - config/preservation.sh - Installation detection and credential preservation
-# - config/migration.sh - Configuration migration and modernization
+# Export Functions
 # =============================================================================
 
-# NOTE: detect_existing_installation() is now available from config/preservation.sh
-
-# NOTE: show_existing_installation_summary() is now available from config/preservation.sh
-
-# NOTE: preserve_database_credentials() is now available from config/preservation.sh
-
-# NOTE: generate_config_with_preservation() is now available from config/migration.sh
+export -f generate_random_string
+export -f validate_config_inputs
+export -f generate_config
+export -f update_config_value
+export -f get_config_value
+export -f validate_config
+export -f show_config
+export -f validate_configuration 

@@ -19,7 +19,7 @@ create_backup() {
     
     # Backup configuration files
     log "INFO" "Backing up configuration files..."
-    if ! backup_config "$backup_path"; then
+    if ! backup_system_config "$backup_path"; then
         log "ERROR" "Failed to backup configuration"
         return 1
     fi
@@ -66,8 +66,8 @@ create_backup() {
     fi
 }
 
-# Backup configuration files
-backup_config() {
+# Backup configuration files for system backup
+backup_system_config() {
     local backup_path="$1"
     local config_backup_dir="${backup_path}/config"
     

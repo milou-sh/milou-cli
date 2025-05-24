@@ -6,11 +6,10 @@
 source "${SCRIPT_DIR}/utils/utils.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/utils/docker-registry.sh" 2>/dev/null || true
 
-# Colors for interactive prompts
-readonly CYAN_PROMPT='\033[0;36m'
-readonly MAGENTA_PROMPT='\033[0;35m'
-readonly BOLD_PROMPT='\033[1m'
-readonly NC_PROMPT='\033[0m'
+# Load user interface module for colors and prompts
+if [[ -f "${SCRIPT_DIR}/lib/core/user-interface.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/core/user-interface.sh"
+fi
 
 # Interactive prompts
 prompt_user() {

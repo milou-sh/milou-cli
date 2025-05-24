@@ -5,6 +5,12 @@
 # Consolidates all UI functions with enhanced features and validation
 # =============================================================================
 
+# Module guard to prevent multiple loading
+if [[ "${MILOU_USER_INTERFACE_LOADED:-}" == "true" ]]; then
+    return 0
+fi
+readonly MILOU_USER_INTERFACE_LOADED="true"
+
 # Ensure logging is available
 if ! command -v milou_log >/dev/null 2>&1; then
     source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || {
@@ -14,10 +20,19 @@ if ! command -v milou_log >/dev/null 2>&1; then
 fi
 
 # Colors for UI prompts (can be different from logging colors)
-readonly CYAN_PROMPT='\033[0;36m'
-readonly YELLOW_PROMPT='\033[1;33m'
-readonly NC_PROMPT='\033[0m'
-readonly DIM_PROMPT='\033[2m'
+# Use guards to prevent readonly variable redefinition
+if [[ -z "${CYAN_PROMPT:-}" ]]; then
+    readonly CYAN_PROMPT='\033[0;36m'
+fi
+if [[ -z "${YELLOW_PROMPT:-}" ]]; then
+    readonly YELLOW_PROMPT='\033[1;33m'
+fi
+if [[ -z "${NC_PROMPT:-}" ]]; then
+    readonly NC_PROMPT='\033[0m'
+fi
+if [[ -z "${DIM_PROMPT:-}" ]]; then
+    readonly DIM_PROMPT='\033[2m'
+fi
 
 # Global UI state
 declare -g MILOU_FORCE=${FORCE:-false}

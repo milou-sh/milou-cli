@@ -6,7 +6,6 @@
 # =============================================================================
 
 # Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/user-core.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/user-docker.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/user-environment.sh" 2>/dev/null || true

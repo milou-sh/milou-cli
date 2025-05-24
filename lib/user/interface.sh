@@ -5,12 +5,7 @@
 # Handles interactive user setup, status display, and user management interface
 # =============================================================================
 
-# Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-core.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-docker.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-environment.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-switching.sh" 2>/dev/null || true
+# Note: Dependencies are loaded automatically by the module loader
 
 # =============================================================================
 # Interactive User Setup

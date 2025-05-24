@@ -46,10 +46,12 @@ source_utility() {
     fi
 }
 
-# Source all utilities
+# Source all utilities - prioritizing new centralized managers
 source_utility "utils.sh"
-source_utility "docker.sh"
+source_utility "environment-manager.sh"
+source_utility "docker-service-manager.sh"
 source_utility "docker-registry.sh"
+source_utility "docker-services.sh"
 source_utility "ssl.sh"
 source_utility "backup.sh"
 source_utility "update.sh"
@@ -59,9 +61,35 @@ source_utility "user-management.sh"
 source_utility "security.sh"
 source_utility "prerequisites.sh"
 
-# Create necessary directories
-mkdir -p "${CONFIG_DIR}" "${BACKUP_DIR}" "${CACHE_DIR}"
-touch "${LOG_FILE}"
+# Create necessary directories with proper ownership handling
+ensure_config_directories() {
+    # Create directories first
+    mkdir -p "${CONFIG_DIR}" "${BACKUP_DIR}" "${CACHE_DIR}"
+    
+    # If running as root and milou user exists, ensure proper ownership
+    if [[ $EUID -eq 0 ]] && command -v milou_user_exists >/dev/null 2>&1 && milou_user_exists 2>/dev/null; then
+        # Check if we're setting up for milou user
+        local milou_home
+        milou_home=$(eval echo ~milou 2>/dev/null) || milou_home="/home/milou"
+        
+        # If CONFIG_DIR is in milou's home, set proper ownership
+        if [[ "${CONFIG_DIR}" == "${milou_home}/.milou" ]]; then
+            chown -R milou:milou "${CONFIG_DIR}" 2>/dev/null || true
+            chown -R milou:milou "${BACKUP_DIR}" 2>/dev/null || true  
+            chown -R milou:milou "${CACHE_DIR}" 2>/dev/null || true
+        fi
+    fi
+    
+    # Create log file with proper permissions
+    touch "${LOG_FILE}" 2>/dev/null || true
+    
+    # Ensure log file has proper ownership if we're root and it's in milou's directory
+    if [[ $EUID -eq 0 && "${LOG_FILE}" == */home/milou/* ]]; then
+        chown milou:milou "${LOG_FILE}" 2>/dev/null || true
+    fi
+}
+
+ensure_config_directories
 
 # =============================================================================
 # Enhanced State Management
@@ -638,12 +666,17 @@ handle_non_interactive_setup() {
     
     # Run setup steps with better error handling
     log "STEP" "Checking system requirements..."
-    check_system_requirements
+    if check_system_requirements; then
+        log "DEBUG" "System requirements check passed"
+    else
+        error_exit "System requirements check failed"
+    fi
     
     log "STEP" "Authenticating with GitHub..."
     if ! test_github_authentication "$GITHUB_TOKEN"; then
         error_exit "GitHub authentication failed. Please check your token."
     fi
+    log "DEBUG" "GitHub authentication passed"
     
     log "STEP" "Generating configuration..."
     if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
@@ -729,8 +762,8 @@ handle_start() {
         return 0
     fi
     
-    log "STEP" "Starting Milou services..."
-    if start_services_with_checks; then
+    # Use centralized service management
+    if start_services; then
         log "SUCCESS" "Services started successfully"
     else
         error_exit "Failed to start services"
@@ -739,7 +772,7 @@ handle_start() {
 
 # Enhanced handlers for other commands  
 handle_stop() {
-    log "STEP" "Stopping Milou services..."
+    # Use centralized service management
     if stop_services; then
         log "SUCCESS" "Services stopped successfully"
     else
@@ -748,7 +781,7 @@ handle_stop() {
 }
 
 handle_restart() {
-    log "STEP" "Restarting Milou services..."
+    # Use centralized service management
     if restart_services; then
         log "SUCCESS" "Services restarted successfully"
     else
@@ -766,16 +799,10 @@ handle_detailed_status() {
 
 handle_logs() {
     local service="${1:-}"
+    local follow="true"
     
-    cd "$SCRIPT_DIR" || error_exit "Cannot change to script directory"
-    
-    if [[ -n "$service" ]]; then
-        log "INFO" "Viewing logs for service: $service"
-        run_docker_compose logs --tail=100 -f "$service"
-    else
-        log "INFO" "Viewing logs for all services"
-        run_docker_compose logs --tail=100 -f
-    fi
+    # Use centralized service management
+    show_service_logs "$service" "$follow"
 }
 
 handle_health() {
@@ -818,6 +845,17 @@ handle_validate() {
     log "STEP" "Validating Milou installation..."
     
     local issues=0
+    
+    # Validate environment configuration
+    if ! is_environment_configured; then
+        if ! initialize_environment_manager; then
+            log "ERROR" "Environment validation failed"
+            ((issues++))
+        fi
+    fi
+    
+    # Show environment status
+    show_environment_status
     
     if ! validate_configuration; then
         ((issues++))
@@ -1062,16 +1100,8 @@ handle_cleanup() {
         esac
     done
     
-    case "$cleanup_type" in
-        "complete")
-            log "INFO" "Performing COMPLETE cleanup of all Milou resources..."
-            complete_cleanup_milou_resources
-            ;;
-        "regular")
-            log "INFO" "Performing regular Docker cleanup..."
-            cleanup_docker_resources
-            ;;
-    esac
+    # Use centralized cleanup management
+    cleanup_docker_resources "$cleanup_type"
 }
 
 handle_shell() {
@@ -1083,15 +1113,9 @@ handle_shell() {
         exit 1
     fi
     
-    cd "$SCRIPT_DIR" || error_exit "Cannot change to script directory"
-    
-    if ! run_docker_compose ps "$service" | grep -q "Up"; then
-        error_exit "Service $service is not running"
-    fi
-    
+    # Use centralized service management
     log "INFO" "Opening shell in $service container..."
-    run_docker_compose exec "$service" /bin/bash || \
-    run_docker_compose exec "$service" /bin/sh
+    exec_in_service "$service" /bin/bash || exec_in_service "$service" /bin/sh
 }
 
 handle_debug_images() {
@@ -1468,6 +1492,7 @@ main() {
                 if [[ -n "${2:-}" ]]; then
                     GITHUB_TOKEN="$2"
                     export GITHUB_TOKEN
+                    log "DEBUG" "Token parsed from arguments: length=${#GITHUB_TOKEN}"
                     shift 2
                 else
                     error_exit "GitHub token value is required after --token"
@@ -1685,6 +1710,7 @@ main() {
     fi
     
     # Enhanced command routing with error handling
+    log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
     case "$command" in
         setup)
             handle_setup "${remaining_args[@]}"

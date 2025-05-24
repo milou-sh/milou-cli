@@ -146,7 +146,6 @@ cleanup_user_management() {
 export -f user_management_main
 export -f cleanup_user_management
 export -f show_user_management_help
-export -f show_user_management_info
 
 # Note: Other user functions are exported by their respective modules:
 # - user/core.sh exports core user functions
@@ -190,6 +189,9 @@ show_user_management_info() {
     echo "  • Configuration security validation"
     echo
 }
+
+# Export the function after it's defined
+export -f show_user_management_info
 
 # If script is run directly, execute main function
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

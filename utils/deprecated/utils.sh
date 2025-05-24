@@ -75,8 +75,13 @@ log() {
     
     # Skip if quiet mode and not error/warn
     if [[ "$QUIET" == true ]] && [[ "$level" != "ERROR" && "$level" != "WARN" ]]; then
-        # Still log to file if enabled
-        [[ "$LOG_TO_FILE" == true ]] && echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null
+        # Still log to file if enabled and log file path exists
+        if [[ "$LOG_TO_FILE" == true ]] && [[ -n "${LOG_FILE:-}" ]]; then
+            # Ensure log directory exists before writing
+            if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+                echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null || true
+            fi
+        fi
         return 0
     fi
     
@@ -108,7 +113,13 @@ log() {
             prefix="[DEBUG]"
             # Only show debug messages if debug mode is enabled
             if [[ "$DEBUG" != true && "$VERBOSE" != true ]]; then
-                [[ "$LOG_TO_FILE" == true ]] && echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null
+                # Still log to file if enabled and log file path exists
+                if [[ "$LOG_TO_FILE" == true ]] && [[ -n "${LOG_FILE:-}" ]]; then
+                    # Ensure log directory exists before writing
+                    if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+                        echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null || true
+                    fi
+                fi
                 return 0
             fi
             ;;
@@ -123,16 +134,17 @@ log() {
             prefix="[TRACE]"
             # Only show trace messages if debug mode is enabled
             if [[ "$DEBUG" != true ]]; then
-                [[ "$LOG_TO_FILE" == true ]] && echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null
+                # Still log to file if enabled and log file path exists
+                if [[ "$LOG_TO_FILE" == true ]] && [[ -n "${LOG_FILE:-}" ]]; then
+                    # Ensure log directory exists before writing
+                    if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+                        echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null || true
+                    fi
+                fi
                 return 0
             fi
             ;;
     esac
-    
-    # Ensure log directory exists
-    if [[ "$LOG_TO_FILE" == true ]] && [[ -n "$LOG_FILE" ]]; then
-        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
-    fi
     
     # Output to console
     if [[ "$level" == "ERROR" || "$level" == "WARN" ]]; then
@@ -141,9 +153,12 @@ log() {
         echo -e "${color}${emoji} ${prefix}${NC} $message"
     fi
     
-    # Output to log file if enabled
-    if [[ "$LOG_TO_FILE" == true ]] && [[ -n "$LOG_FILE" ]]; then
-        echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null
+    # Output to log file if enabled and log file path exists
+    if [[ "$LOG_TO_FILE" == true ]] && [[ -n "${LOG_FILE:-}" ]]; then
+        # Ensure log directory exists before writing
+        if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null; then
+            echo "[$timestamp] [$level] [$caller] $message" >> "$LOG_FILE" 2>/dev/null || true
+        fi
     fi
 }
 

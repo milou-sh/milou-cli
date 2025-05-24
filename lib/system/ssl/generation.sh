@@ -224,39 +224,76 @@ can_use_letsencrypt() {
     return 0
 }
 
-# Install certbot if not available
+# Install certbot with user permission
 install_certbot() {
-    milou_log "INFO" "Installing certbot for Let's Encrypt..."
+    local interactive="${INTERACTIVE:-true}"
+    
+    milou_log "INFO" "Certbot is required for Let's Encrypt certificates"
+    
+    # In non-interactive mode, don't install automatically
+    if [[ "$interactive" == "false" ]]; then
+        milou_log "ERROR" "Certbot not found and running in non-interactive mode"
+        milou_log "INFO" "Please install certbot manually: apt-get install certbot"
+        return 1
+    fi
+    
+    # Ask for user permission
+    milou_log "QUESTION" "Certbot (Let's Encrypt client) is not installed."
+    milou_log "INFO" "To obtain Let's Encrypt certificates, certbot needs to be installed."
+    echo
+    read -p "Would you like to install certbot now? [y/N]: " -r response
+    
+    case "$response" in
+        [yY][eE][sS]|[yY])
+            milou_log "INFO" "Installing certbot for Let's Encrypt..."
+            ;;
+        *)
+            milou_log "INFO" "Certbot installation declined"
+            milou_log "INFO" "You can install it manually later with: apt-get install certbot"
+            return 1
+            ;;
+    esac
     
     # Detect package manager and install certbot
     if command -v apt-get >/dev/null 2>&1; then
         # Debian/Ubuntu
-        if apt-get update >/dev/null 2>&1 && apt-get install -y certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "Certbot installed successfully"
-            return 0
+        milou_log "INFO" "Updating package lists..."
+        if apt-get update >/dev/null 2>&1; then
+            milou_log "INFO" "Installing certbot..."
+            if apt-get install -y certbot >/dev/null 2>&1; then
+                milou_log "SUCCESS" "✅ Certbot installed successfully"
+                return 0
+            fi
         fi
     elif command -v yum >/dev/null 2>&1; then
         # RHEL/CentOS
+        milou_log "INFO" "Installing certbot via yum..."
         if yum install -y certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "Certbot installed successfully"
+            milou_log "SUCCESS" "✅ Certbot installed successfully"
             return 0
         fi
     elif command -v dnf >/dev/null 2>&1; then
         # Fedora
+        milou_log "INFO" "Installing certbot via dnf..."
         if dnf install -y certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "Certbot installed successfully"
+            milou_log "SUCCESS" "✅ Certbot installed successfully"
             return 0
         fi
     elif command -v pacman >/dev/null 2>&1; then
         # Arch Linux
+        milou_log "INFO" "Installing certbot via pacman..."
         if pacman -S --noconfirm certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "Certbot installed successfully"
+            milou_log "SUCCESS" "✅ Certbot installed successfully"
             return 0
         fi
     fi
     
-    milou_log "ERROR" "Failed to install certbot automatically"
-    milou_log "INFO" "Please install certbot manually for Let's Encrypt support"
+    milou_log "ERROR" "❌ Failed to install certbot automatically"
+    milou_log "INFO" "Please install certbot manually for Let's Encrypt support:"
+    milou_log "INFO" "  Ubuntu/Debian: sudo apt-get install certbot"
+    milou_log "INFO" "  RHEL/CentOS: sudo yum install certbot"
+    milou_log "INFO" "  Fedora: sudo dnf install certbot"
+    milou_log "INFO" "  Arch: sudo pacman -S certbot"
     return 1
 }
 
@@ -275,22 +312,13 @@ generate_letsencrypt_certificate() {
         fi
     fi
     
-    # Create temporary directory for Let's Encrypt
-    local temp_dir="/tmp/letsencrypt_$$"
-    mkdir -p "$temp_dir"
-    
-    # Obtain certificate using standalone mode
+    # Obtain certificate using standalone mode (use standard paths)
     if certbot certonly \
         --standalone \
         --non-interactive \
         --agree-tos \
         --email "$email" \
-        --domains "$domain" \
-        --cert-path "$ssl_path/milou.crt" \
-        --key-path "$ssl_path/milou.key" \
-        --work-dir "$temp_dir" \
-        --config-dir "$temp_dir/config" \
-        --logs-dir "$temp_dir/logs" >/dev/null 2>&1; then
+        --domains "$domain" >/dev/null 2>&1; then
         
         # Copy certificates to our SSL path
         local le_cert_dir="/etc/letsencrypt/live/$domain"
@@ -307,8 +335,6 @@ generate_letsencrypt_certificate() {
             milou_log "INFO" "Private key: $ssl_path/milou.key"
             milou_log "INFO" "Valid for: 90 days (auto-renewal recommended)"
             
-            # Clean up temporary directory
-            rm -rf "$temp_dir"
             return 0
         else
             milou_log "ERROR" "Let's Encrypt certificates not found in expected location"
@@ -322,8 +348,6 @@ generate_letsencrypt_certificate() {
         milou_log "INFO" "  • Firewall blocking HTTP traffic"
     fi
     
-    # Clean up temporary directory
-    rm -rf "$temp_dir"
     return 1
 }
 

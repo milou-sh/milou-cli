@@ -86,34 +86,10 @@ if [[ -f "${SCRIPT_DIR}/lib/core/module-loader.sh" ]]; then
         milou_log_init "$CONFIG_DIR"
     fi
 else
-    # Fallback to old system if new modules not available
-    echo "WARNING: New module system not found, falling back to legacy utilities" >&2
-    
-    # Source utility functions with better error handling
-    source_utility() {
-        local util_file="$1"
-        if [[ -f "${SCRIPT_DIR}/utils/${util_file}" ]]; then
-            source "${SCRIPT_DIR}/utils/${util_file}"
-        else
-            echo "ERROR: Required utility file not found: ${util_file}" >&2
-            exit 1
-        fi
-    }
-    
-    # Source all utilities - prioritizing new centralized managers
-    source_utility "utils.sh"
-    source_utility "environment-manager.sh"
-    source_utility "docker-service-manager.sh"
-    source_utility "docker-registry.sh"
-    source_utility "docker-services.sh"
-    source_utility "ssl.sh"
-    source_utility "backup.sh"
-    source_utility "update.sh"
-    source_utility "configure.sh"
-    source_utility "setup_wizard.sh"
-    source_utility "user-management.sh"
-    source_utility "security.sh"
-    source_utility "prerequisites.sh"
+    # No fallback to old system - force use of new modular system
+    echo "ERROR: New module system not found, cannot continue" >&2
+    echo "Please ensure the lib/ directory structure is complete" >&2
+    exit 1
 fi
 
 # Create necessary directories with proper ownership handling

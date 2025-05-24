@@ -50,19 +50,19 @@ get_appropriate_ssl_path() {
     local default_path="${1:-./ssl}"
     local working_dir="${2:-$(pwd)}"
     
-    # Check if we're in the milou-cli directory working with static
+    # CENTRALIZED SSL LOCATION: Always use static/ssl for milou-cli environment
     if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
-        # We're in milou-cli directory - SSL should be relative to static for Docker
+        # We're in milou-cli directory - SSL is ALWAYS in static/ssl for Docker compatibility
         local static_ssl_path="$working_dir/static/ssl"
-        milou_log "DEBUG" "Detected milou-cli environment, using static-relative SSL path: $static_ssl_path"
+        milou_log "DEBUG" "Using centralized SSL path: $static_ssl_path" >&2
         echo "$static_ssl_path"
     elif [[ "$(basename "$working_dir")" == "static" ]]; then
-        # We're in static directory - use relative path
+        # We're in static directory - use ssl subdirectory
         local static_ssl_path="$working_dir/ssl"
-        milou_log "DEBUG" "Detected static directory environment, using: $static_ssl_path"
+        milou_log "DEBUG" "Using static-relative SSL path: $static_ssl_path" >&2
         echo "$static_ssl_path"
     else
-        # Normal environment - resolve path normally
+        # Other environments - resolve path normally
         resolve_ssl_path "$default_path" "$working_dir"
     fi
 }
@@ -72,29 +72,27 @@ ensure_docker_compatible_ssl() {
     local ssl_path="$1"
     local working_dir="${2:-$(pwd)}"
     
-    # If we're working from milou-cli directory, ensure certificates are accessible to Docker
+    # For milou-cli environment, we always use static/ssl (centralized location)
     if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
         local static_ssl_dir="$working_dir/static/ssl"
         
-        # Create static SSL directory
+        # Create static SSL directory if it doesn't exist
         mkdir -p "$static_ssl_dir"
         
-        # If certificates exist in the provided path but not in static, copy them
-        if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
-            if [[ "$ssl_path" != "$static_ssl_dir" ]]; then
-                milou_log "INFO" "Copying SSL certificates to Docker-compatible location"
-                cp "$ssl_path/milou.crt" "$static_ssl_dir/milou.crt"
-                cp "$ssl_path/milou.key" "$static_ssl_dir/milou.key"
-                chmod 644 "$static_ssl_dir/milou.crt"
-                chmod 600 "$static_ssl_dir/milou.key"
-                milou_log "SUCCESS" "SSL certificates available at: $static_ssl_dir"
-            fi
+        # If the provided path is not our centralized location, migrate certificates
+        if [[ "$ssl_path" != "$static_ssl_dir" ]] && [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+            milou_log "INFO" "Migrating SSL certificates to centralized location: $static_ssl_dir"
+            cp "$ssl_path/milou.crt" "$static_ssl_dir/milou.crt"
+            cp "$ssl_path/milou.key" "$static_ssl_dir/milou.key"
+            chmod 644 "$static_ssl_dir/milou.crt"
+            chmod 600 "$static_ssl_dir/milou.key"
+            milou_log "SUCCESS" "SSL certificates migrated to centralized location"
         fi
         
-        # Return the Docker-compatible path
+        # Always return the centralized path
         echo "$static_ssl_dir"
     else
-        # Return the original path
+        # For other environments, return the original path
         echo "$ssl_path"
     fi
 }
@@ -203,6 +201,23 @@ get_docker_mount_path() {
         local relative_path
         relative_path=$(get_relative_ssl_path "$ssl_path" "$working_dir")
         echo "/$relative_path"
+    fi
+}
+
+# Get SSL path for environment file generation (relative to docker-compose.yml location)
+get_ssl_path_for_env() {
+    local working_dir="${1:-$(pwd)}"
+    
+    # For milou-cli environment, docker-compose.yml is in static/ directory
+    # So SSL path should be relative to that directory
+    if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
+        # SSL certificates are in static/ssl, but docker-compose.yml is also in static/
+        # So the relative path from static/ to static/ssl is just "./ssl"
+        milou_log "DEBUG" "Environment SSL path: ./ssl (relative to static/ directory)"
+        echo "./ssl"
+    else
+        # For other environments, use default
+        echo "./ssl"
     fi
 }
 

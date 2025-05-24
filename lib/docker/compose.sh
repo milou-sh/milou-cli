@@ -272,6 +272,7 @@ milou_cleanup_volumes_on_credential_change() {
 milou_create_networks() {
     local network_name="${DOCKER_PROJECT_NAME}_default"
     
+    # Create default project network
     if ! docker network inspect "$network_name" >/dev/null 2>&1; then
         milou_log "INFO" "Creating Docker network: $network_name"
         if docker network create "$network_name" >/dev/null 2>&1; then
@@ -279,6 +280,18 @@ milou_create_networks() {
         else
             milou_log "WARN" "Failed to create network: $network_name"
         fi
+    fi
+    
+    # Create external proxy network if it doesn't exist
+    if ! docker network inspect "proxy" >/dev/null 2>&1; then
+        milou_log "INFO" "Creating external proxy network: proxy"
+        if docker network create "proxy" >/dev/null 2>&1; then
+            milou_log "SUCCESS" "Created external network: proxy"
+        else
+            milou_log "WARN" "Failed to create external network: proxy"
+        fi
+    else
+        milou_log "DEBUG" "External proxy network already exists"
     fi
 }
 

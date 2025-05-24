@@ -24,6 +24,9 @@ if [[ -f "${SCRIPT_DIR}/lib/system/config/preservation.sh" ]]; then
     source "${SCRIPT_DIR}/lib/system/config/preservation.sh"
 fi
 
+# Load SSL path resolution for Docker compatibility
+source "${BASH_SOURCE%/*}/../ssl/paths.sh" 2>/dev/null || true
+
 # =============================================================================
 # Configuration Migration Functions
 # =============================================================================
@@ -108,6 +111,16 @@ generate_config_with_preservation() {
         node_env="development"
     fi
     
+    # Resolve SSL path for Docker compatibility
+    local env_ssl_path
+    if command -v get_ssl_path_for_env >/dev/null 2>&1; then
+        env_ssl_path=$(get_ssl_path_for_env "${SCRIPT_DIR}")
+        milou_log "DEBUG" "Resolved SSL path for environment: $ssl_path -> $env_ssl_path"
+    else
+        env_ssl_path="$ssl_path"
+        milou_log "WARN" "SSL path resolution not available, using provided path: $ssl_path"
+    fi
+    
     # Create comprehensive configuration with enhanced security
     milou_log "DEBUG" "Creating comprehensive configuration file..."
     
@@ -140,7 +153,7 @@ CUSTOMER_DOMAIN_NAME=$domain
 DOMAIN=$domain
 SSL_PORT=$ssl_port
 HTTP_PORT=$http_port
-SSL_CERT_PATH=$ssl_path
+SSL_CERT_PATH=$env_ssl_path
 CORS_ORIGIN=https://$domain
 NODE_ENV=$node_env
 

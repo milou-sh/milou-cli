@@ -84,7 +84,7 @@ validate_ssl_certificates() {
     if [[ -n "$domain" ]]; then
         if ! validate_certificate_domain "$cert_file" "$domain"; then
             milou_log "WARN" "Certificate domain validation failed for: $domain"
-            # Don't return error for domain mismatch - just warn
+            return 1  # Return error for domain mismatch to trigger regeneration
         fi
     fi
     
@@ -352,6 +352,140 @@ backup_ssl_certificates() {
         return 0
     else
         milou_log "ERROR" "Failed to backup SSL certificates"
+        return 1
+    fi
+}
+
+# Backup SSL certificates from nginx docker container
+backup_nginx_ssl_certificates() {
+    local backup_dir="${1:-./ssl_backups}"
+    local backup_name="${2:-nginx_ssl_backup_$(date +%Y%m%d_%H%M%S)}"
+    
+    milou_log "INFO" "Backing up SSL certificates from nginx container..."
+    
+    # Check if nginx container is running
+    if ! docker ps --filter "name=milou-nginx" --format "{{.Names}}" | grep -q "milou-nginx"; then
+        milou_log "ERROR" "Nginx container (milou-nginx) is not running"
+        milou_log "INFO" "Start the services first with: ./milou.sh start"
+        return 1
+    fi
+    
+    # Check if certificates exist in container
+    if ! docker exec milou-nginx test -f /etc/ssl/milou.crt; then
+        milou_log "ERROR" "No SSL certificate found in nginx container"
+        return 1
+    fi
+    
+    if ! docker exec milou-nginx test -f /etc/ssl/milou.key; then
+        milou_log "ERROR" "No SSL private key found in nginx container"
+        return 1
+    fi
+    
+    # Create backup directory
+    mkdir -p "$backup_dir"
+    
+    # Copy certificates from container
+    local backup_cert="$backup_dir/${backup_name}.crt"
+    local backup_key="$backup_dir/${backup_name}.key"
+    
+    if docker cp milou-nginx:/etc/ssl/milou.crt "$backup_cert" && \
+       docker cp milou-nginx:/etc/ssl/milou.key "$backup_key"; then
+        
+        # Set appropriate permissions
+        chmod 644 "$backup_cert"
+        chmod 600 "$backup_key"
+        
+        # Get certificate info for the backup
+        local cert_subject cert_expires
+        cert_subject=$(openssl x509 -in "$backup_cert" -noout -subject 2>/dev/null | sed 's/subject=//' || echo "Unknown")
+        cert_expires=$(openssl x509 -in "$backup_cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//' || echo "Unknown")
+        
+        milou_log "SUCCESS" "✅ SSL certificates backed up from nginx container:"
+        milou_log "INFO" "  📁 Location: $backup_dir"
+        milou_log "INFO" "  🏷️  Name: $backup_name"
+        milou_log "INFO" "  📄 Certificate: $backup_cert"
+        milou_log "INFO" "  🔑 Private Key: $backup_key"
+        milou_log "INFO" "  👤 Subject: $cert_subject"
+        milou_log "INFO" "  📅 Expires: $cert_expires"
+        
+        return 0
+    else
+        milou_log "ERROR" "❌ Failed to copy SSL certificates from nginx container"
+        return 1
+    fi
+}
+
+# Import user's own SSL certificates
+import_user_certificates() {
+    local cert_source="$1"
+    local key_source="$2"
+    local ssl_path="${3:-./static/ssl}"
+    
+    milou_log "INFO" "Importing user-provided SSL certificates..."
+    
+    # Validate input files exist
+    if [[ ! -f "$cert_source" ]]; then
+        milou_log "ERROR" "Certificate file not found: $cert_source"
+        return 1
+    fi
+    
+    if [[ ! -f "$key_source" ]]; then
+        milou_log "ERROR" "Private key file not found: $key_source"
+        return 1
+    fi
+    
+    # Validate certificate format
+    if ! openssl x509 -in "$cert_source" -noout -text >/dev/null 2>&1; then
+        milou_log "ERROR" "Invalid certificate format: $cert_source"
+        return 1
+    fi
+    
+    # Validate private key format
+    if ! openssl rsa -in "$key_source" -check -noout >/dev/null 2>&1; then
+        milou_log "ERROR" "Invalid private key format: $key_source"
+        return 1
+    fi
+    
+    # Check if certificate and key match
+    local cert_modulus key_modulus
+    cert_modulus=$(openssl x509 -noout -modulus -in "$cert_source" 2>/dev/null | openssl md5 2>/dev/null)
+    key_modulus=$(openssl rsa -noout -modulus -in "$key_source" 2>/dev/null | openssl md5 2>/dev/null)
+    
+    if [[ "$cert_modulus" != "$key_modulus" ]]; then
+        milou_log "ERROR" "Certificate and private key do not match"
+        return 1
+    fi
+    
+    # Create SSL directory if it doesn't exist
+    mkdir -p "$ssl_path"
+    
+    # Backup existing certificates if they exist
+    if [[ -f "$ssl_path/milou.crt" ]]; then
+        backup_ssl_certificates "$ssl_path"
+    fi
+    
+    # Copy user certificates
+    if cp "$cert_source" "$ssl_path/milou.crt" && cp "$key_source" "$ssl_path/milou.key"; then
+        # Set appropriate permissions
+        chmod 644 "$ssl_path/milou.crt"
+        chmod 600 "$ssl_path/milou.key"
+        
+        # Get certificate information
+        local cert_subject cert_expires cert_issuer
+        cert_subject=$(openssl x509 -in "$ssl_path/milou.crt" -noout -subject 2>/dev/null | sed 's/subject=//' || echo "Unknown")
+        cert_expires=$(openssl x509 -in "$ssl_path/milou.crt" -noout -enddate 2>/dev/null | sed 's/notAfter=//' || echo "Unknown")
+        cert_issuer=$(openssl x509 -in "$ssl_path/milou.crt" -noout -issuer 2>/dev/null | sed 's/issuer=//' || echo "Unknown")
+        
+        milou_log "SUCCESS" "✅ User SSL certificates imported successfully:"
+        milou_log "INFO" "  📁 Destination: $ssl_path"
+        milou_log "INFO" "  👤 Subject: $cert_subject"
+        milou_log "INFO" "  🏢 Issuer: $cert_issuer"
+        milou_log "INFO" "  📅 Expires: $cert_expires"
+        milou_log "INFO" "  🔄 To apply changes, restart nginx: ./milou.sh restart"
+        
+        return 0
+    else
+        milou_log "ERROR" "❌ Failed to import SSL certificates"
         return 1
     fi
 }

@@ -216,29 +216,97 @@ setup_ssl_interactive() {
     # Certificate type selection for real domains
     if [[ "$domain" != "localhost" && "$domain" != "127.0.0.1" ]]; then
         echo
-        milou_log "INFO" "Certificate Options:"
-        milou_log "INFO" "  1. Let's Encrypt (free, trusted, requires public domain)"
-        milou_log "INFO" "  2. Self-signed (works offline, browser warnings)"
-        echo -n "Choose certificate type [1/2]: "
+        milou_log "INFO" "🔒 SSL Certificate Options for domain: $domain"
+        echo
+        milou_log "INFO" "  1. 🌟 Let's Encrypt (Recommended)"
+        milou_log "INFO" "     ✅ Free trusted certificate"
+        milou_log "INFO" "     ✅ Recognized by all browsers"
+        milou_log "INFO" "     ⚠️  Requires public domain pointing to this server"
+        milou_log "INFO" "     ⚠️  Port 80 must be accessible from internet"
+        echo
+        milou_log "INFO" "  2. 🔧 Self-signed certificate"
+        milou_log "INFO" "     ✅ Works immediately"
+        milou_log "INFO" "     ✅ No internet requirements"
+        milou_log "INFO" "     ⚠️  Browser security warnings"
+        milou_log "INFO" "     ⚠️  Not suitable for production"
+        
+        # Check Let's Encrypt prerequisites and inform user
+        echo
+        milou_log "INFO" "🔍 Checking Let's Encrypt compatibility..."
+        
+        local can_le=false
+        local le_issues=()
+        
+        # Check domain accessibility
+        if ! is_domain_publicly_accessible "$domain"; then
+            le_issues+=("Domain '$domain' does not resolve publicly")
+        fi
+        
+        # Check certbot availability
+        if ! command -v certbot >/dev/null 2>&1; then
+            le_issues+=("Certbot not installed (will attempt auto-install)")
+        fi
+        
+        # Check root privileges
+        if [[ $EUID -ne 0 ]]; then
+            le_issues+=("Root privileges required for Let's Encrypt")
+        fi
+        
+        # Check port 80 availability
+        if command -v netstat >/dev/null 2>&1; then
+            if netstat -tlnp 2>/dev/null | grep -q ":80 "; then
+                le_issues+=("Port 80 is occupied (needed for validation)")
+            fi
+        fi
+        
+        if [[ ${#le_issues[@]} -eq 0 ]]; then
+            milou_log "SUCCESS" "✅ Let's Encrypt appears to be compatible!"
+            can_le=true
+        else
+            milou_log "WARN" "⚠️  Let's Encrypt compatibility issues detected:"
+            for issue in "${le_issues[@]}"; do
+                milou_log "WARN" "   • $issue"
+            done
+            echo
+            milou_log "INFO" "You can still try Let's Encrypt, but it may fail."
+        fi
+        
+        echo
+        echo -n "Choose certificate type [1 for Let's Encrypt, 2 for Self-signed]: "
         read -r cert_type
         
         case "$cert_type" in
             1)
-                if is_domain_publicly_accessible "$domain" && can_use_letsencrypt; then
-                    milou_log "INFO" "Attempting Let's Encrypt certificate..."
-                    if generate_letsencrypt_certificate "$ssl_path" "$domain"; then
-                        milou_log "SUCCESS" "Let's Encrypt certificate obtained!"
+                if [[ "$can_le" == true ]] || [[ "${le_issues[*]}" == *"Certbot not installed"* ]]; then
+                    echo
+                    milou_log "INFO" "🌟 Attempting Let's Encrypt certificate generation..."
+                    
+                    # Ask for email for Let's Encrypt
+                    echo -n "Enter email address for Let's Encrypt notifications: "
+                    read -r le_email
+                    le_email=${le_email:-"admin@$domain"}
+                    
+                    if generate_letsencrypt_certificate "$ssl_path" "$domain" "$le_email"; then
+                        echo
+                        milou_log "SUCCESS" "🎉 Let's Encrypt certificate obtained successfully!"
                         show_certificate_info "$cert_file" "$domain"
+                        
+                        echo
+                        milou_log "INFO" "📅 Let's Encrypt certificates are valid for 90 days."
+                        milou_log "INFO" "⚡ Set up auto-renewal with: ./milou.sh ssl renew"
                         return 0
                     else
-                        milou_log "ERROR" "Let's Encrypt failed, falling back to self-signed"
+                        echo
+                        milou_log "ERROR" "❌ Let's Encrypt certificate generation failed"
+                        milou_log "INFO" "💡 Falling back to self-signed certificate..."
                     fi
                 else
-                    milou_log "WARN" "Let's Encrypt not available, using self-signed"
+                    echo
+                    milou_log "WARN" "⚠️  Let's Encrypt prerequisites not met, using self-signed"
                 fi
                 ;;
             2|*)
-                milou_log "INFO" "Using self-signed certificate"
+                milou_log "INFO" "🔧 Using self-signed certificate"
                 ;;
         esac
     fi

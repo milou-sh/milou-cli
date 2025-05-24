@@ -166,7 +166,7 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9999}/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:${PORT:-9999}/api/health > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -197,7 +197,7 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5173 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:5173 > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -27,20 +27,53 @@ test_github_authentication() {
     local token="$1"
     
     log "STEP" "Testing GitHub authentication..."
+    log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
     
     # Validate token format first
     if ! validate_input "$token" "github_token"; then
+        log "DEBUG" "Token format validation failed"
         return 1
     fi
     
+    log "DEBUG" "Token format validation passed"
+    
     # Test authentication with GitHub API
+    log "DEBUG" "Testing API call to: $GITHUB_API_BASE/user"
+    log "DEBUG" "Current user: $(whoami)"
+    log "DEBUG" "Current working directory: $(pwd)"
+    log "DEBUG" "PATH: $PATH"
+    log "DEBUG" "curl version: $(curl --version 2>/dev/null | head -1 || echo 'curl not found')"
+    
+    # Test basic curl functionality first
+    log "DEBUG" "Testing basic curl to httpbin.org..."
+    local test_response
+    test_response=$(curl -s --connect-timeout 5 --max-time 10 "https://httpbin.org/get" 2>/dev/null)
+    local test_exit_code=$?
+    log "DEBUG" "Basic curl test - exit code: $test_exit_code, response length: ${#test_response}"
+    
     local response
-    if ! response=$(curl -s -H "Authorization: Bearer $token" \
-                   -H "Accept: application/vnd.github.v3+json" \
-                   "$GITHUB_API_BASE/user" 2>/dev/null); then
+    local curl_error
+    curl_error=$(mktemp)
+    
+    # Disable errexit temporarily to capture curl errors properly
+    set +e
+    response=$(curl -s -H "Authorization: Bearer $token" \
+               -H "Accept: application/vnd.github.v3+json" \
+               "$GITHUB_API_BASE/user" 2>"$curl_error")
+    local curl_exit_code=$?
+    set -e
+    
+    if [[ $curl_exit_code -ne 0 ]]; then
         log "ERROR" "Failed to connect to GitHub API"
+        log "DEBUG" "curl command failed with exit code: $curl_exit_code"
+        log "DEBUG" "curl stderr: $(cat "$curl_error" 2>/dev/null || echo 'no error output')"
+        rm -f "$curl_error"
         return 1
     fi
+    
+    rm -f "$curl_error"
+    
+    log "DEBUG" "API call succeeded, response length: ${#response}"
     
     # Check if authentication was successful
     if echo "$response" | grep -q '"login"'; then

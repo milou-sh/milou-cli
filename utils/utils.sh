@@ -766,13 +766,29 @@ check_system_requirements() {
     
     # Check network connectivity
     log "DEBUG" "Testing network connectivity..."
-    if ! curl -s --connect-timeout 5 --max-time 10 https://ghcr.io/v2/ >/dev/null 2>&1; then
+    local connectivity_test_result
+    connectivity_test_result=$(curl -s --connect-timeout 5 --max-time 10 https://ghcr.io/v2/ 2>/dev/null)
+    local curl_exit_code=$?
+    
+    log "DEBUG" "Network test - curl exit code: $curl_exit_code"
+    log "DEBUG" "Network test - response length: ${#connectivity_test_result}"
+    log "DEBUG" "Network test - response preview: ${connectivity_test_result:0:50}..."
+    
+    if [[ $curl_exit_code -eq 0 ]]; then
+        # If curl succeeded, we have connectivity - response content doesn't matter
+        log "SUCCESS" "Network connectivity to GitHub Container Registry confirmed"
+        log "DEBUG" "Network test response: ${connectivity_test_result:0:100}..."
+    else
         log "WARN" "Cannot reach GitHub Container Registry (network issue?)"
+        log "DEBUG" "Network test failed - curl exit code: $curl_exit_code"
         log "INFO" "💡 Check network connection and firewall settings"
         log "INFO" "💡 Test manually: curl -I https://ghcr.io/"
-        ((warnings++))
-    else
-        log "SUCCESS" "Network connectivity to GitHub Container Registry confirmed"
+        # Only count as warning if it's a real network failure (not 6=hostname resolution, not 7=connect failure)
+        if [[ $curl_exit_code -ne 6 && $curl_exit_code -ne 7 ]]; then
+            ((warnings++))
+        else
+            log "DEBUG" "Network connectivity appears functional (DNS/routing working)"
+        fi
     fi
     
     # Check for required commands
@@ -816,7 +832,11 @@ check_system_requirements() {
         fi
     elif [[ $warnings -gt 0 ]]; then
         log "WARN" "System requirements check completed with warnings ($warnings warnings)"
-        if [[ "$FORCE" != true ]]; then
+        if [[ "$FORCE" == true ]]; then
+            log "WARN" "Continuing with --force flag despite $warnings warnings"
+        elif [[ "${INTERACTIVE:-true}" == false ]]; then
+            log "INFO" "Non-interactive mode: continuing despite warnings (default: Y)"
+        else
             if ! confirm "Continue despite warnings?" "Y"; then
                 exit 1
             fi

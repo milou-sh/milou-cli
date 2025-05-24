@@ -118,6 +118,12 @@ copy_github_credentials_to_milou() {
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         # Create a secure temporary environment file for the token
         local temp_env_file="$milou_home/.milou/.env.token.tmp"
+        
+        # Ensure the .milou directory exists
+        mkdir -p "$milou_home/.milou"
+        chown "$MILOU_USER:$MILOU_GROUP" "$milou_home/.milou"
+        chmod 700 "$milou_home/.milou"
+        
         echo "GITHUB_TOKEN=${GITHUB_TOKEN}" > "$temp_env_file"
         chown "$MILOU_USER:$MILOU_GROUP" "$temp_env_file"
         chmod 600 "$temp_env_file"
@@ -349,12 +355,22 @@ switch_to_milou_user() {
             "SKIP_USER_CHECK=${SKIP_USER_CHECK:-false}"
             "USE_LATEST_IMAGES=${USE_LATEST_IMAGES:-false}"
             "USER_SWITCH_IN_PROGRESS=true"
+            "SCRIPT_DIR=${SCRIPT_DIR:-}"
+            "CONFIG_DIR=${CONFIG_DIR:-}"
+            "LOG_FILE=${LOG_FILE:-}"
+            "ENV_FILE=${ENV_FILE:-}"
+            "BACKUP_DIR=${BACKUP_DIR:-}"
+            "CACHE_DIR=${CACHE_DIR:-}"
+            "DEFAULT_SSL_PATH=${DEFAULT_SSL_PATH:-}"
+            "CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt"
+            "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
         )
         
         # Add GitHub token if provided (but don't log the actual token value)
+        log "DEBUG" "Checking GitHub token: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
         if [[ -n "${GITHUB_TOKEN:-}" ]]; then
             env_vars+=("GITHUB_TOKEN=$GITHUB_TOKEN")
-            log "DEBUG" "Preserving GitHub token in environment (token_status: $token_status)"
+            log "DEBUG" "Preserving GitHub token in environment (length: ${#GITHUB_TOKEN})"
         else
             log "WARN" "No GitHub token found to preserve during user switch"
         fi

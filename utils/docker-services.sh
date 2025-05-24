@@ -964,4 +964,7 @@ handle_database_migration() {
     fi
     
     return 0
-} 
+}
+
+# Export functions for use in other scripts
+export -f start_services_with_checks 

@@ -13,6 +13,9 @@ if ! command -v milou_log >/dev/null 2>&1; then
     }
 fi
 
+# Load Docker registry modules for authentication
+source "${BASH_SOURCE%/*}/registry.sh" 2>/dev/null || true
+
 # Docker environment variables
 declare -g DOCKER_ENV_FILE=""
 declare -g DOCKER_COMPOSE_FILE=""
@@ -290,6 +293,24 @@ milou_docker_start() {
     # Initialize Docker environment
     if ! milou_docker_init; then
         return 1
+    fi
+    
+    # Authenticate with Docker registry if GitHub token is available
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        milou_log "DEBUG" "GitHub token available, setting up Docker registry authentication..."
+        if command -v ensure_docker_credentials >/dev/null 2>&1; then
+            if ! ensure_docker_credentials "$GITHUB_TOKEN"; then
+                milou_log "WARN" "Docker registry authentication failed, but continuing..."
+                milou_log "INFO" "💡 Some images may fail to pull from private registry"
+            else
+                milou_log "SUCCESS" "Docker registry authentication successful"
+            fi
+        else
+            milou_log "WARN" "Docker registry authentication function not available"
+        fi
+    else
+        milou_log "WARN" "No GitHub token provided - private registry images may fail to pull"
+        milou_log "INFO" "💡 Use --token <your_github_token> to authenticate with private registry"
     fi
     
     # Clean volumes if credentials changed

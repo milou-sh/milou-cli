@@ -243,22 +243,22 @@ show_certificate_info() {
     
     milou_log "DEBUG" "Reading certificate information from: $cert_file"
     
-    # Extract certificate information
+    # Extract certificate information with better error handling
     local subject issuer serial not_before not_after
-    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
-    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//')
-    serial=$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null | sed 's/serial=//')
-    not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | sed 's/notBefore=//')
-    not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+    subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//' || echo "Unable to read subject")
+    issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//' || echo "Unable to read issuer")
+    serial=$(openssl x509 -in "$cert_file" -noout -serial 2>/dev/null | sed 's/serial=//' || echo "Unable to read serial")
+    not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | sed 's/notBefore=//' || echo "Unable to read start date")
+    not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//' || echo "Unable to read end date")
     
-    # Get certificate algorithm and key size
+    # Get certificate algorithm and key size with better error handling
     local algorithm key_size
-    algorithm=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep "Signature Algorithm" | head -1 | awk '{print $3}')
-    key_size=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep "Public-Key:" | sed 's/.*(\([0-9]*\) bit).*/\1/')
+    algorithm=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep "Signature Algorithm" | head -1 | awk '{print $3}' || echo "Unknown")
+    key_size=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep "Public-Key:" | sed 's/.*(\([0-9]*\) bit).*/\1/' || echo "Unknown")
     
-    # Get Subject Alternative Names
+    # Get Subject Alternative Names with better error handling
     local san_list
-    san_list=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -v "^$")
+    san_list=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -v "^$" || echo "")
     
     echo
     milou_log "INFO" "🔒 Certificate Details:"
@@ -275,7 +275,7 @@ show_certificate_info() {
     
     # Calculate and show days until expiration
     local exp_epoch current_epoch days_until_exp
-    exp_epoch=$(date -d "$not_after" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null)
+    exp_epoch=$(date -d "$not_after" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null || echo "")
     current_epoch=$(date +%s)
     
     if [[ -n "$exp_epoch" ]]; then

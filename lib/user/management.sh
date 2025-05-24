@@ -8,12 +8,12 @@
 # Source utility functions
 
 # Source all user management modules
-source "${BASH_SOURCE%/*}/user-core.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-docker.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-environment.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-switching.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-security.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-interface.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/core.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/docker.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/environment.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/switching.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/security.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/interface.sh" 2>/dev/null || true
 
 # =============================================================================
 # Main User Management Interface
@@ -167,12 +167,12 @@ show_user_management_info() {
     echo "This module provides comprehensive user management for Milou CLI:"
     echo
     echo -e "${CYAN}Core Modules:${NC}"
-    echo "  • user-core.sh         - Basic user operations and creation"
-    echo "  • user-docker.sh       - Docker permissions and diagnostics"
-    echo "  • user-environment.sh  - Environment setup and validation"
-    echo "  • user-switching.sh    - User switching and migration"
-    echo "  • user-security.sh     - Security validation and hardening"
-    echo "  • user-interface.sh    - Interactive setup and status display"
+    echo "  • core.sh              - Basic user operations and creation"
+    echo "  • docker.sh            - Docker permissions and diagnostics"
+    echo "  • environment.sh       - Environment setup and validation"
+    echo "  • switching.sh         - User switching and migration"
+    echo "  • security.sh          - Security validation and hardening"
+    echo "  • interface.sh         - Interactive setup and status display"
     echo
     echo -e "${CYAN}Key Features:${NC}"
     echo "  • Secure user creation and management"

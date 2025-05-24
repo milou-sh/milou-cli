@@ -6,9 +6,9 @@
 # =============================================================================
 
 # Source utility functions
-source "${BASH_SOURCE%/*}/user-core.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-docker.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/user-environment.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/core.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/docker.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/environment.sh" 2>/dev/null || true
 
 # =============================================================================
 # Enhanced Directory Comparison

@@ -139,15 +139,122 @@ handle_ssl() {
     # Load required modules
     ensure_system_modules
     
-    if command -v setup_ssl >/dev/null 2>&1; then
-        setup_ssl "$@"
-    elif command -v manage_ssl_certificates >/dev/null 2>&1; then
-        manage_ssl_certificates "$@"
+    # Get current environment values for SSL and resolve Docker-compatible path
+    local ssl_path_raw="${SSL_CERT_PATH:-./ssl}"
+    local domain="${SERVER_NAME:-localhost}"
+    
+    # Use proper SSL path resolution for Docker compatibility
+    local ssl_path
+    if command -v get_appropriate_ssl_path >/dev/null 2>&1; then
+        ssl_path=$(get_appropriate_ssl_path "$ssl_path_raw" "$(pwd)")
+        log "DEBUG" "Resolved SSL path: $ssl_path_raw -> $ssl_path"
     else
-        log "ERROR" "SSL management function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(ssl|cert)' | head -5 | tr '\n' ' ')"
-        return 1
+        ssl_path="$ssl_path_raw"
+        log "WARN" "SSL path resolution function not available, using raw path: $ssl_path"
     fi
+    
+    # Check if no arguments provided - show status
+    if [[ $# -eq 0 ]]; then
+        log "INFO" "📋 Current SSL Configuration:"
+        log "INFO" "  Domain: $domain"
+        log "INFO" "  SSL Path: $ssl_path"
+        echo
+        
+        # Check certificate status
+        local cert_file="$ssl_path/milou.crt"
+        local key_file="$ssl_path/milou.key"
+        
+        if [[ -f "$cert_file" && -f "$key_file" ]]; then
+            log "INFO" "✅ SSL certificates found"
+            if command -v show_certificate_info >/dev/null 2>&1; then
+                show_certificate_info "$cert_file" "$domain"
+            else
+                log "INFO" "  Certificate: $cert_file"
+                log "INFO" "  Private Key: $key_file"
+                # Basic certificate info
+                if command -v openssl >/dev/null 2>&1; then
+                    local cert_subject
+                    cert_subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
+                    local cert_expires
+                    cert_expires=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+                    log "INFO" "  Subject: $cert_subject"
+                    log "INFO" "  Expires: $cert_expires"
+                fi
+            fi
+        else
+            log "ERROR" "❌ SSL certificates not found"
+            log "INFO" "Run './milou.sh ssl setup' to generate certificates"
+        fi
+        return 0
+    fi
+    
+    # Handle different SSL sub-commands
+    local action="${1:-setup}"
+    shift
+    
+    case "$action" in
+        setup|generate|create)
+            if command -v setup_ssl >/dev/null 2>&1; then
+                setup_ssl "$ssl_path" "$domain" "$@"
+            elif command -v setup_ssl_interactive >/dev/null 2>&1; then
+                setup_ssl_interactive "$ssl_path" "$domain" "$@"
+            else
+                log "ERROR" "SSL setup function not available"
+                return 1
+            fi
+            ;;
+        status|info|show)
+            # Show detailed certificate status
+            if command -v show_certificate_info >/dev/null 2>&1; then
+                local cert_file="$ssl_path/milou.crt"
+                if [[ -f "$cert_file" ]]; then
+                    show_certificate_info "$cert_file" "$domain"
+                else
+                    log "ERROR" "Certificate file not found: $cert_file"
+                    return 1
+                fi
+            else
+                log "ERROR" "Certificate info function not available"
+                return 1
+            fi
+            ;;
+        validate|check)
+            if command -v validate_ssl_certificates >/dev/null 2>&1; then
+                local cert_file="$ssl_path/milou.crt"
+                local key_file="$ssl_path/milou.key"
+                validate_ssl_certificates "$cert_file" "$key_file" "$domain"
+            else
+                log "ERROR" "SSL validation function not available"
+                return 1
+            fi
+            ;;
+        backup)
+            if command -v backup_ssl_certificates >/dev/null 2>&1; then
+                backup_ssl_certificates "$ssl_path"
+            else
+                log "ERROR" "SSL backup function not available"
+                return 1
+            fi
+            ;;
+        help|--help|-h)
+            echo "SSL management usage:"
+            echo "  ./milou.sh ssl [COMMAND]"
+            echo ""
+            echo "Commands:"
+            echo "  setup     Generate or update SSL certificates"
+            echo "  status    Show certificate information"
+            echo "  validate  Validate existing certificates"
+            echo "  backup    Backup current certificates"
+            echo "  help      Show this help"
+            echo ""
+            echo "If no command is provided, shows current SSL status."
+            ;;
+        *)
+            log "ERROR" "Unknown SSL command: $action"
+            log "INFO" "Use './milou.sh ssl help' for available commands"
+            return 1
+            ;;
+    esac
 }
 
 # Cleanup command handler

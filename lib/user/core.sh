@@ -6,6 +6,7 @@
 # =============================================================================
 
 # Source utility functions
+source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
 
 # Constants - Export for use by other modules
 export MILOU_USER="milou"
@@ -120,7 +121,7 @@ create_milou_user() {
     fi
     
     # Set up user environment
-    source "${BASH_SOURCE%/*}/user-environment.sh"
+    source "${BASH_SOURCE%/*}/environment.sh"
     setup_milou_user_environment
     
     log "SUCCESS" "User $MILOU_USER created successfully"

@@ -442,7 +442,12 @@ show_environment_status() {
 # Auto-initialization
 # =============================================================================
 
-# Auto-initialize if not in setup mode
+# Auto-initialize if not in setup mode and environment file exists
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]] && [[ "${1:-}" != "setup" ]]; then
-    initialize_environment_manager
+    # Only initialize if we can find an environment file
+    if discover_environment_file 2>/dev/null; then
+        initialize_environment_manager
+    else
+        log "DEBUG" "No environment file found, skipping auto-initialization"
+    fi
 fi 

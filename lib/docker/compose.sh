@@ -475,6 +475,134 @@ milou_docker_shell() {
 }
 
 # =============================================================================
+# Enhanced Service Management with Checks
+# =============================================================================
+
+# Enhanced start services with comprehensive checks
+start_services_with_checks() {
+    local setup_mode="${1:-false}"
+    
+    milou_log "STEP" "Starting Milou services with pre-flight checks..."
+    
+    # Initialize Docker environment if not already done
+    if ! milou_docker_init; then
+        milou_log "ERROR" "Failed to initialize Docker environment"
+        return 1
+    fi
+    
+    # Check SSL certificates if configured
+    local ssl_path
+    if [[ -f "$DOCKER_ENV_FILE" ]]; then
+        ssl_path=$(grep "^SSL_CERT_PATH=" "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        
+        if [[ -n "$ssl_path" ]]; then
+            milou_log "INFO" "Checking SSL certificates..."
+            local full_ssl_path
+            if [[ "$ssl_path" = /* ]]; then
+                full_ssl_path="$ssl_path"
+            else
+                full_ssl_path="$(dirname "$DOCKER_COMPOSE_FILE")/$ssl_path"
+            fi
+            
+            if [[ -f "$full_ssl_path/milou.crt" && -f "$full_ssl_path/milou.key" ]]; then
+                milou_log "SUCCESS" "SSL certificates found"
+            else
+                milou_log "WARN" "SSL certificates not found at $full_ssl_path"
+                milou_log "INFO" "💡 Services will start but SSL may not work properly"
+            fi
+        fi
+    fi
+    
+    # Create required networks
+    milou_create_networks
+    
+    # Handle credential changes and volume cleanup
+    milou_cleanup_volumes_on_credential_change
+    
+    # Enhanced conflict detection for non-setup mode
+    if [[ "$setup_mode" != "true" ]]; then
+        milou_log "DEBUG" "Normal startup mode - checking for conflicts"
+        
+        # Check for running containers that might conflict
+        local running_containers
+        running_containers=$(docker ps --filter "name=${DOCKER_PROJECT_NAME}-" --format "{{.Names}}" 2>/dev/null || true)
+        
+        if [[ -n "$running_containers" ]]; then
+            milou_log "WARN" "Found running Milou containers:"
+            while IFS= read -r container; do
+                [[ -n "$container" ]] && milou_log "WARN" "  🐳 $container"
+            done <<< "$running_containers"
+            
+            if [[ "${FORCE:-false}" == "true" ]]; then
+                milou_log "WARN" "Force mode enabled - stopping existing services first"
+                if ! milou_docker_stop; then
+                    milou_log "WARN" "Failed to stop some services, continuing anyway..."
+                fi
+                sleep 3
+            else
+                milou_log "ERROR" "Cannot start services due to conflicts"
+                milou_log "INFO" "💡 Solutions:"
+                milou_log "INFO" "  • Use --force flag to stop existing services"
+                milou_log "INFO" "  • Run: ./milou.sh stop (to stop Milou services)"
+                milou_log "INFO" "  • Run: ./milou.sh restart (to restart services)"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Test configuration before starting
+    if ! milou_docker_test_config; then
+        milou_log "ERROR" "Docker Compose configuration is invalid"
+        return 1
+    fi
+    
+    # Start services using the main start function
+    if milou_docker_start; then
+        milou_log "SUCCESS" "✅ Services started successfully with all checks passed"
+        
+        # Wait a moment for services to initialize
+        milou_log "INFO" "Waiting for services to initialize..."
+        sleep 5
+        
+        # Basic health check
+        local healthy_services=0
+        local total_services
+        total_services=$(milou_docker_compose config --services 2>/dev/null | wc -l || echo "0")
+        
+        if [[ "$total_services" -gt 0 ]]; then
+            # Give services time to start
+            local max_wait=30
+            local wait_time=0
+            
+            while [[ $wait_time -lt $max_wait ]]; do
+                healthy_services=$(milou_docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
+                
+                if [[ "$healthy_services" -eq "$total_services" ]]; then
+                    break
+                fi
+                
+                sleep 2
+                ((wait_time += 2))
+            done
+            
+            milou_log "INFO" "Services status: $healthy_services/$total_services running"
+            
+            if [[ "$healthy_services" -eq "$total_services" ]]; then
+                milou_log "SUCCESS" "All services are running successfully"
+            else
+                milou_log "WARN" "Some services may still be starting up"
+                milou_log "INFO" "💡 Check status with: ./milou.sh status"
+            fi
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "❌ Failed to start services"
+        return 1
+    fi
+}
+
+# =============================================================================
 # Backward Compatibility Aliases
 # =============================================================================
 
@@ -494,7 +622,177 @@ export -f milou_docker_start milou_docker_stop milou_docker_restart
 export -f milou_docker_status milou_docker_logs milou_docker_shell
 export -f milou_check_credentials_changed milou_store_credentials_hash
 export -f milou_cleanup_volumes_on_credential_change milou_create_networks
+export -f start_services_with_checks
 
 # Export backward compatibility functions
 export -f run_docker_compose start_services stop_services restart_services
 export -f show_service_status show_service_logs get_service_shell exec_in_service 
+
+# =============================================================================
+# Image Extraction and Resolution
+# =============================================================================
+
+# Extract Milou-specific images from docker-compose.yml
+get_milou_images_from_compose() {
+    local compose_file="${1:-${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}}"
+    local use_latest="${2:-true}"
+    
+    if [[ ! -f "$compose_file" ]]; then
+        milou_log "ERROR" "Docker Compose file not found: $compose_file" >&2
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Extracting Milou images from: $compose_file" >&2
+    milou_log "DEBUG" "Use latest tags: $use_latest" >&2
+    
+    local -a milou_images=()
+    
+    # Extract lines with ghcr.io/milou-sh/milou images
+    while IFS= read -r line; do
+        if [[ "$line" =~ image:.*ghcr\.io/milou-sh/milou/ ]]; then
+            # Extract the image specification - handle both static and variable formats
+            local image_spec
+            if [[ "$line" =~ image:.*ghcr\.io/milou-sh/milou/([^:]+):\$\{[^}]+\} ]]; then
+                # Handle format: ghcr.io/milou-sh/milou/service:${VAR:-default}
+                image_spec=$(echo "$line" | sed -n 's/.*image: *ghcr\.io\/milou-sh\/milou\/\([^:]*\):.*/\1/p')
+            elif [[ "$line" =~ image:.*ghcr\.io/milou-sh/milou/([^:]+):[^[:space:]]+ ]]; then
+                # Handle format: ghcr.io/milou-sh/milou/service:tag
+                image_spec=$(echo "$line" | sed -n 's/.*image: *ghcr\.io\/milou-sh\/milou\/\([^:]*\):.*/\1/p')
+            fi
+            
+            if [[ -n "$image_spec" ]]; then
+                # Determine the tag based on user preference
+                local tag
+                if [[ "$use_latest" == "true" ]]; then
+                    tag="latest"
+                else
+                    tag="v1.0.0"
+                fi
+                
+                # Add the complete image specification
+                milou_images+=("$image_spec:$tag")
+                milou_log "DEBUG" "Found Milou image: $image_spec -> $image_spec:$tag" >&2
+            fi
+        fi
+    done < "$compose_file"
+    
+    if [[ ${#milou_images[@]} -eq 0 ]]; then
+        milou_log "WARN" "No Milou images found in docker-compose.yml" >&2
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Extracted ${#milou_images[@]} Milou images: ${milou_images[*]}" >&2
+    
+    # Output the images (one per line for easy parsing)
+    printf '%s\n' "${milou_images[@]}"
+    return 0
+}
+
+# Get all required images (Milou + third-party) with resolved tags
+get_all_required_images() {
+    local compose_file="${1:-${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}}"
+    local use_latest="${2:-true}"
+    
+    if [[ ! -f "$compose_file" ]]; then
+        milou_log "ERROR" "Docker Compose file not found: $compose_file" >&2
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Getting all required images from: $compose_file" >&2
+    
+    local -a all_images=()
+    
+    # Get Milou-specific images
+    local milou_images
+    milou_images=$(get_milou_images_from_compose "$compose_file" "$use_latest")
+    if [[ $? -eq 0 && -n "$milou_images" ]]; then
+        while IFS= read -r image; do
+            [[ -n "$image" ]] && all_images+=("$image")
+        done <<< "$milou_images"
+    fi
+    
+    # Note: We only validate/pull Milou-specific images since third-party images
+    # (redis, rabbitmq) are pulled automatically by docker-compose and don't need
+    # authentication with our GitHub registry
+    
+    if [[ ${#all_images[@]} -eq 0 ]]; then
+        milou_log "WARN" "No images found to validate/pull" >&2
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Total images to process: ${#all_images[@]}" >&2
+    
+    # Output the images
+    printf '%s\n' "${all_images[@]}"
+    return 0
+}
+
+# Validate that required images exist in the registry
+validate_required_images() {
+    local token="$1"
+    local use_latest="${2:-true}"
+    local compose_file="${3:-${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}}"
+    
+    milou_log "DEBUG" "Validating required images (use_latest: $use_latest)" >&2
+    
+    # Get the list of required images
+    local required_images
+    required_images=$(get_all_required_images "$compose_file" "$use_latest")
+    if [[ $? -ne 0 || -z "$required_images" ]]; then
+        milou_log "ERROR" "Failed to get required images list" >&2
+        return 1
+    fi
+    
+    # Convert to array
+    local -a images_array=()
+    while IFS= read -r image; do
+        [[ -n "$image" ]] && images_array+=("$image")
+    done <<< "$required_images"
+    
+    milou_log "INFO" "Validating ${#images_array[@]} required images..." >&2
+    
+    # Call the existing validate_images_exist function with the correct parameters
+    if command -v validate_images_exist >/dev/null 2>&1; then
+        validate_images_exist "$token" "${images_array[@]}"
+    else
+        milou_log "ERROR" "validate_images_exist function not available" >&2
+        return 1
+    fi
+}
+
+# Pull all required images
+pull_required_images() {
+    local token="$1"
+    local use_latest="${2:-true}"
+    local compose_file="${3:-${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}}"
+    
+    milou_log "DEBUG" "Pulling required images (use_latest: $use_latest)" >&2
+    
+    # Get the list of required images
+    local required_images
+    required_images=$(get_all_required_images "$compose_file" "$use_latest")
+    if [[ $? -ne 0 || -z "$required_images" ]]; then
+        milou_log "ERROR" "Failed to get required images list" >&2
+        return 1
+    fi
+    
+    # Convert to array
+    local -a images_array=()
+    while IFS= read -r image; do
+        [[ -n "$image" ]] && images_array+=("$image")
+    done <<< "$required_images"
+    
+    milou_log "INFO" "Pulling ${#images_array[@]} required images..." >&2
+    
+    # Call the existing pull_images function with the correct parameters
+    if command -v pull_images >/dev/null 2>&1; then
+        pull_images "$token" "${images_array[@]}"
+    else
+        milou_log "ERROR" "pull_images function not available" >&2
+        return 1
+    fi
+}
+
+# Export the new functions
+export -f get_milou_images_from_compose get_all_required_images
+export -f validate_required_images pull_required_images 

@@ -213,7 +213,7 @@ get_ssl_path_for_env() {
     if [[ "$(basename "$working_dir")" == "milou-cli" ]] && [[ -d "$working_dir/static" ]]; then
         # SSL certificates are in static/ssl, but docker-compose.yml is also in static/
         # So the relative path from static/ to static/ssl is just "./ssl"
-        milou_log "DEBUG" "Environment SSL path: ./ssl (relative to static/ directory)"
+        milou_log "DEBUG" "Environment SSL path: ./ssl (relative to static/ directory)" >&2
         echo "./ssl"
     else
         # For other environments, use default

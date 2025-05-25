@@ -37,16 +37,23 @@ install_prerequisites() {
     echo
     
     # Detect system information
+    log "DEBUG" "Detecting system distribution..."
     local distro_id
     distro_id=$(detect_distribution)
+    log "DEBUG" "Distribution detected: $distro_id"
+    
+    log "DEBUG" "Detecting package manager..."
     local pkg_manager
     pkg_manager=$(detect_package_manager)
+    log "DEBUG" "Package manager detected: $pkg_manager"
     
     log "INFO" "System Information:"
     log "INFO" "  📋 Distribution: $distro_id"
     log "INFO" "  📦 Package Manager: $pkg_manager"
     log "INFO" "  👤 User: $(whoami)"
     echo
+    
+    log "DEBUG" "Checking root privileges..."
     
     # Check if we're running as root for installation
     if [[ $EUID -ne 0 ]] && [[ "$auto_install" == "true" ]]; then

@@ -438,13 +438,32 @@ interactive_setup_wizard() {
 
     # Step 1: System Prerequisites
     echo -e "${BOLD}Step 1: System Prerequisites${NC}"
+    set +e
     check_system_requirements
+    local req_exit_code=$?
+    set -e
+    log "DEBUG" "System requirements check returned: $req_exit_code"
+    if [[ $req_exit_code -ne 0 ]]; then
+        log "ERROR" "System requirements check failed"
+        return 1
+    fi
     echo
     
     # Step 2: GitHub Authentication
     echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
-    local github_token=""
-    while true; do
+    local github_token="${GITHUB_TOKEN:-}"
+    
+    if [[ -n "$github_token" ]]; then
+        log "INFO" "Using provided GitHub token"
+        if test_github_authentication "$github_token"; then
+            log "SUCCESS" "GitHub token validated successfully"
+        else
+            log "ERROR" "Provided GitHub token is invalid"
+            github_token=""
+        fi
+    fi
+    
+    while [[ -z "$github_token" ]]; do
         echo -ne "${CYAN}GitHub Personal Access Token: ${NC}"
         read -rs github_token
         echo
@@ -458,6 +477,7 @@ interactive_setup_wizard() {
             break
         else
             echo "Please try again with a valid token."
+            github_token=""
             echo
         fi
     done
@@ -601,14 +621,14 @@ interactive_setup_wizard() {
     # Choose configuration generation mode based on user choice
     if [[ "${PRESERVE_EXISTING:-false}" == "true" ]]; then
         # Use the credential preservation mode
-        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "auto"; then
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "auto" "$use_latest"; then
             error_exit "Failed to generate configuration with preservation"
         fi
         # Set the environment variable for later use
         export MILOU_PRESERVED_CREDENTIALS="true"
     else
         # Fresh installation - force new credentials
-        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "never"; then
+        if ! generate_config_with_preservation "$domain" "$ssl_path" "" "never" "$use_latest"; then
             error_exit "Failed to generate configuration"
         fi
         # Set the environment variable for later use
@@ -631,13 +651,23 @@ interactive_setup_wizard() {
     
     # Step 9: Pull Docker Images
     echo -e "${BOLD}Step 9: Pulling Docker Images${NC}"
+    
+    # Determine the docker-compose file path
+    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+    if [[ ! -f "$compose_file" ]]; then
+        compose_file="./static/docker-compose.yml"
+        if [[ ! -f "$compose_file" ]]; then
+            error_exit "Docker Compose file not found: $compose_file"
+        fi
+    fi
+    
     show_progress "Validating image availability" 2
-    if ! validate_images_exist "$github_token" "$use_latest"; then
+    if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
         log "WARN" "Some images may not be available - continuing anyway"
     fi
     
     show_progress "Pulling Docker images from GitHub Container Registry" 2
-    if ! pull_images "$github_token" "$use_latest"; then
+    if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
         error_exit "Failed to pull Docker images"
     fi
     echo

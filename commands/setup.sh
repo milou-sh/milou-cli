@@ -13,6 +13,17 @@ fi
 
 # Setup command handler
 handle_setup() {
+    # Load required modules for setup
+    if command -v milou_load_user_modules >/dev/null 2>&1; then
+        milou_load_user_modules
+    fi
+    if command -v milou_load_system_modules >/dev/null 2>&1; then
+        milou_load_system_modules
+    fi
+    if command -v milou_load_docker_modules >/dev/null 2>&1; then
+        milou_load_docker_modules
+    fi
+    
     echo
     echo -e "${BOLD}${PURPLE}🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION}${NC}"
     echo -e "${BOLD}${PURPLE}═══════════════════════════════════════════════════${NC}"
@@ -169,12 +180,15 @@ handle_setup() {
     echo
     
     # Determine setup mode based on conditions and flags
-    if [[ -n "$GITHUB_TOKEN" ]] || [[ "${INTERACTIVE:-true}" == "false" ]]; then
+    if [[ "${INTERACTIVE:-true}" == "false" ]]; then
         setup_mode="non-interactive"
         log "INFO" "🤖 Non-interactive mode selected"
     else
         setup_mode="interactive"
         log "INFO" "🎯 Interactive mode selected"
+        if [[ -n "$GITHUB_TOKEN" ]]; then
+            log "INFO" "🔑 GitHub token provided for authentication"
+        fi
     fi
     
     # Handle fresh server optimization
@@ -270,8 +284,12 @@ handle_setup() {
                 
                 # Switch to milou user and continue setup
                 log "INFO" "🔄 Switching to milou user to continue setup..."
-                switch_to_milou_user_and_continue
-                return $?
+                if command -v switch_to_milou_user >/dev/null 2>&1; then
+                    switch_to_milou_user "$@"
+                    return $?
+                else
+                    log "WARN" "User switching not available, continuing as root"
+                fi
             else
                 log "ERROR" "User creation function not available"
                 return 1
@@ -290,8 +308,8 @@ handle_setup() {
     # Use the appropriate wizard based on mode
     if [[ "$setup_mode" == "interactive" ]]; then
         log "INFO" "🎯 Starting interactive configuration wizard..."
-        if command -v run_setup_wizard >/dev/null 2>&1; then
-            run_setup_wizard
+        if command -v interactive_setup_wizard >/dev/null 2>&1; then
+            interactive_setup_wizard
         else
             log "ERROR" "Setup wizard not available"
             return 1

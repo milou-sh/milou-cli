@@ -28,7 +28,7 @@ declare -gA PRESERVED_CONFIG=()
 
 # Detect existing Milou installation and configuration
 detect_existing_installation() {
-    local env_file
+    local env_file=""
     local has_config=false
     local has_containers=false
     local has_volumes=false

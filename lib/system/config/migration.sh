@@ -28,6 +28,139 @@ fi
 source "${BASH_SOURCE%/*}/../ssl/paths.sh" 2>/dev/null || true
 
 # =============================================================================
+# Utility Functions
+# =============================================================================
+
+# Generate secure random strings
+generate_secure_random() {
+    local length="${1:-32}"
+    local charset="${2:-alphanumeric}"
+    local exclude_ambiguous="${3:-true}"
+    
+    local chars=""
+    case "$charset" in
+        "alphanumeric")
+            chars="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            if [[ "$exclude_ambiguous" == true ]]; then
+                chars="abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+            fi
+            ;;
+        "alpha")
+            chars="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            ;;
+        "numeric") 
+            chars="0123456789"
+            if [[ "$exclude_ambiguous" == true ]]; then
+                chars="23456789"
+            fi
+            ;;
+        "hex") 
+            chars="0123456789abcdef"
+            ;;
+        "safe")
+            chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            ;;
+    esac
+    
+    local result=""
+    
+    # Try OpenSSL first (most secure)
+    if command -v openssl >/dev/null 2>&1; then
+        case "$charset" in
+            "hex") 
+                result=$(openssl rand -hex "$((length / 2))" 2>/dev/null | cut -c1-"$length")
+                ;;
+            *)
+                local base64_output
+                base64_output=$(openssl rand -base64 "$((length * 2))" 2>/dev/null | tr -d "=+/\n")
+                if [[ -n "$base64_output" ]]; then
+                    result=""
+                    for ((i=0; i<${#base64_output} && ${#result}<length; i++)); do
+                        local char="${base64_output:$i:1}"
+                        if [[ "$chars" == *"$char"* ]]; then
+                            result+="$char"
+                        fi
+                    done
+                fi
+                ;;
+        esac
+    fi
+    
+    # Fallback to /dev/urandom
+    if [[ -z "$result" && -c /dev/urandom ]]; then
+        local random_bytes
+        random_bytes=$(head -c "$((length * 3))" /dev/urandom 2>/dev/null | base64 | tr -d "=+/\n")
+        if [[ -n "$random_bytes" ]]; then
+            result=""
+            for ((i=0; i<${#random_bytes} && ${#result}<length; i++)); do
+                local char="${random_bytes:$i:1}"
+                if [[ "$chars" == *"$char"* ]]; then
+                    result+="$char"
+                fi
+            done
+        fi
+    fi
+    
+    # Final fallback to BASH RANDOM
+    if [[ -z "$result" ]]; then
+        result=""
+        for ((i=0; i<length; i++)); do
+            result+="${chars:$((RANDOM % ${#chars})):1}"
+        done
+    fi
+    
+    # Ensure we have the requested length
+    if [[ ${#result} -lt $length ]]; then
+        # Pad with additional random characters if needed
+        while [[ ${#result} -lt $length ]]; do
+            result+="${chars:$((RANDOM % ${#chars})):1}"
+        done
+    fi
+    
+    echo "${result:0:$length}"
+}
+
+# Validate configuration inputs
+validate_config_inputs() {
+    local domain="$1"
+    local ssl_path="$2"
+    local admin_email="${3:-}"
+    
+    milou_log "TRACE" "Validating configuration inputs"
+    
+    # Validate domain
+    if [[ -n "$domain" && "$domain" != "localhost" ]]; then
+        if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+            milou_log "ERROR" "Invalid domain format: $domain"
+            return 1
+        fi
+    fi
+    
+    # Validate SSL path - create if doesn't exist
+    if [[ -n "$ssl_path" ]]; then
+        local ssl_dir=$(dirname "$ssl_path")
+        if [[ ! -d "$ssl_dir" ]]; then
+            milou_log "DEBUG" "Creating SSL directory: $ssl_dir"
+            if ! mkdir -p "$ssl_dir"; then
+                milou_log "ERROR" "Failed to create SSL directory: $ssl_dir"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Validate admin email if provided
+    if [[ -n "$admin_email" ]]; then
+        if [[ ! "$admin_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+            milou_log "ERROR" "Invalid email format: $admin_email"
+            return 1
+        fi
+    fi
+    
+    milou_log "TRACE" "Configuration inputs validation passed"
+    return 0
+}
+
+# =============================================================================
 # Configuration Migration Functions
 # =============================================================================
 
@@ -37,6 +170,7 @@ generate_config_with_preservation() {
     local ssl_path=${2:-./ssl}
     local admin_email="${3:-}"
     local preserve_mode="${4:-auto}"  # auto, force, never
+    local use_latest="${5:-true}"     # true for latest tags, false for v1.0.0
     
     milou_log "STEP" "Generating configuration with credential preservation..."
     
@@ -257,6 +391,21 @@ PROFILING_ENABLED=false
 HOT_RELOAD=false
 
 # =============================================================================
+# DOCKER IMAGE CONFIGURATION
+# =============================================================================
+# Image tags for Milou services - set based on user preference
+MILOU_DATABASE_TAG=$([ "$use_latest" == "true" ] && echo "latest" || echo "v1.0.0")
+MILOU_BACKEND_TAG=$([ "$use_latest" == "true" ] && echo "latest" || echo "v1.0.0")
+MILOU_FRONTEND_TAG=$([ "$use_latest" == "true" ] && echo "latest" || echo "v1.0.0")
+MILOU_ENGINE_TAG=$([ "$use_latest" == "true" ] && echo "latest" || echo "v1.0.0")
+MILOU_NGINX_TAG=$([ "$use_latest" == "true" ] && echo "latest" || echo "v1.0.0")
+
+# Third-party service versions
+REDIS_VERSION=7-alpine
+RABBITMQ_VERSION=3-management-alpine
+PROMETHEUS_VERSION=latest
+
+# =============================================================================
 # FEATURE FLAGS
 # =============================================================================
 FEATURE_USER_REGISTRATION=true
@@ -320,7 +469,7 @@ migrate_configuration() {
     admin_email=$(grep "^MILOU_ADMIN_EMAIL=" "$source_env" | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
     
     # Generate new configuration with preserved credentials
-    if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "force"; then
+    if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "force" "true"; then
         milou_log "SUCCESS" "Configuration migration completed successfully"
         milou_log "INFO" "Migrated from: $current_version → $target_version"
         return 0

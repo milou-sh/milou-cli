@@ -353,10 +353,61 @@ handle_install_deps() {
     # Ensure system modules are loaded
     ensure_system_modules
     
+    # Parse command-specific options
+    local auto_install="true"
+    local enable_firewall="false"
+    local skip_confirmation="false"
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --manual|--no-auto)
+                auto_install="false"
+                shift
+                ;;
+            --firewall)
+                enable_firewall="true"
+                shift
+                ;;
+            --skip-confirmation)
+                skip_confirmation="true"
+                shift
+                ;;
+            --help|-h)
+                echo "Install dependencies usage:"
+                echo "  ./milou.sh install-deps [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  --manual          Show manual installation instructions"
+                echo "  --firewall        Configure basic firewall rules"
+                echo "  --skip-confirmation  Skip confirmation prompts"
+                echo "  --help            Show this help"
+                return 0
+                ;;
+            *)
+                # Ignore other flags like --verbose (handled by main script)
+                shift
+                ;;
+        esac
+    done
+    
+    log "DEBUG" "Checking for install_prerequisites function..."
     if command -v install_prerequisites >/dev/null 2>&1; then
-        install_prerequisites "$@"
+        log "DEBUG" "Found install_prerequisites, calling with params: auto_install=$auto_install, enable_firewall=$enable_firewall, skip_confirmation=$skip_confirmation"
+        
+        # Temporarily disable strict error handling for prerequisites installation
+        set +e
+        install_prerequisites "$auto_install" "$enable_firewall" "$skip_confirmation"
+        local exit_code=$?
+        set -e
+        
+        log "DEBUG" "install_prerequisites returned with exit code: $exit_code"
+        return $exit_code
     elif command -v install_system_dependencies >/dev/null 2>&1; then
-        install_system_dependencies "$@"
+        log "DEBUG" "Found install_system_dependencies, calling with params: auto_install=$auto_install, enable_firewall=$enable_firewall, skip_confirmation=$skip_confirmation"
+        install_system_dependencies "$auto_install" "$enable_firewall" "$skip_confirmation"
+        local exit_code=$?
+        log "DEBUG" "install_system_dependencies returned with exit code: $exit_code"
+        return $exit_code
     else
         log "ERROR" "Install dependencies function not available"
         log "DEBUG" "Available functions: $(compgen -A function | grep -E '(install|deps|prerequisites)' | head -5 | tr '\n' ' ')"

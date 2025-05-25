@@ -150,7 +150,19 @@ handle_shell() {
     fi
 }
 
+# Debug images command handler
+handle_debug_images() {
+    log "INFO" "🔍 Debugging Docker image availability..."
+    
+    if command -v debug_docker_images >/dev/null 2>&1; then
+        debug_docker_images "$@"
+    else
+        log "ERROR" "Debug images function not available"
+        return 1
+    fi
+}
+
 # Export all functions
 export -f handle_start handle_stop handle_restart handle_status
 export -f handle_detailed_status handle_logs handle_health handle_health_check
-export -f handle_shell 
+export -f handle_shell handle_debug_images 

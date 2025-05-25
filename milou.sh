@@ -445,10 +445,10 @@ milou_load_and_execute_command() {
         setup)
             handler_file="setup.sh"
             ;;
-        start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images|diagnose)
+        start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps)
+        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps|diagnose)
             handler_file="system.sh"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)

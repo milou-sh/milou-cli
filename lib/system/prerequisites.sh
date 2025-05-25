@@ -17,16 +17,19 @@ fi
 # Load prerequisite sub-modules on-demand to ensure dependencies are available
 load_prerequisites_modules() {
     if [[ "${PREREQUISITES_MODULES_LOADED:-false}" != "true" ]]; then
-        source "${BASH_SOURCE%/*}/prerequisites/detection.sh" 2>/dev/null || {
-            log "ERROR" "Failed to load detection module"
+        # Use MILOU_LIB_DIR from module loader or fallback to relative path
+        local prereq_dir="${MILOU_LIB_DIR:-${SCRIPT_DIR}/lib}/system/prerequisites"
+        
+        source "${prereq_dir}/detection.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load detection module from ${prereq_dir}/detection.sh"
             return 1
         }
-        source "${BASH_SOURCE%/*}/prerequisites/docker.sh" 2>/dev/null || {
-            log "ERROR" "Failed to load docker module"
+        source "${prereq_dir}/docker.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load docker module from ${prereq_dir}/docker.sh"
             return 1
         }
-        source "${BASH_SOURCE%/*}/prerequisites/tools.sh" 2>/dev/null || {
-            log "ERROR" "Failed to load tools module"
+        source "${prereq_dir}/tools.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load tools module from ${prereq_dir}/tools.sh"
             return 1
         }
         PREREQUISITES_MODULES_LOADED="true"
@@ -75,6 +78,7 @@ install_prerequisites() {
     echo
     
     log "DEBUG" "Checking root privileges..."
+    log "DEBUG" "EUID: $EUID, auto_install: $auto_install"
     
     # Check if we're running as root for installation
     if [[ $EUID -ne 0 ]] && [[ "$auto_install" == "true" ]]; then
@@ -82,31 +86,45 @@ install_prerequisites() {
         log "INFO" "💡 Rerun with sudo for automatic installation"
         
         if [[ "${INTERACTIVE:-true}" == "true" && "$skip_confirmation" != "true" ]]; then
+            log "DEBUG" "Prompting user for manual installation"
             if ! confirm "Continue with manual installation instructions?" "Y"; then
                 log "INFO" "Prerequisites installation cancelled"
                 return 1
             fi
             auto_install="false"
         else
+            log "DEBUG" "Non-interactive mode, returning error"
             return 1
         fi
     fi
     
+    log "DEBUG" "Root privileges check passed, continuing..."
+    
+    log "DEBUG" "Initializing step counters..."
     local total_steps=0
     local completed_steps=0
     local failed_steps=0
     
+    log "DEBUG" "Counting steps to perform..."
+    log "DEBUG" "Initial total_steps value: $total_steps"
     # Count steps to perform
-    ((total_steps++))  # System update
-    ((total_steps++))  # Required tools
+    total_steps=$((total_steps + 1))  # System update
+    log "DEBUG" "Step 1 counted: System update (total: $total_steps)"
+    total_steps=$((total_steps + 1))  # Required tools
+    log "DEBUG" "Step 2 counted: Required tools (total: $total_steps)"
     if ! command -v docker >/dev/null 2>&1; then
-        ((total_steps++))  # Docker installation
+        total_steps=$((total_steps + 1))  # Docker installation
+        log "DEBUG" "Step 3 counted: Docker installation (total: $total_steps)"
     fi
-    ((total_steps++))  # Docker service configuration
-    ((total_steps++))  # Docker Compose verification
+    total_steps=$((total_steps + 1))  # Docker service configuration
+    log "DEBUG" "Step counted: Docker service configuration (total: $total_steps)"
+    total_steps=$((total_steps + 1))  # Docker Compose verification
+    log "DEBUG" "Step counted: Docker Compose verification (total: $total_steps)"
     if [[ "$enable_firewall" == "true" ]]; then
-        ((total_steps++))  # Firewall configuration
+        total_steps=$((total_steps + 1))  # Firewall configuration
+        log "DEBUG" "Step counted: Firewall configuration (total: $total_steps)"
     fi
+    log "DEBUG" "Step counting completed, total steps: $total_steps"
     
     log "INFO" "🎯 Installing prerequisites ($total_steps steps)..."
     echo
@@ -114,9 +132,9 @@ install_prerequisites() {
     # Step 1: Update system packages
     if [[ "$auto_install" == "true" ]]; then
         if update_system_packages "$pkg_manager"; then
-            ((completed_steps++))
+            completed_steps=$((completed_steps + 1))
         else
-            ((failed_steps++))
+            failed_steps=$((failed_steps + 1))
             log "WARN" "System update failed, continuing anyway..."
         fi
     else
@@ -144,9 +162,9 @@ install_prerequisites() {
     # Step 2: Install required tools
     if [[ "$auto_install" == "true" ]]; then
         if install_required_tools "$pkg_manager"; then
-            ((completed_steps++))
+            completed_steps=$((completed_steps + 1))
         else
-            ((failed_steps++))
+            failed_steps=$((failed_steps + 1))
         fi
     else
         log "INFO" "📋 Step 2: Install required tools"
@@ -172,9 +190,9 @@ install_prerequisites() {
     if ! command -v docker >/dev/null 2>&1; then
         if [[ "$auto_install" == "true" ]]; then
             if install_docker "$distro_id" "$pkg_manager"; then
-                ((completed_steps++))
+                completed_steps=$((completed_steps + 1))
             else
-                ((failed_steps++))
+                failed_steps=$((failed_steps + 1))
             fi
         else
             log "INFO" "📋 Step 3: Install Docker"
@@ -184,15 +202,15 @@ install_prerequisites() {
         fi
     else
         log "SUCCESS" "✅ Docker is already installed"
-        ((completed_steps++))
+        completed_steps=$((completed_steps + 1))
     fi
     
     # Step 4: Configure Docker service
     if [[ "$auto_install" == "true" ]]; then
         if configure_docker_service; then
-            ((completed_steps++))
+            completed_steps=$((completed_steps + 1))
         else
-            ((failed_steps++))
+            failed_steps=$((failed_steps + 1))
         fi
     else
         log "INFO" "📋 Step 4: Configure Docker service"
@@ -204,9 +222,9 @@ install_prerequisites() {
     # Step 5: Verify Docker Compose
     if [[ "$auto_install" == "true" ]]; then
         if verify_docker_compose; then
-            ((completed_steps++))
+            completed_steps=$((completed_steps + 1))
         else
-            ((failed_steps++))
+            failed_steps=$((failed_steps + 1))
         fi
     else
         log "INFO" "📋 Step 5: Verify Docker Compose"
@@ -219,9 +237,9 @@ install_prerequisites() {
     if [[ "$enable_firewall" == "true" ]]; then
         if [[ "$auto_install" == "true" ]]; then
             if configure_basic_firewall "$enable_firewall"; then
-                ((completed_steps++))
+                completed_steps=$((completed_steps + 1))
             else
-                ((failed_steps++))
+                failed_steps=$((failed_steps + 1))
                 log "WARN" "Firewall configuration failed, continuing anyway..."
             fi
         else

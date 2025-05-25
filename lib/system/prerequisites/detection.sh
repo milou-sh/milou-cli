@@ -59,32 +59,38 @@ update_system_packages() {
     local pkg_manager="$1"
     
     log "STEP" "Updating system packages..."
+    log "DEBUG" "Package manager: $pkg_manager"
     
     case "$pkg_manager" in
         "apt")
-            if ! sudo apt-get update; then
+            log "DEBUG" "Running: apt-get update"
+            if ! apt-get update; then
                 log "ERROR" "Failed to update package lists"
                 return 1
             fi
             ;;
         "yum")
-            if ! sudo yum check-update; then
+            log "DEBUG" "Running: yum check-update"
+            if ! yum check-update; then
                 log "DEBUG" "YUM check-update returned non-zero (normal behavior)"
             fi
             ;;
         "dnf")
-            if ! sudo dnf check-update; then
+            log "DEBUG" "Running: dnf check-update"
+            if ! dnf check-update; then
                 log "DEBUG" "DNF check-update returned non-zero (normal behavior)"
             fi
             ;;
         "pacman")
-            if ! sudo pacman -Sy; then
+            log "DEBUG" "Running: pacman -Sy"
+            if ! pacman -Sy; then
                 log "ERROR" "Failed to sync package databases"
                 return 1
             fi
             ;;
         "zypper")
-            if ! sudo zypper refresh; then
+            log "DEBUG" "Running: zypper refresh"
+            if ! zypper refresh; then
                 log "ERROR" "Failed to refresh repositories"
                 return 1
             fi

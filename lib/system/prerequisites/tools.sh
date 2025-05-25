@@ -46,7 +46,7 @@ install_required_tools() {
                     "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
-            sudo apt-get install -y "${required_packages[@]}"
+            apt-get install -y "${required_packages[@]}"
             ;;
         "yum"|"dnf")
             for tool in "${missing_tools[@]}"; do
@@ -59,7 +59,7 @@ install_required_tools() {
                     "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
-            sudo $pkg_manager install -y "${required_packages[@]}"
+            $pkg_manager install -y "${required_packages[@]}"
             ;;
         "pacman")
             for tool in "${missing_tools[@]}"; do
@@ -72,7 +72,7 @@ install_required_tools() {
                     "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
-            sudo pacman -S --noconfirm "${required_packages[@]}"
+            pacman -S --noconfirm "${required_packages[@]}"
             ;;
         "zypper")
             for tool in "${missing_tools[@]}"; do
@@ -85,7 +85,7 @@ install_required_tools() {
                     "date"|"sed"|"grep"|"awk"|"timeout") required_packages+=("coreutils") ;;
                 esac
             done
-            sudo zypper install -y "${required_packages[@]}"
+            zypper install -y "${required_packages[@]}"
             ;;
         *)
             log "ERROR" "Unsupported package manager for automatic tool installation"

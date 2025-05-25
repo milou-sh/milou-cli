@@ -661,14 +661,24 @@ interactive_setup_wizard() {
         fi
     fi
     
-    show_progress "Validating image availability" 2
-    if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
-        log "WARN" "Some images may not be available - continuing anyway"
-    fi
-    
-    show_progress "Pulling Docker images from GitHub Container Registry" 2
-    if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-        error_exit "Failed to pull Docker images"
+    # Skip validation when using latest images (more efficient)
+    if [[ "$use_latest" == "true" ]]; then
+        log "INFO" "Using latest images - skipping validation, pulling directly"
+        show_progress "Pulling latest Docker images from GitHub Container Registry" 2
+        if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+            error_exit "Failed to pull Docker images"
+        fi
+    else
+        log "INFO" "Using fixed image versions - validating availability first"
+        show_progress "Validating image availability" 2
+        if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
+            log "WARN" "Some images may not be available - continuing anyway"
+        fi
+        
+        show_progress "Pulling Docker images from GitHub Container Registry" 2
+        if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+            error_exit "Failed to pull Docker images"
+        fi
     fi
     echo
     
@@ -806,10 +816,27 @@ run_non_interactive_setup() {
     fi
     
     if [[ -f "$compose_file" ]]; then
-        if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-            log "SUCCESS" "✅ Docker images pulled successfully"
+        # Skip validation when using latest images (more efficient)
+        if [[ "$use_latest" == "true" ]]; then
+            log "INFO" "Using latest images - skipping validation, pulling directly"
+            if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                log "SUCCESS" "✅ Docker images pulled successfully"
+            else
+                log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+            fi
         else
-            log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+            log "INFO" "Using fixed image versions - validating availability first"
+            if validate_required_images "$github_token" "$use_latest" "$compose_file"; then
+                log "SUCCESS" "✅ Image validation passed"
+            else
+                log "WARN" "Some images may not be available - continuing anyway"
+            fi
+            
+            if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                log "SUCCESS" "✅ Docker images pulled successfully"
+            else
+                log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+            fi
         fi
     else
         log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
@@ -834,13 +861,31 @@ run_non_interactive_setup() {
     
     log "SUCCESS" "🎉 Non-interactive setup completed successfully!"
     echo
+    
+    # Step 6: Auto-start services
+    log "STEP" "Starting Milou services automatically..."
+    if command -v start_services_with_checks >/dev/null 2>&1; then
+        if start_services_with_checks "true"; then
+            log "SUCCESS" "✅ Services started successfully!"
+            echo
+            log "INFO" "🌐 Your Milou installation is now ready!"
+            log "INFO" "📝 Check service status with: ./milou.sh status"
+            log "INFO" "📊 View logs with: ./milou.sh logs"
+        else
+            log "ERROR" "❌ Failed to start services automatically"
+            log "INFO" "💡 You can start them manually with: ./milou.sh start"
+        fi
+    else
+        log "WARN" "Service startup function not available - please start manually"
+    fi
+    
+    echo
     log "INFO" "📋 Setup Summary:"
     log "INFO" "  🌍 Domain: $domain"
     log "INFO" "  🔒 SSL: $([ -f "$ssl_path/milou.crt" ] && echo "Configured" || echo "HTTP only")"
     log "INFO" "  🐳 Docker: Authenticated and ready"
     log "INFO" "  📝 Configuration: Generated"
-    echo
-    log "INFO" "🚀 Ready to start services with: ./milou.sh start"
+    log "INFO" "  🚀 Services: $(docker compose -f ./static/docker-compose.yml ps --services --filter 'status=running' 2>/dev/null | wc -l || echo "0") running"
     
     return 0
 }

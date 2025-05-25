@@ -242,7 +242,13 @@ preserve_database_credentials() {
     # Clear any existing preserved config
     PRESERVED_CONFIG=()
     
-    for var in "${db_vars[@]}" "${redis_vars[@]}" "${rabbitmq_vars[@]}" "${security_vars[@]}"; do
+    # Admin credentials
+    local -a admin_vars=(
+        "ADMIN_EMAIL"
+        "ADMIN_PASSWORD"
+    )
+    
+    for var in "${db_vars[@]}" "${redis_vars[@]}" "${rabbitmq_vars[@]}" "${security_vars[@]}" "${admin_vars[@]}"; do
         local value
         # Use the env file directly for reading values
         value=$(grep "^${var}=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")

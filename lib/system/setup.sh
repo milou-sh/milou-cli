@@ -361,39 +361,46 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 2: GitHub Authentication
-    echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
-    local github_token="${GITHUB_TOKEN:-}"
-    
-    if [[ -n "$github_token" ]]; then
-        log "INFO" "Using provided GitHub token"
-        if test_github_authentication "$github_token"; then
-            log "SUCCESS" "GitHub token validated successfully"
-        else
-            log "ERROR" "Provided GitHub token is invalid"
-            github_token=""
-        fi
-    fi
-    
-    while [[ -z "$github_token" ]]; do
-        echo -ne "${CYAN}GitHub Personal Access Token: ${NC}"
-        read -rs github_token
+    # Step 2: GitHub Authentication (skip in development mode)
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
+        log "INFO" "🚀 Development mode: Skipping GitHub authentication (using local images)"
+        local github_token="dev_mode_dummy_token"
         echo
+    else
+        echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
+        local github_token="${GITHUB_TOKEN:-}"
         
-        if [[ -z "$github_token" ]]; then
-            log "ERROR" "GitHub token is required"
-            continue
+        if [[ -n "$github_token" ]]; then
+            log "INFO" "Using provided GitHub token"
+            if test_github_authentication "$github_token"; then
+                log "SUCCESS" "GitHub token validated successfully"
+            else
+                log "ERROR" "Provided GitHub token is invalid"
+                github_token=""
+            fi
         fi
         
-        if test_github_authentication "$github_token"; then
-            break
-        else
-            echo "Please try again with a valid token."
-            github_token=""
+        while [[ -z "$github_token" ]]; do
+            echo -ne "${CYAN}GitHub Personal Access Token: ${NC}"
+            read -rs github_token
             echo
-        fi
-    done
-    echo
+            
+            if [[ -z "$github_token" ]]; then
+                log "ERROR" "GitHub token is required"
+                continue
+            fi
+            
+            if test_github_authentication "$github_token"; then
+                break
+            else
+                echo "Please try again with a valid token."
+                github_token=""
+                echo
+            fi
+        done
+        echo
+    fi
     
     # Step 3: SSL Configuration with Smart Detection
     echo -e "${BOLD}Step 3: SSL Configuration${NC}"
@@ -516,8 +523,13 @@ interactive_setup_wizard() {
     echo "SSL Path: $ssl_path"
     echo "SSL Certificates: $([ "$ssl_choice" == "1" ] && echo "Use existing" || echo "Generate new")"
     echo "Domain: $domain"
-    echo "GitHub Token: *****(provided)"
-    echo "Image Strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        echo "GitHub Token: Not required (development mode)"
+        echo "Image Source: Local images"
+    else
+        echo "GitHub Token: *****(provided)"
+        echo "Image Strategy: $([ "$use_latest" == true ] && echo "Latest versions" || echo "Fixed version (v1.0.0)")"
+    fi
     echo
     
     if ! confirm "Proceed with this configuration?" "Y"; then
@@ -568,35 +580,44 @@ interactive_setup_wizard() {
     fi
     echo
     
-    # Step 9: Pull Docker Images
-    echo -e "${BOLD}Step 9: Pulling Docker Images${NC}"
-    
-    # Determine the docker-compose file path
-    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
-    if [[ ! -f "$compose_file" ]]; then
-        compose_file="./static/docker-compose.yml"
-        if [[ ! -f "$compose_file" ]]; then
-            error_exit "Docker Compose file not found: $compose_file"
-        fi
-    fi
-    
-    # Skip validation when using latest images (more efficient)
-    if [[ "$use_latest" == "true" ]]; then
-        log "INFO" "Using latest images - skipping validation, pulling directly"
-        show_progress "Pulling latest Docker images from GitHub Container Registry" 2
-        if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-            error_exit "Failed to pull Docker images"
-        fi
+    # Step 9: Pull Docker Images (skip in development mode)
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        echo -e "${BOLD}Step 9: Docker Images${NC}"
+        log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
+        log "INFO" "Local images available:"
+        docker images | grep "ghcr.io/milou-sh/milou" | grep latest | while read -r line; do
+            log "INFO" "  📦 $line"
+        done
     else
-        log "INFO" "Using fixed image versions - validating availability first"
-        show_progress "Validating image availability" 2
-        if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
-            log "WARN" "Some images may not be available - continuing anyway"
+        echo -e "${BOLD}Step 9: Pulling Docker Images${NC}"
+        
+        # Determine the docker-compose file path
+        local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+        if [[ ! -f "$compose_file" ]]; then
+            compose_file="./static/docker-compose.yml"
+            if [[ ! -f "$compose_file" ]]; then
+                error_exit "Docker Compose file not found: $compose_file"
+            fi
         fi
         
-        show_progress "Pulling Docker images from GitHub Container Registry" 2
-        if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-            error_exit "Failed to pull Docker images"
+        # Skip validation when using latest images (more efficient)
+        if [[ "$use_latest" == "true" ]]; then
+            log "INFO" "Using latest images - skipping validation, pulling directly"
+            show_progress "Pulling latest Docker images from GitHub Container Registry" 2
+            if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                error_exit "Failed to pull Docker images"
+            fi
+        else
+            log "INFO" "Using fixed image versions - validating availability first"
+            show_progress "Validating image availability" 2
+            if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
+                log "WARN" "Some images may not be available - continuing anyway"
+            fi
+            
+            show_progress "Pulling Docker images from GitHub Container Registry" 2
+            if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                error_exit "Failed to pull Docker images"
+            fi
         fi
     fi
     echo
@@ -676,10 +697,11 @@ run_non_interactive_setup() {
     local admin_email="${ADMIN_EMAIL:-}"
     local use_latest="${USE_LATEST_IMAGES:-true}"
     
-    # Validate required parameters
-    if [[ -z "$github_token" ]]; then
+    # Validate required parameters (token not needed in dev mode)
+    if [[ -z "$github_token" && "${DEV_MODE:-false}" != "true" ]]; then
         log "ERROR" "GitHub token is required for non-interactive setup"
         log "INFO" "Set GITHUB_TOKEN environment variable or use --token flag"
+        log "INFO" "Or use --dev flag to enable development mode with local images"
         return 1
     fi
     
@@ -745,49 +767,61 @@ run_non_interactive_setup() {
     fi
     echo
     
-    # Step 3: Docker Authentication
-    log "STEP" "Authenticating with Docker registry..."
-    if echo "$github_token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
-        log "SUCCESS" "✅ Docker registry authentication successful"
-        docker logout ghcr.io >/dev/null 2>&1
+    # Step 3: Docker Authentication (skip in development mode)
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        log "INFO" "🚀 Development mode: Skipping Docker registry authentication (using local images)"
     else
-        log "ERROR" "❌ Docker registry authentication failed"
-        return 1
+        log "STEP" "Authenticating with Docker registry..."
+        if echo "$github_token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Docker registry authentication successful"
+            docker logout ghcr.io >/dev/null 2>&1
+        else
+            log "ERROR" "❌ Docker registry authentication failed"
+            return 1
+        fi
     fi
     echo
     
-    # Step 4: Pull Docker Images
-    log "STEP" "Pulling Docker images..."
-    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
-    if [[ ! -f "$compose_file" ]]; then
-        compose_file="./static/docker-compose.yml"
-    fi
-    
-    if [[ -f "$compose_file" ]]; then
-        # Skip validation when using latest images (more efficient)
-        if [[ "$use_latest" == "true" ]]; then
-            log "INFO" "Using latest images - skipping validation, pulling directly"
-            if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-                log "SUCCESS" "✅ Docker images pulled successfully"
+    # Step 4: Pull Docker Images (skip in development mode)
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
+        log "INFO" "Local images available:"
+        docker images | grep "ghcr.io/milou-sh/milou" | grep latest | while read -r line; do
+            log "INFO" "  📦 $line"
+        done
+    else
+        log "STEP" "Pulling Docker images..."
+        local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+        if [[ ! -f "$compose_file" ]]; then
+            compose_file="./static/docker-compose.yml"
+        fi
+        
+        if [[ -f "$compose_file" ]]; then
+            # Skip validation when using latest images (more efficient)
+            if [[ "$use_latest" == "true" ]]; then
+                log "INFO" "Using latest images - skipping validation, pulling directly"
+                if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                    log "SUCCESS" "✅ Docker images pulled successfully"
+                else
+                    log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+                fi
             else
-                log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+                log "INFO" "Using fixed image versions - validating availability first"
+                if validate_required_images "$github_token" "$use_latest" "$compose_file"; then
+                    log "SUCCESS" "✅ Image validation passed"
+                else
+                    log "WARN" "Some images may not be available - continuing anyway"
+                fi
+                
+                if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+                    log "SUCCESS" "✅ Docker images pulled successfully"
+                else
+                    log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+                fi
             fi
         else
-            log "INFO" "Using fixed image versions - validating availability first"
-            if validate_required_images "$github_token" "$use_latest" "$compose_file"; then
-                log "SUCCESS" "✅ Image validation passed"
-            else
-                log "WARN" "Some images may not be available - continuing anyway"
-            fi
-            
-            if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-                log "SUCCESS" "✅ Docker images pulled successfully"
-            else
-                log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
-            fi
+            log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
         fi
-    else
-        log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
     fi
     echo
     

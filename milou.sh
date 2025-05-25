@@ -68,6 +68,7 @@ declare -g AUTO_CREATE_USER=false
 declare -g SKIP_USER_CHECK=false
 declare -g FRESH_INSTALL=false
 declare -g AUTO_INSTALL_DEPS=false
+declare -g DEV_MODE=false
 
 # Enhanced state management for user switching
 declare -g ORIGINAL_COMMAND=""
@@ -209,6 +210,7 @@ show_help() {
     printf "    ${cyan}security-harden${nc}   Apply security hardening measures (requires sudo)\n"
     printf "    ${cyan}security-report${nc}   Generate detailed security report\n"
     printf "    ${cyan}install-deps${nc}      Install system dependencies (Docker, tools, etc.)\n"
+    printf "    ${cyan}build-images${nc}      Build Docker images locally for development\n"
 
     printf "    ${cyan}help${nc}              Show this help message\n\n"
 
@@ -227,6 +229,7 @@ show_help() {
     printf "    ${cyan}--skip-user-check${nc}  Skip user permission validation\n"
     printf "    ${cyan}--auto-install-deps${nc} Automatically install missing dependencies\n"
     printf "    ${cyan}--fresh-install${nc}   Optimize for fresh server installation\n"
+    printf "    ${cyan}--dev${nc}             Enable development mode (use local Docker images)\n"
     printf "    ${cyan}--help, -h${nc}        Show this help message\n\n"
 
     printf "${bold}EXAMPLES:${nc}\n"
@@ -364,6 +367,11 @@ main() {
                 export AUTO_INSTALL_DEPS
                 shift
                 ;;
+            --dev)
+                DEV_MODE=true
+                export DEV_MODE
+                shift
+                ;;
             --help|-h)
                 # Command-specific help
                 if [[ "$command" == "cleanup" || "$command" == "backup" || "$command" == "ssl" || "$command" == "uninstall" ]]; then
@@ -458,7 +466,7 @@ milou_load_and_execute_command() {
         start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose)
+        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|build-images)
             handler_file="system.sh"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)

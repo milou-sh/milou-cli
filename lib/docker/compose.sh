@@ -146,8 +146,25 @@ milou_docker_compose() {
         return 1
     fi
     
-    log "TRACE" "Running: docker compose --env-file '$DOCKER_ENV_FILE' -f '$DOCKER_COMPOSE_FILE' $*"
-    docker compose --env-file "$DOCKER_ENV_FILE" -f "$DOCKER_COMPOSE_FILE" "$@"
+    # Build compose command with base file
+    local compose_cmd="docker compose --env-file '$DOCKER_ENV_FILE' -f '$DOCKER_COMPOSE_FILE'"
+    
+    # Check for local development override
+    local override_file="$(dirname "$DOCKER_COMPOSE_FILE")/docker-compose.local.yml"
+    if [[ -f "$override_file" ]]; then
+        compose_cmd="$compose_cmd -f '$override_file'"
+        log "DEBUG" "Using local development override: $override_file"
+    fi
+    
+    # Check for standard override file
+    local standard_override="$(dirname "$DOCKER_COMPOSE_FILE")/docker-compose.override.yml"
+    if [[ -f "$standard_override" ]]; then
+        compose_cmd="$compose_cmd -f '$standard_override'"
+        log "DEBUG" "Using standard override file: $standard_override"
+    fi
+    
+    log "TRACE" "Running: $compose_cmd $*"
+    eval "$compose_cmd" "$@"
 }
 
 # Test Docker Compose configuration
@@ -380,36 +397,191 @@ milou_docker_restart() {
     fi
 }
 
+# Map service name to container name based on docker-compose.yml
+get_container_name_for_service() {
+    local service="$1"
+    case "$service" in
+        db) echo "milou-database" ;;
+        redis) echo "milou-redis" ;;
+        rabbitmq) echo "milou-rabbitmq" ;;
+        backend) echo "milou-backend" ;;
+        frontend) echo "milou-frontend" ;;
+        engine) echo "milou-engine" ;;
+        nginx) echo "milou-nginx" ;;
+        monitor) echo "milou-monitor" ;;
+        *) echo "milou-${service}" ;;  # fallback to milou-<service>
+    esac
+}
+
 # Show service status with detailed information
 milou_docker_status() {
-    log "INFO" "📊 Checking Milou services status..."
+    local show_header="${1:-true}"
+    
+    if [[ "$show_header" == "true" ]]; then
+        log "INFO" "📊 Checking Milou services status..."
+    fi
+    
+    # Check if this is a fresh installation
+    local is_fresh_install=false
+    local has_config=false
+    local has_containers=false
+    
+    # Check for configuration
+    if [[ -f "${ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        has_config=true
+    fi
+    
+    # Check for any existing containers (running or stopped)
+    local existing_containers
+    existing_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null || true)
+    if [[ -n "$existing_containers" ]]; then
+        has_containers=true
+    fi
+    
+    # Determine if this is a fresh install
+    if [[ "$has_config" == false && "$has_containers" == false ]]; then
+        is_fresh_install=true
+    fi
+    
+    # Handle fresh installation case
+    if [[ "$is_fresh_install" == true ]]; then
+        echo
+        log "INFO" "🆕 Fresh Installation Detected"
+        echo
+        log "INFO" "It looks like Milou hasn't been set up yet on this system."
+        echo
+        log "INFO" "🚀 To get started, run the setup wizard:"
+        log "INFO" "   ./milou.sh setup"
+        echo
+        log "INFO" "📖 Or see all available commands:"
+        log "INFO" "   ./milou.sh help"
+        echo
+        return 0
+    fi
+    
+    # Initialize Docker environment for status checking
+    if ! milou_docker_init; then
+        log "ERROR" "Failed to initialize Docker environment"
+        echo
+        log "INFO" "💡 Try running setup to fix configuration issues:"
+        log "INFO" "   ./milou.sh setup"
+        return 1
+    fi
+    
+    echo
     log "INFO" "Service Status Overview:"
     echo
     
-    if ! milou_docker_init; then
-        return 1
-    fi
-    
-    if ! milou_docker_compose ps; then
+    # Get service status with better error handling
+    local compose_status
+    if ! compose_status=$(milou_docker_compose ps 2>&1); then
         log "ERROR" "Failed to get service status"
+        echo "$compose_status" | head -3
+        echo
+        log "INFO" "💡 Troubleshooting options:"
+        log "INFO" "   • Check configuration: ./milou.sh validate"
+        log "INFO" "   • Run setup again: ./milou.sh setup"
+        log "INFO" "   • View detailed diagnosis: ./milou.sh diagnose"
         return 1
     fi
     
+    # Display the compose status output
+    echo "$compose_status"
     echo
     
-    # Additional status information
-    local total_services running_services
-    total_services=$(milou_docker_compose config --services 2>/dev/null | wc -l)
-    running_services=$(milou_docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
+    # Get accurate service counts
+    local total_services running_services stopped_services unhealthy_services
     
-    log "INFO" "Services running: $running_services/$total_services"
+    # Count total services defined in compose file
+    total_services=$(milou_docker_compose config --services 2>/dev/null | wc -l || echo "0")
+    
+    # Count running services more accurately
+    running_services=0
+    stopped_services=0
+    unhealthy_services=0
+    
+    if [[ "$total_services" -gt 0 ]]; then
+        # Get detailed status of each service
+        while IFS= read -r service; do
+            if [[ -n "$service" ]]; then
+                local container_name
+                container_name=$(get_container_name_for_service "$service")
+                local service_status
+                service_status=$(docker ps --filter "name=${container_name}" --format "{{.Status}}" 2>/dev/null || echo "")
+                
+                if [[ -n "$service_status" ]]; then
+                    if [[ "$service_status" =~ ^Up ]]; then
+                        if [[ "$service_status" =~ "unhealthy" ]]; then
+                            unhealthy_services=$((unhealthy_services + 1))
+                        else
+                            running_services=$((running_services + 1))
+                        fi
+                    else
+                        stopped_services=$((stopped_services + 1))
+                    fi
+                else
+                    stopped_services=$((stopped_services + 1))
+                fi
+            fi
+        done < <(milou_docker_compose config --services 2>/dev/null)
+    fi
+    
+    # Display service summary with color coding
+    if [[ $running_services -eq $total_services && $total_services -gt 0 ]]; then
+        log "SUCCESS" "✅ All services running: $running_services/$total_services"
+    elif [[ $running_services -gt 0 ]]; then
+        log "WARN" "⚠️  Services partially running: $running_services/$total_services"
+        if [[ $unhealthy_services -gt 0 ]]; then
+            log "WARN" "   Unhealthy services: $unhealthy_services"
+        fi
+        if [[ $stopped_services -gt 0 ]]; then
+            log "WARN" "   Stopped services: $stopped_services"
+        fi
+    else
+        log "ERROR" "❌ No services running: 0/$total_services"
+    fi
     
     # Show network status
     local network_name="${DOCKER_PROJECT_NAME}_default"
     if docker network inspect "$network_name" >/dev/null 2>&1; then
-        log "INFO" "Network status: $network_name (active)"
+        log "INFO" "🌐 Network status: $network_name (active)"
     else
-        log "WARN" "Network status: $network_name (not found)"
+        log "WARN" "🌐 Network status: $network_name (not found)"
+    fi
+    
+    # Provide helpful suggestions based on status
+    echo
+    if [[ $running_services -eq 0 && $total_services -gt 0 ]]; then
+        log "INFO" "💡 Services are stopped. To start them:"
+        log "INFO" "   ./milou.sh start"
+        echo
+    elif [[ $running_services -lt $total_services && $running_services -gt 0 ]]; then
+        log "INFO" "💡 Some services are not running. Try:"
+        log "INFO" "   ./milou.sh restart    # Restart all services"
+        log "INFO" "   ./milou.sh logs       # Check logs for issues"
+        log "INFO" "   ./milou.sh diagnose   # Run comprehensive diagnosis"
+        echo
+    elif [[ $unhealthy_services -gt 0 ]]; then
+        log "INFO" "💡 Some services are unhealthy. Try:"
+        log "INFO" "   ./milou.sh health     # Run health checks"
+        log "INFO" "   ./milou.sh logs       # Check logs for issues"
+        log "INFO" "   ./milou.sh restart    # Restart unhealthy services"
+        echo
+    fi
+    
+    # Show quick access information if services are running
+    if [[ $running_services -gt 0 ]]; then
+        local domain="${SERVER_NAME:-localhost}"
+        log "INFO" "🌐 Access Information:"
+        if [[ -f "${SSL_CERT_PATH:-./ssl}/milou.crt" ]]; then
+            log "INFO" "   HTTPS: https://$domain"
+        fi
+        log "INFO" "   HTTP: http://$domain:${HTTP_PORT:-8080}"
+        echo
+        log "INFO" "📊 Quick Commands:"
+        log "INFO" "   ./milou.sh logs       # View service logs"
+        log "INFO" "   ./milou.sh health     # Run health checks"
+        log "INFO" "   ./milou.sh shell <service>  # Access service shell"
     fi
     
     return 0

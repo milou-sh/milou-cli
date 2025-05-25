@@ -195,7 +195,7 @@ generate_self_signed_certificate() {
 }
 
 # =============================================================================
-# Let's Encrypt Certificate Generation Functions
+# Enhanced Let's Encrypt Certificate Generation Functions
 # =============================================================================
 
 # Check if Let's Encrypt can be used
@@ -212,98 +212,45 @@ can_use_letsencrypt() {
         return 1
     fi
     
-    # Check if port 80 is available (required for HTTP challenge)
-    if command -v netstat >/dev/null 2>&1; then
-        if netstat -tlnp 2>/dev/null | grep -q ":80 "; then
-            milou_log "DEBUG" "Port 80 is occupied - Let's Encrypt HTTP challenge not possible"
-            return 1
-        fi
-    fi
-    
     milou_log "DEBUG" "Let's Encrypt prerequisites met"
     return 0
 }
 
-# Install certbot with user permission
-install_certbot() {
-    local interactive="${INTERACTIVE:-true}"
+# Check if port 80 is available or nginx is running
+check_port_80_status() {
+    local port_check_result=""
     
-    milou_log "INFO" "Certbot is required for Let's Encrypt certificates"
-    
-    # In non-interactive mode, don't install automatically
-    if [[ "$interactive" == "false" ]]; then
-        milou_log "ERROR" "Certbot not found and running in non-interactive mode"
-        milou_log "INFO" "Please install certbot manually: apt-get install certbot"
-        return 1
+    # Check if port 80 is occupied
+    if command -v ss >/dev/null 2>&1; then
+        port_check_result=$(ss -tlnp | grep ":80 " 2>/dev/null)
+    elif command -v netstat >/dev/null 2>&1; then
+        port_check_result=$(netstat -tlnp 2>/dev/null | grep ":80 ")
     fi
     
-    # Ask for user permission
-    milou_log "QUESTION" "Certbot (Let's Encrypt client) is not installed."
-    milou_log "INFO" "To obtain Let's Encrypt certificates, certbot needs to be installed."
-    echo
-    read -p "Would you like to install certbot now? [y/N]: " -r response
-    
-    case "$response" in
-        [yY][eE][sS]|[yY])
-            milou_log "INFO" "Installing certbot for Let's Encrypt..."
-            ;;
-        *)
-            milou_log "INFO" "Certbot installation declined"
-            milou_log "INFO" "You can install it manually later with: apt-get install certbot"
-            return 1
-            ;;
-    esac
-    
-    # Detect package manager and install certbot
-    if command -v apt-get >/dev/null 2>&1; then
-        # Debian/Ubuntu
-        milou_log "INFO" "Updating package lists..."
-        if apt-get update >/dev/null 2>&1; then
-            milou_log "INFO" "Installing certbot..."
-            if apt-get install -y certbot >/dev/null 2>&1; then
-                milou_log "SUCCESS" "✅ Certbot installed successfully"
-                return 0
-            fi
+    if [[ -n "$port_check_result" ]]; then
+        # Check if it's docker/nginx
+        if echo "$port_check_result" | grep -q "docker-proxy\|nginx"; then
+            milou_log "DEBUG" "Port 80 occupied by docker/nginx - will use webroot mode"
+            return 2  # nginx running - use webroot
+        else
+            milou_log "DEBUG" "Port 80 occupied by other service"
+            return 1  # other service - cannot use
         fi
-    elif command -v yum >/dev/null 2>&1; then
-        # RHEL/CentOS
-        milou_log "INFO" "Installing certbot via yum..."
-        if yum install -y certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "✅ Certbot installed successfully"
-            return 0
-        fi
-    elif command -v dnf >/dev/null 2>&1; then
-        # Fedora
-        milou_log "INFO" "Installing certbot via dnf..."
-        if dnf install -y certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "✅ Certbot installed successfully"
-            return 0
-        fi
-    elif command -v pacman >/dev/null 2>&1; then
-        # Arch Linux
-        milou_log "INFO" "Installing certbot via pacman..."
-        if pacman -S --noconfirm certbot >/dev/null 2>&1; then
-            milou_log "SUCCESS" "✅ Certbot installed successfully"
-            return 0
-        fi
+    else
+        milou_log "DEBUG" "Port 80 is available - can use standalone mode"
+        return 0  # available - use standalone
     fi
-    
-    milou_log "ERROR" "❌ Failed to install certbot automatically"
-    milou_log "INFO" "Please install certbot manually for Let's Encrypt support:"
-    milou_log "INFO" "  Ubuntu/Debian: sudo apt-get install certbot"
-    milou_log "INFO" "  RHEL/CentOS: sudo yum install certbot"
-    milou_log "INFO" "  Fedora: sudo dnf install certbot"
-    milou_log "INFO" "  Arch: sudo pacman -S certbot"
-    return 1
 }
 
-# Generate Let's Encrypt certificate
+# Webroot approach removed - using simple standalone mode with container stop/start
+
+# Generate Let's Encrypt certificate with simplified approach
 generate_letsencrypt_certificate() {
     local ssl_path="$1"
     local domain="$2"
     local email="${3:-admin@$domain}"
     
-    milou_log "INFO" "Obtaining Let's Encrypt certificate for: $domain"
+    milou_log "INFO" "🌟 Obtaining Let's Encrypt certificate for: $domain"
     
     # Install certbot if not available
     if ! command -v certbot >/dev/null 2>&1; then
@@ -312,43 +259,381 @@ generate_letsencrypt_certificate() {
         fi
     fi
     
-    # Obtain certificate using standalone mode (use standard paths)
+    # Check port 80 status to determine mode
+    local port_status
+    check_port_80_status
+    port_status=$?
+    
+    local cert_success=false
+    local cert_method=""
+    
+    case $port_status in
+        0)
+            # Port 80 available - use standalone mode
+            milou_log "INFO" "🔧 Using standalone mode (port 80 available)"
+            cert_method="standalone"
+            if generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
+                cert_success=true
+            fi
+            ;;
+        2)
+            # Nginx running - stop containers and use standalone mode
+            milou_log "INFO" "🐳 Nginx detected - stopping containers for certificate generation"
+            cert_method="standalone-with-stop"
+            if generate_letsencrypt_with_nginx_stop "$ssl_path" "$domain" "$email"; then
+                cert_success=true
+            fi
+            ;;
+        1)
+            # Port 80 occupied by other service
+            milou_log "ERROR" "❌ Port 80 is occupied by another service"
+            milou_log "INFO" "Please stop the service using port 80 and try again"
+            return 1
+            ;;
+    esac
+    
+    if [[ "$cert_success" == true ]]; then
+        milou_log "SUCCESS" "✅ Let's Encrypt certificate obtained successfully"
+        milou_log "INFO" "📋 Certificate details:"
+        milou_log "INFO" "  🏷️  Method: $cert_method"
+        milou_log "INFO" "  📄 Certificate: $ssl_path/milou.crt"
+        milou_log "INFO" "  🔑 Private key: $ssl_path/milou.key"
+        milou_log "INFO" "  ⏰ Valid for: 90 days (auto-renewal recommended)"
+        milou_log "INFO" "  📧 Email: $email"
+        
+        return 0
+    else
+        milou_log "ERROR" "❌ Certificate generation failed"
+        show_letsencrypt_troubleshooting "$domain"
+        return 1
+    fi
+}
+
+# Generate certificate using standalone mode
+generate_letsencrypt_standalone() {
+    local ssl_path="$1"
+    local domain="$2"
+    local email="$3"
+    
+    milou_log "DEBUG" "Attempting standalone mode..."
+    
     if certbot certonly \
         --standalone \
         --non-interactive \
         --agree-tos \
         --email "$email" \
-        --domains "$domain" >/dev/null 2>&1; then
+        --domains "$domain" \
+        --preferred-challenges http >/dev/null 2>&1; then
         
-        # Copy certificates to our SSL path
-        local le_cert_dir="/etc/letsencrypt/live/$domain"
-        if [[ -f "$le_cert_dir/fullchain.pem" && -f "$le_cert_dir/privkey.pem" ]]; then
-            cp "$le_cert_dir/fullchain.pem" "$ssl_path/milou.crt"
-            cp "$le_cert_dir/privkey.pem" "$ssl_path/milou.key"
-            
-            # Set appropriate permissions
-            chmod 644 "$ssl_path/milou.crt"
-            chmod 600 "$ssl_path/milou.key"
-            
-            milou_log "SUCCESS" "Let's Encrypt certificate obtained successfully"
-            milou_log "INFO" "Certificate: $ssl_path/milou.crt"
-            milou_log "INFO" "Private key: $ssl_path/milou.key"
-            milou_log "INFO" "Valid for: 90 days (auto-renewal recommended)"
-            
+        return copy_letsencrypt_certificates "$ssl_path" "$domain"
+    else
+        milou_log "DEBUG" "Standalone mode failed"
+        return 1
+    fi
+}
+
+# Webroot mode removed - using simple standalone approach only
+
+# Generate certificate by temporarily stopping nginx
+generate_letsencrypt_with_nginx_stop() {
+    local ssl_path="$1"
+    local domain="$2"
+    local email="$3"
+    
+    milou_log "INFO" "⏸️  Temporarily stopping nginx for certificate generation..."
+    
+    # Check if milou-nginx container exists and is running
+    local nginx_was_running=false
+    if docker ps --filter "name=milou-nginx" --format "{{.Names}}" | grep -q "milou-nginx"; then
+        nginx_was_running=true
+        milou_log "DEBUG" "Stopping milou-nginx container..."
+        docker stop milou-nginx >/dev/null 2>&1
+        sleep 2
+    fi
+    
+    # Generate certificate
+    local cert_result=false
+    if generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
+        cert_result=true
+    fi
+    
+    # Restart nginx if it was running
+    if [[ "$nginx_was_running" == true ]]; then
+        milou_log "DEBUG" "Restarting milou-nginx container..."
+        docker start milou-nginx >/dev/null 2>&1
+        sleep 3
+        milou_log "INFO" "▶️  Nginx restarted"
+    fi
+    
+    if [[ "$cert_result" == true ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Copy Let's Encrypt certificates to our SSL path
+copy_letsencrypt_certificates() {
+    local ssl_path="$1"
+    local domain="$2"
+    
+    local le_cert_dir="/etc/letsencrypt/live/$domain"
+    
+    if [[ -f "$le_cert_dir/fullchain.pem" && -f "$le_cert_dir/privkey.pem" ]]; then
+        # Backup existing certificates
+        if [[ -f "$ssl_path/milou.crt" || -f "$ssl_path/milou.key" ]]; then
+            backup_ssl_certificates "$ssl_path" "${ssl_path}/backups" "letsencrypt_replace_$(date +%Y%m%d_%H%M%S)"
+        fi
+        
+        # Copy new certificates
+        cp "$le_cert_dir/fullchain.pem" "$ssl_path/milou.crt"
+        cp "$le_cert_dir/privkey.pem" "$ssl_path/milou.key"
+        
+        # Set appropriate permissions
+        chmod 644 "$ssl_path/milou.crt"
+        chmod 600 "$ssl_path/milou.key"
+        
+        milou_log "DEBUG" "Certificates copied from Let's Encrypt directory"
+    return 0
+    else
+        milou_log "ERROR" "Let's Encrypt certificates not found in expected location: $le_cert_dir"
+        return 1
+    fi
+}
+
+# Show Let's Encrypt troubleshooting information
+show_letsencrypt_troubleshooting() {
+    local domain="$1"
+    
+    echo
+    milou_log "INFO" "🛠️  Let's Encrypt Troubleshooting Guide:"
+    echo
+    echo "Common issues and solutions:"
+    echo
+    echo "1. 🌐 Domain Resolution:"
+    echo "   • Ensure $domain points to this server's IP"
+    echo "   • Test: nslookup $domain"
+    echo "   • Current server IP: $(curl -s ifconfig.me 2>/dev/null || echo 'unknown')"
+    echo
+    echo "2. 🔥 Firewall & Ports:"
+    echo "   • Port 80 must be accessible from internet"
+    echo "   • Test: curl -I http://$domain"
+    echo "   • Check firewall: ufw status"
+    echo
+    echo "3. 🌍 HTTP Redirects:"
+    echo "   • HTTP must NOT redirect to HTTPS during validation"
+    echo "   • Let's Encrypt needs HTTP access for domain validation"
+    echo "   • Temporarily disable HTTP to HTTPS redirects"
+    echo
+    echo "4. ⏱️  Rate Limiting:"
+    echo "   • Let's Encrypt has rate limits (5 failures per hour)"
+    echo "   • Wait before retrying if hitting limits"
+    echo "   • Use staging for testing: --test-cert"
+    echo
+    echo "5. 🔧 Alternative Solutions:"
+    echo "   • Use self-signed certificates: ./milou.sh ssl setup --domain $domain"
+    echo "   • Import existing certificates: ./milou.sh ssl copy"
+    echo "   • Use DNS validation with certbot plugins"
+    echo
+}
+
+# Install certbot with enhanced user prompts and better error handling
+install_certbot() {
+    local interactive="${INTERACTIVE:-true}"
+    
+    milou_log "STEP" "📦 Certbot Installation Required"
+    echo
+    
+    # In non-interactive mode, don't install automatically
+    if [[ "$interactive" == "false" ]]; then
+        milou_log "ERROR" "Certbot not found and running in non-interactive mode"
+        milou_log "INFO" "Please install certbot manually and retry"
+        show_certbot_install_instructions
+        return 1
+    fi
+    
+    # Check if we have root privileges
+    if [[ $EUID -ne 0 ]]; then
+        milou_log "WARN" "⚠️  Root privileges required to install certbot"
+        milou_log "INFO" "Please run with sudo or install certbot manually:"
+        show_certbot_install_instructions
+        return 1
+    fi
+    
+    # Show installation prompt
+    milou_log "INFO" "🔍 Certbot (Let's Encrypt client) is required for SSL certificates"
+    milou_log "INFO" "Benefits of certbot installation:"
+    milou_log "INFO" "  ✅ Free SSL certificates from Let's Encrypt"
+    milou_log "INFO" "  ✅ Automatically trusted by all browsers" 
+    milou_log "INFO" "  ✅ 90-day validity with auto-renewal support"
+    echo
+    
+    echo -n "Would you like to install certbot now? [Y/n]: "
+    read -r response
+    
+    case "$response" in
+        [nN][oO]|[nN])
+            milou_log "INFO" "Certbot installation declined"
+            show_certbot_install_instructions
+            return 1
+            ;;
+        *)
+            milou_log "INFO" "📥 Installing certbot..."
+            ;;
+    esac
+    
+    # Detect package manager and install certbot
+    local install_success=false
+    
+    if command -v apt-get >/dev/null 2>&1; then
+        # Debian/Ubuntu
+        milou_log "INFO" "🔄 Updating package lists (Ubuntu/Debian)..."
+        if apt-get update >/dev/null 2>&1; then
+            milou_log "INFO" "📦 Installing certbot..."
+            if apt-get install -y certbot >/dev/null 2>&1; then
+                install_success=true
+            fi
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        # RHEL/CentOS
+        milou_log "INFO" "📦 Installing certbot via yum (RHEL/CentOS)..."
+        # Try EPEL first for older systems
+        yum install -y epel-release >/dev/null 2>&1 || true
+        if yum install -y certbot >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        # Fedora
+        milou_log "INFO" "📦 Installing certbot via dnf (Fedora)..."
+        if dnf install -y certbot >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        # Arch Linux
+        milou_log "INFO" "📦 Installing certbot via pacman (Arch Linux)..."
+        if pacman -S --noconfirm certbot >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v apk >/dev/null 2>&1; then
+        # Alpine Linux
+        milou_log "INFO" "📦 Installing certbot via apk (Alpine Linux)..."
+        if apk add --no-cache certbot >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v zypper >/dev/null 2>&1; then
+        # openSUSE
+        milou_log "INFO" "📦 Installing certbot via zypper (openSUSE)..."
+        if zypper install -y python3-certbot >/dev/null 2>&1; then
+            install_success=true
+        fi
+    fi
+    
+    if [[ "$install_success" == "true" ]]; then
+        milou_log "SUCCESS" "✅ Certbot installed successfully!"
+        
+        # Verify installation
+        if command -v certbot >/dev/null 2>&1; then
+            local certbot_version
+            certbot_version=$(certbot --version 2>&1 | head -1)
+            milou_log "INFO" "📋 Installed: $certbot_version"
             return 0
         else
-            milou_log "ERROR" "Let's Encrypt certificates not found in expected location"
+            milou_log "WARN" "⚠️  Certbot installed but not found in PATH"
+            milou_log "INFO" "Try running: hash -r && certbot --version"
         fi
     else
-        milou_log "ERROR" "Failed to obtain Let's Encrypt certificate"
-        milou_log "INFO" "This could be due to:"
-        milou_log "INFO" "  • Domain not pointing to this server"
-        milou_log "INFO" "  • Port 80 not accessible from internet"
-        milou_log "INFO" "  • Rate limiting from Let's Encrypt"
-        milou_log "INFO" "  • Firewall blocking HTTP traffic"
+        milou_log "ERROR" "❌ Failed to install certbot automatically"
+        echo
+        milou_log "INFO" "🛠️  Manual installation required:"
+        show_certbot_install_instructions
+        echo
+        milou_log "INFO" "After installing certbot manually, run the SSL setup again"
     fi
     
     return 1
+}
+
+# Show manual certbot installation instructions
+show_certbot_install_instructions() {
+    echo
+    milou_log "INFO" "📋 Manual Certbot Installation Commands:"
+    echo
+    echo "Ubuntu/Debian:"
+    echo "  sudo apt-get update"
+    echo "  sudo apt-get install certbot"
+    echo
+    echo "RHEL/CentOS 7/8:"
+    echo "  sudo yum install epel-release"
+    echo "  sudo yum install certbot"
+    echo
+    echo "Fedora:"
+    echo "  sudo dnf install certbot"
+    echo
+    echo "Arch Linux:"
+    echo "  sudo pacman -S certbot"
+    echo
+    echo "Alpine Linux:"
+    echo "  sudo apk add certbot"
+    echo
+    echo "openSUSE:"
+    echo "  sudo zypper install python3-certbot"
+    echo
+    echo "Alternative (pip):"
+    echo "  pip3 install certbot"
+    echo
+}
+
+# Backup SSL certificates with enhanced metadata
+backup_ssl_certificates() {
+    local ssl_path="$1"
+    local backup_dir="${2:-${ssl_path}/backups}"
+    local backup_name="${3:-ssl_backup_$(date +%Y%m%d_%H%M%S)}"
+    
+    local cert_file="$ssl_path/milou.crt"
+    local key_file="$ssl_path/milou.key"
+    
+    if [[ ! -f "$cert_file" || ! -f "$key_file" ]]; then
+        milou_log "ERROR" "SSL certificates not found for backup"
+            return 1
+    fi
+    
+    # Create backup directory
+    mkdir -p "$backup_dir"
+    
+    # Create backup with timestamp
+    local backup_cert="$backup_dir/${backup_name}.crt"
+    local backup_key="$backup_dir/${backup_name}.key"
+    local backup_info="$backup_dir/${backup_name}.info"
+    
+    if cp "$cert_file" "$backup_cert" && cp "$key_file" "$backup_key"; then
+        chmod 644 "$backup_cert"
+        chmod 600 "$backup_key"
+        
+        # Create backup info file
+        cat > "$backup_info" << EOF
+# SSL Certificate Backup Information
+# Generated: $(date)
+# Backup Name: $backup_name
+
+Certificate File: $backup_cert
+Private Key File: $backup_key
+Original Cert: $cert_file
+Original Key: $key_file
+
+# Certificate Details:
+$(openssl x509 -in "$backup_cert" -noout -text 2>/dev/null | head -20 || echo "Certificate details unavailable")
+EOF
+        chmod 644 "$backup_info"
+        
+        milou_log "SUCCESS" "SSL certificates backed up:"
+        milou_log "INFO" "  📄 Certificate: $backup_cert"
+        milou_log "INFO" "  🔑 Private Key: $backup_key"
+        milou_log "INFO" "  📋 Info: $backup_info"
+            return 0
+    else
+        milou_log "ERROR" "Failed to backup SSL certificates"
+        return 1
+    fi
 }
 
 # =============================================================================

@@ -20,6 +20,31 @@ handle_setup() {
     echo -e "${BOLD}${PURPLE}═══════════════════════════════════════════════════${NC}"
     echo
     
+    # Development Mode Setup (if requested)
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        log "STEP" "Development Mode Setup"
+        echo
+        
+        # Load development module
+        if [[ -f "${SCRIPT_DIR}/lib/docker/development.sh" ]]; then
+            source "${SCRIPT_DIR}/lib/docker/development.sh"
+            if command -v milou_auto_setup_dev_mode >/dev/null 2>&1; then
+                if ! milou_auto_setup_dev_mode; then
+                    log "ERROR" "Failed to setup development mode"
+                    return 1
+                fi
+            else
+                log "ERROR" "Development module functions not available"
+                return 1
+            fi
+        else
+            log "ERROR" "Development module not found"
+            return 1
+        fi
+        
+        echo
+    fi
+    
     # Step 1: System Information and Analysis
     log "STEP" "Step 1: System Analysis and Detection"
     echo

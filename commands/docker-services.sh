@@ -60,8 +60,6 @@ handle_restart() {
 
 # Status command handler
 handle_status() {
-    log "INFO" "📊 Checking Milou services status..."
-    
     # Use consolidated Docker function if available
     if command -v milou_docker_status >/dev/null 2>&1; then
         milou_docker_status "$@"

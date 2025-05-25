@@ -20,7 +20,7 @@ milou.sh (508 lines) ← Streamlined orchestrator
 │   ├── system/ (8 modules) - Config, SSL, security, backup
 │   └── user/ (7 modules) - Management, switching, permissions
 ├── commands/ (4 modules) - On-demand command handlers
-└── utils/deprecated/ (12,445 lines organized)
+└── lib/ (modular architecture with centralized utilities)
 ```
 
 ## Usage (Unchanged)

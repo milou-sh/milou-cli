@@ -1,0 +1,29 @@
+# =============================================================================
+# Docker Compose Local Development Override
+# Uses locally built images instead of pulling from registry
+# =============================================================================
+
+services:
+  # Override database to use local image
+  db:
+    image: ghcr.io/milou-sh/milou/database:latest
+    
+  # Override backend to use local image  
+  backend:
+    image: ghcr.io/milou-sh/milou/backend:latest
+    environment:
+      # Admin credentials from environment variables (set by CLI)
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    
+  # Override frontend to use local image
+  frontend:
+    image: ghcr.io/milou-sh/milou/frontend:latest
+    
+  # Override engine to use local image
+  engine:
+    image: ghcr.io/milou-sh/milou/engine:latest
+    
+  # Override nginx to use local image
+  nginx:
+    image: ghcr.io/milou-sh/milou/nginx:latest 

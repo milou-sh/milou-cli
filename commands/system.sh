@@ -113,124 +113,178 @@ handle_update() {
 handle_ssl() {
     log "INFO" "🔒 Managing SSL certificates..."
     
-    # Load required modules
+    # Parse command-line options and delegate to the enhanced SSL system
+    local domain="${DOMAIN:-${SERVER_NAME:-localhost}}"
+    local ssl_path="${SSL_PATH:-./ssl}"
+    local restart_nginx=false
     
-    # Get current environment values for SSL and resolve Docker-compatible path
-    local ssl_path_raw="${SSL_CERT_PATH:-./ssl}"
-    local domain="${SERVER_NAME:-localhost}"
-    
-    # Use proper SSL path resolution for Docker compatibility
-    local ssl_path
-    if command -v get_appropriate_ssl_path >/dev/null 2>&1; then
-        ssl_path=$(get_appropriate_ssl_path "$ssl_path_raw" "$(pwd)")
-        log "DEBUG" "Resolved SSL path: $ssl_path_raw -> $ssl_path"
-    else
-        ssl_path="$ssl_path_raw"
-        log "WARN" "SSL path resolution function not available, using raw path: $ssl_path"
+    # Parse basic options
+    local action="${1:-status}"
+    if [[ $# -gt 0 ]]; then
+        shift
     fi
     
-    # Check if no arguments provided - show status
-    if [[ $# -eq 0 ]]; then
-        log "INFO" "📋 Current SSL Configuration:"
-        log "INFO" "  Domain: $domain"
-        log "INFO" "  SSL Path: $ssl_path"
-        echo
-        
-        # Check certificate status
-        local cert_file="$ssl_path/milou.crt"
-        local key_file="$ssl_path/milou.key"
-        
-        if [[ -f "$cert_file" && -f "$key_file" ]]; then
-            log "INFO" "✅ SSL certificates found"
-            if command -v show_certificate_info >/dev/null 2>&1; then
-                show_certificate_info "$cert_file" "$domain"
-            else
-                log "INFO" "  Certificate: $cert_file"
-                log "INFO" "  Private Key: $key_file"
-                # Basic certificate info
-                if command -v openssl >/dev/null 2>&1; then
-                    local cert_subject
-                    cert_subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
-                    local cert_expires
-                    cert_expires=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
-                    log "INFO" "  Subject: $cert_subject"
-                    log "INFO" "  Expires: $cert_expires"
-                fi
-            fi
-        else
-            log "ERROR" "❌ SSL certificates not found"
-            log "INFO" "Run './milou.sh ssl setup' to generate certificates"
-        fi
-        return 0
-    fi
-    
-    # Handle different SSL sub-commands
-    local action="${1:-setup}"
-    shift
-    
-    case "$action" in
-        setup|generate|create)
-            if command -v setup_ssl >/dev/null 2>&1; then
-                setup_ssl "$ssl_path" "$domain" "$@"
-            elif command -v setup_ssl_interactive >/dev/null 2>&1; then
-                setup_ssl_interactive "$ssl_path" "$domain" "$@"
-            else
-                log "ERROR" "SSL setup function not available"
-                return 1
-            fi
-            ;;
-        status|info|show)
-            # Show detailed certificate status
-            if command -v show_certificate_info >/dev/null 2>&1; then
-                local cert_file="$ssl_path/milou.crt"
-                if [[ -f "$cert_file" ]]; then
-                    show_certificate_info "$cert_file" "$domain"
+    # Extract domain and nginx restart flags if present
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --domain|--domain=*)
+                if [[ "$1" == *"="* ]]; then
+                    domain="${1#*=}"
                 else
-                    log "ERROR" "Certificate file not found: $cert_file"
+                    domain="${2:-}"
+                    shift
+                fi
+                shift
+                ;;
+            --restart-nginx)
+                restart_nginx=true
+                shift
+                ;;
+            *)
+                # Keep other arguments for SSL module
+                break
+                ;;
+        esac
+    done
+    
+    # Update environment configuration if domain changed
+    if [[ "$domain" != "${SERVER_NAME:-localhost}" ]]; then
+        log "INFO" "📝 Updating configuration for domain: $domain"
+        update_domain_configuration "$domain" "$ssl_path"
+    fi
+    
+    # Delegate to enhanced SSL management system
+    if command -v setup_ssl_interactive_enhanced >/dev/null 2>&1; then
+        setup_ssl_interactive_enhanced "$action" "$ssl_path" "$domain" "$restart_nginx" "$@"
+    else
+        # Fallback to existing SSL functions
+        case "$action" in
+            setup|generate|create)
+                if command -v setup_ssl_interactive >/dev/null 2>&1; then
+                    setup_ssl_interactive "$ssl_path" "$domain"
+                    if [[ "$restart_nginx" == true ]]; then
+                        restart_nginx_container
+                    fi
+                else
+                    log "ERROR" "SSL setup function not available"
                     return 1
                 fi
-            else
-                log "ERROR" "Certificate info function not available"
+                ;;
+            status|info|show)
+                if command -v show_certificate_info >/dev/null 2>&1; then
+                    local cert_file="$ssl_path/milou.crt"
+                    if [[ -f "$cert_file" ]]; then
+                        show_certificate_info "$cert_file" "$domain"
+                    else
+                        log "ERROR" "Certificate file not found: $cert_file"
+                        return 1
+                    fi
+                else
+                    log "ERROR" "Certificate info function not available"
+                    return 1
+                fi
+                ;;
+            *)
+                log "ERROR" "Unknown SSL command: $action"
+                log "INFO" "Available commands: setup, status"
                 return 1
-            fi
-            ;;
-        validate|check)
-            if command -v validate_ssl_certificates >/dev/null 2>&1; then
-                local cert_file="$ssl_path/milou.crt"
-                local key_file="$ssl_path/milou.key"
-                validate_ssl_certificates "$cert_file" "$key_file" "$domain"
-            else
-                log "ERROR" "SSL validation function not available"
-                return 1
-            fi
-            ;;
-        backup)
-            if command -v backup_ssl_certificates >/dev/null 2>&1; then
-                backup_ssl_certificates "$ssl_path"
-            else
-                log "ERROR" "SSL backup function not available"
-                return 1
-            fi
-            ;;
-        help|--help|-h)
-            echo "SSL management usage:"
-            echo "  ./milou.sh ssl [COMMAND]"
-            echo ""
-            echo "Commands:"
-            echo "  setup     Generate or update SSL certificates"
-            echo "  status    Show certificate information"
-            echo "  validate  Validate existing certificates"
-            echo "  backup    Backup current certificates"
-            echo "  help      Show this help"
-            echo ""
-            echo "If no command is provided, shows current SSL status."
-            ;;
-        *)
-            log "ERROR" "Unknown SSL command: $action"
-            log "INFO" "Use './milou.sh ssl help' for available commands"
+                ;;
+        esac
+    fi
+}
+
+
+
+# Update domain configuration in environment files
+update_domain_configuration() {
+    local new_domain="$1"
+    local ssl_path="$2"
+    local env_file="${SCRIPT_DIR}/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        log "WARN" "⚠️  Environment file not found: $env_file"
+        return 1
+    fi
+    
+    log "INFO" "📝 Updating domain configuration..."
+    
+    # Create backup of .env file
+    cp "$env_file" "${env_file}.backup.$(date +%s)"
+    
+    # Update domain-related variables
+    sed -i.tmp "s/^SERVER_NAME=.*/SERVER_NAME=$new_domain/" "$env_file"
+    sed -i.tmp "s/^CUSTOMER_DOMAIN_NAME=.*/CUSTOMER_DOMAIN_NAME=$new_domain/" "$env_file"
+    sed -i.tmp "s/^DOMAIN=.*/DOMAIN=$new_domain/" "$env_file"
+    sed -i.tmp "s/^MILOU_DOMAIN=.*/MILOU_DOMAIN=$new_domain/" "$env_file"
+    
+    # Update CORS origin
+    sed -i.tmp "s|^CORS_ORIGIN=.*|CORS_ORIGIN=https://$new_domain|" "$env_file"
+    
+    # Update API URLs
+    sed -i.tmp "s|^API_URL=.*|API_URL=https://$new_domain/api|" "$env_file"
+    sed -i.tmp "s|^API_BASE_URL=.*|API_BASE_URL=https://$new_domain/api|" "$env_file"
+    
+    # Clean up temporary file
+    rm -f "${env_file}.tmp"
+    
+    log "SUCCESS" "✅ Domain configuration updated to: $new_domain"
+    log "INFO" "  Updated variables: SERVER_NAME, DOMAIN, CORS_ORIGIN, API_URL"
+    
+    # Update exported environment variables for current session
+    export SERVER_NAME="$new_domain"
+    export DOMAIN="$new_domain"
+    export CORS_ORIGIN="https://$new_domain"
+    export API_URL="https://$new_domain/api"
+    export API_BASE_URL="https://$new_domain/api"
+}
+
+# Restart nginx container to apply SSL changes
+restart_nginx_container() {
+    log "INFO" "🔄 Restarting nginx container to apply SSL changes..."
+    
+    # Check if nginx container is running
+    if ! docker ps --format "{{.Names}}" | grep -q "milou-nginx"; then
+        log "WARN" "⚠️  Nginx container is not running, starting services..."
+        if command -v start_services >/dev/null 2>&1; then
+            start_services
+            return $?
+        else
+            log "ERROR" "❌ Cannot start services - start function not available"
             return 1
-            ;;
-    esac
+        fi
+    fi
+    
+    # Get the compose file
+    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+    if [[ ! -f "$compose_file" ]]; then
+        compose_file="./static/docker-compose.yml"
+    fi
+    
+    if [[ ! -f "$compose_file" ]]; then
+        log "ERROR" "❌ Docker compose file not found"
+        return 1
+    fi
+    
+    # Restart nginx container
+    log "INFO" "🔄 Restarting nginx container..."
+    if docker compose -f "$compose_file" restart nginx; then
+        log "SUCCESS" "✅ Nginx container restarted successfully"
+        
+        # Wait a moment for nginx to start
+        sleep 2
+        
+        # Check nginx health
+        if docker ps --format "{{.Names}}\t{{.Status}}" | grep "milou-nginx" | grep -q "healthy\|Up"; then
+            log "SUCCESS" "✅ Nginx is healthy and serving requests"
+            return 0
+        else
+            log "WARN" "⚠️  Nginx restarted but health check pending"
+            return 0
+        fi
+    else
+        log "ERROR" "❌ Failed to restart nginx container"
+        return 1
+    fi
 }
 
 # Cleanup command handler
@@ -521,6 +575,29 @@ handle_install_deps() {
     fi
 }
 
+# Build local images command handler  
+handle_build_images() {
+    log "INFO" "🔨 Building Docker images locally for development..."
+    
+    # Get script directory to find the build script
+    local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+    local build_script="${script_dir}/scripts/dev/build-local-images.sh"
+    
+    if [[ ! -f "$build_script" ]]; then
+        log "ERROR" "Build script not found: $build_script"
+        log "INFO" "Expected location: scripts/dev/build-local-images.sh"
+        return 1
+    fi
+    
+    # Make sure it's executable
+    chmod +x "$build_script"
+    
+    # Execute the build script with all arguments
+    log "DEBUG" "Executing: $build_script $*"
+    exec "$build_script" "$@"
+}
+
 # Export all functions
 export -f handle_config handle_validate handle_backup handle_restore
 export -f handle_update handle_ssl handle_cleanup handle_uninstall handle_debug_images
+export -f handle_install_deps handle_diagnose handle_cleanup_test_files handle_build_images

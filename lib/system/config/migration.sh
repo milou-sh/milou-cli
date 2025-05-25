@@ -164,6 +164,25 @@ validate_config_inputs() {
 # Configuration Migration Functions
 # =============================================================================
 
+# Display admin credentials to user
+display_admin_credentials() {
+    local admin_email="$1"
+    local admin_password="$2"
+    
+    echo
+    milou_log "SUCCESS" "🔐 ADMIN CREDENTIALS GENERATED"
+    echo "=================================================================="
+    echo "  📧 Email:    $admin_email"
+    echo "  🔑 Password: $admin_password"
+    echo "=================================================================="
+    echo
+    milou_log "WARN" "⚠️  IMPORTANT SECURITY NOTICE:"
+    milou_log "WARN" "   • Please save these credentials in a secure location"
+    milou_log "WARN" "   • You will be required to change the password on first login"
+    milou_log "WARN" "   • These credentials will not be displayed again"
+    echo
+}
+
 # Generate configuration with preserved credentials
 generate_config_with_preservation() {
     local domain=${1:-localhost}
@@ -211,6 +230,10 @@ generate_config_with_preservation() {
         rabbitmq_password="${PRESERVED_CONFIG[RABBITMQ_PASSWORD]:-$(generate_secure_random 32 "safe")}"
         api_key="${PRESERVED_CONFIG[API_KEY]:-$(generate_secure_random 40 "safe")}"
         
+        # Admin credentials (preserve if exist, otherwise generate new)
+        admin_email="${PRESERVED_CONFIG[ADMIN_EMAIL]:-${admin_email:-admin@localhost}}"
+        admin_password="${PRESERVED_CONFIG[ADMIN_PASSWORD]:-$(generate_secure_random 16 "safe")}"
+        
         milou_log "INFO" "🔄 Using preserved database user: $db_user"
         milou_log "INFO" "🔄 Using preserved RabbitMQ user: $rabbitmq_user"
         milou_log "DEBUG" "Preserved secrets will maintain compatibility with existing data"
@@ -227,8 +250,13 @@ generate_config_with_preservation() {
         rabbitmq_password=$(generate_secure_random 32 "safe")
         api_key=$(generate_secure_random 40 "safe")
         
+        # Admin credentials (always generate fresh for new installations)
+        admin_email="${admin_email:-admin@localhost}"
+        admin_password=$(generate_secure_random 16 "safe")
+        
         milou_log "INFO" "🆕 Generated new database user: $db_user"
         milou_log "INFO" "🆕 Generated new RabbitMQ user: $rabbitmq_user"
+        milou_log "INFO" "🆕 Generated new admin password: $admin_password"
     fi
     
     # Determine ports with conflict checking
@@ -417,6 +445,12 @@ FEATURE_TWO_FACTOR_AUTH=false
 FEATURE_API_RATE_LIMITING=true
 FEATURE_AUDIT_LOGGING=true
 
+# =============================================================================
+# ADMIN CONFIGURATION
+# =============================================================================
+ADMIN_EMAIL=$admin_email
+ADMIN_PASSWORD=$admin_password
+
 EOF
 
     # Set secure permissions
@@ -428,6 +462,8 @@ EOF
         milou_log "SUCCESS" "✅ Preserved existing credentials for seamless upgrade"
     else
         milou_log "SUCCESS" "✅ Configuration generated with new credentials"
+        # Display admin credentials for new installations
+        display_admin_credentials "$admin_email" "$admin_password"
     fi
     
     milou_log "INFO" "Configuration saved to: ${SCRIPT_DIR}/.env"

@@ -12,7 +12,7 @@
 install_required_tools() {
     local pkg_manager="$1"
     
-    milou_log "STEP" "Installing required system tools..."
+    log "STEP" "Installing required system tools..."
     
     local -a required_packages=()
     local -a missing_tools=()
@@ -27,11 +27,11 @@ install_required_tools() {
     done
     
     if [[ ${#missing_tools[@]} -eq 0 ]]; then
-        milou_log "SUCCESS" "All required tools are already installed"
+        log "SUCCESS" "All required tools are already installed"
         return 0
     fi
     
-    milou_log "INFO" "Missing tools: ${missing_tools[*]}"
+    log "INFO" "Missing tools: ${missing_tools[*]}"
     
     # Map tools to packages based on distribution
     case "$pkg_manager" in
@@ -88,7 +88,7 @@ install_required_tools() {
             sudo zypper install -y "${required_packages[@]}"
             ;;
         *)
-            milou_log "ERROR" "Unsupported package manager for automatic tool installation"
+            log "ERROR" "Unsupported package manager for automatic tool installation"
             return 1
             ;;
     esac
@@ -102,10 +102,10 @@ install_required_tools() {
     done
     
     if [[ ${#failed_tools[@]} -eq 0 ]]; then
-        milou_log "SUCCESS" "All required tools installed successfully"
+        log "SUCCESS" "All required tools installed successfully"
         return 0
     else
-        milou_log "ERROR" "Failed to install tools: ${failed_tools[*]}"
+        log "ERROR" "Failed to install tools: ${failed_tools[*]}"
         return 1
     fi
 }
@@ -118,15 +118,15 @@ configure_basic_firewall() {
     local enable_firewall="${1:-false}"
     
     if [[ "$enable_firewall" != "true" ]]; then
-        milou_log "DEBUG" "Firewall configuration skipped"
+        log "DEBUG" "Firewall configuration skipped"
         return 0
     fi
     
-    milou_log "STEP" "Configuring basic firewall rules..."
+    log "STEP" "Configuring basic firewall rules..."
     
     # Check if UFW is available (Ubuntu/Debian)
     if command -v ufw >/dev/null 2>&1; then
-        milou_log "INFO" "Configuring UFW firewall..."
+        log "INFO" "Configuring UFW firewall..."
         
         # Enable UFW if not already enabled
         if ! ufw status | grep -q "Status: active"; then
@@ -143,11 +143,11 @@ configure_basic_firewall() {
         # Allow Milou API port
         sudo ufw allow 9999/tcp
         
-        milou_log "SUCCESS" "UFW firewall configured"
+        log "SUCCESS" "UFW firewall configured"
         
     # Check if firewalld is available (RHEL/CentOS/Fedora)
     elif command -v firewall-cmd >/dev/null 2>&1; then
-        milou_log "INFO" "Configuring firewalld..."
+        log "INFO" "Configuring firewalld..."
         
         # Start and enable firewalld
         sudo systemctl start firewalld
@@ -163,10 +163,10 @@ configure_basic_firewall() {
         # Reload firewall
         sudo firewall-cmd --reload
         
-        milou_log "SUCCESS" "Firewalld configured"
+        log "SUCCESS" "Firewalld configured"
     else
-        milou_log "WARN" "No supported firewall found (UFW or firewalld)"
-        milou_log "INFO" "💡 Consider manually configuring your firewall to allow ports 80, 443, and 9999"
+        log "WARN" "No supported firewall found (UFW or firewalld)"
+        log "INFO" "💡 Consider manually configuring your firewall to allow ports 80, 443, and 9999"
     fi
 }
 

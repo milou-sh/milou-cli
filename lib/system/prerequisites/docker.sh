@@ -13,21 +13,21 @@ install_docker() {
     local distro_id="$1"
     local pkg_manager="$2"
     
-    milou_log "STEP" "Installing Docker..."
+    log "STEP" "Installing Docker..."
     
     # Check if Docker is already installed
     if command -v docker >/dev/null 2>&1; then
-        milou_log "INFO" "Docker is already installed"
+        log "INFO" "Docker is already installed"
         local docker_version
         docker_version=$(docker --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        milou_log "INFO" "Current Docker version: $docker_version"
+        log "INFO" "Current Docker version: $docker_version"
         
         # Check if version meets requirements
         if version_compare "$docker_version" "${MIN_DOCKER_VERSION:-20.10.0}" "ge"; then
-            milou_log "SUCCESS" "Docker version meets requirements"
+            log "SUCCESS" "Docker version meets requirements"
             return 0
         else
-            milou_log "WARN" "Docker version is too old, attempting upgrade..."
+            log "WARN" "Docker version is too old, attempting upgrade..."
         fi
     fi
     
@@ -49,7 +49,7 @@ install_docker() {
             install_docker_opensuse "$pkg_manager"
             ;;
         *)
-            milou_log "WARN" "Unsupported distribution for automatic Docker installation"
+            log "WARN" "Unsupported distribution for automatic Docker installation"
             install_docker_generic
             ;;
     esac
@@ -58,7 +58,7 @@ install_docker() {
 install_docker_debian_ubuntu() {
     local pkg_manager="$1"
     
-    milou_log "INFO" "Installing Docker on Debian/Ubuntu..."
+    log "INFO" "Installing Docker on Debian/Ubuntu..."
     
     # Install prerequisites
     sudo apt-get install -y \
@@ -66,14 +66,14 @@ install_docker_debian_ubuntu() {
         curl \
         gnupg \
         lsb-release || {
-        milou_log "ERROR" "Failed to install prerequisites"
+        log "ERROR" "Failed to install prerequisites"
         return 1
     }
     
     # Add Docker's official GPG key
     sudo mkdir -p /etc/apt/keyrings
     if ! curl -fsSL https://download.docker.com/linux/$(lsb_release -is | tr '[:upper:]' '[:lower:]')/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
-        milou_log "ERROR" "Failed to add Docker GPG key"
+        log "ERROR" "Failed to add Docker GPG key"
         return 1
     fi
     
@@ -84,107 +84,107 @@ install_docker_debian_ubuntu() {
     
     # Update package lists
     sudo apt-get update || {
-        milou_log "ERROR" "Failed to update package lists after adding Docker repository"
+        log "ERROR" "Failed to update package lists after adding Docker repository"
         return 1
     }
     
     # Install Docker
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
-        milou_log "ERROR" "Failed to install Docker packages"
+        log "ERROR" "Failed to install Docker packages"
         return 1
     }
     
-    milou_log "SUCCESS" "Docker installed successfully"
+    log "SUCCESS" "Docker installed successfully"
     return 0
 }
 
 install_docker_rhel_centos() {
     local pkg_manager="$1"
     
-    milou_log "INFO" "Installing Docker on RHEL/CentOS..."
+    log "INFO" "Installing Docker on RHEL/CentOS..."
     
     # Install prerequisites
     sudo $pkg_manager install -y yum-utils || {
-        milou_log "ERROR" "Failed to install prerequisites"
+        log "ERROR" "Failed to install prerequisites"
         return 1
     }
     
     # Add Docker repository
     sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || {
-        milou_log "ERROR" "Failed to add Docker repository"
+        log "ERROR" "Failed to add Docker repository"
         return 1
     }
     
     # Install Docker
     sudo $pkg_manager install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
-        milou_log "ERROR" "Failed to install Docker packages"
+        log "ERROR" "Failed to install Docker packages"
         return 1
     }
     
-    milou_log "SUCCESS" "Docker installed successfully"
+    log "SUCCESS" "Docker installed successfully"
     return 0
 }
 
 install_docker_fedora() {
     local pkg_manager="$1"
     
-    milou_log "INFO" "Installing Docker on Fedora..."
+    log "INFO" "Installing Docker on Fedora..."
     
     # Add Docker repository
     sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo || {
-        milou_log "ERROR" "Failed to add Docker repository"
+        log "ERROR" "Failed to add Docker repository"
         return 1
     }
     
     # Install Docker
     sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || {
-        milou_log "ERROR" "Failed to install Docker packages"
+        log "ERROR" "Failed to install Docker packages"
         return 1
     }
     
-    milou_log "SUCCESS" "Docker installed successfully"
+    log "SUCCESS" "Docker installed successfully"
     return 0
 }
 
 install_docker_arch() {
     local pkg_manager="$1"
     
-    milou_log "INFO" "Installing Docker on Arch Linux..."
+    log "INFO" "Installing Docker on Arch Linux..."
     
     # Install Docker
     sudo pacman -S --noconfirm docker docker-compose || {
-        milou_log "ERROR" "Failed to install Docker packages"
+        log "ERROR" "Failed to install Docker packages"
         return 1
     }
     
-    milou_log "SUCCESS" "Docker installed successfully"
+    log "SUCCESS" "Docker installed successfully"
     return 0
 }
 
 install_docker_opensuse() {
     local pkg_manager="$1"
     
-    milou_log "INFO" "Installing Docker on openSUSE..."
+    log "INFO" "Installing Docker on openSUSE..."
     
     # Install Docker
     sudo zypper install -y docker docker-compose || {
-        milou_log "ERROR" "Failed to install Docker packages"
+        log "ERROR" "Failed to install Docker packages"
         return 1
     }
     
-    milou_log "SUCCESS" "Docker installed successfully"
+    log "SUCCESS" "Docker installed successfully"
     return 0
 }
 
 install_docker_generic() {
-    milou_log "INFO" "Attempting generic Docker installation..."
+    log "INFO" "Attempting generic Docker installation..."
     
     # Use Docker's convenience script
     if curl -fsSL https://get.docker.com | sh; then
-        milou_log "SUCCESS" "Docker installed using convenience script"
+        log "SUCCESS" "Docker installed using convenience script"
         return 0
     else
-        milou_log "ERROR" "Failed to install Docker using convenience script"
+        log "ERROR" "Failed to install Docker using convenience script"
         return 1
     fi
 }
@@ -194,17 +194,17 @@ install_docker_generic() {
 # =============================================================================
 
 configure_docker_service() {
-    milou_log "STEP" "Configuring Docker service..."
+    log "STEP" "Configuring Docker service..."
     
     # Start Docker service
     if ! sudo systemctl start docker; then
-        milou_log "ERROR" "Failed to start Docker service"
+        log "ERROR" "Failed to start Docker service"
         return 1
     fi
     
     # Enable Docker service on boot
     if ! sudo systemctl enable docker; then
-        milou_log "ERROR" "Failed to enable Docker service"
+        log "ERROR" "Failed to enable Docker service"
         return 1
     fi
     
@@ -212,21 +212,21 @@ configure_docker_service() {
     if [[ $EUID -ne 0 ]]; then
         local current_user=$(whoami)
         if ! groups "$current_user" | grep -q docker; then
-            milou_log "INFO" "Adding user $current_user to docker group..."
+            log "INFO" "Adding user $current_user to docker group..."
             if sudo usermod -aG docker "$current_user"; then
-                milou_log "SUCCESS" "User added to docker group"
-                milou_log "INFO" "⚠️  You may need to log out and back in for group changes to take effect"
-                milou_log "INFO" "💡 Or run: newgrp docker"
+                log "SUCCESS" "User added to docker group"
+                log "INFO" "⚠️  You may need to log out and back in for group changes to take effect"
+                log "INFO" "💡 Or run: newgrp docker"
             else
-                milou_log "ERROR" "Failed to add user to docker group"
+                log "ERROR" "Failed to add user to docker group"
                 return 1
             fi
         else
-            milou_log "SUCCESS" "User is already in docker group"
+            log "SUCCESS" "User is already in docker group"
         fi
     fi
     
-    milou_log "SUCCESS" "Docker service configured successfully"
+    log "SUCCESS" "Docker service configured successfully"
     return 0
 }
 
@@ -235,26 +235,26 @@ configure_docker_service() {
 # =============================================================================
 
 verify_docker_compose() {
-    milou_log "STEP" "Verifying Docker Compose..."
+    log "STEP" "Verifying Docker Compose..."
     
     # Check for Docker Compose plugin (modern approach)
     if docker compose version >/dev/null 2>&1; then
         local compose_version
         compose_version=$(docker compose version --short 2>/dev/null | head -1)
-        milou_log "SUCCESS" "Docker Compose plugin found: $compose_version"
+        log "SUCCESS" "Docker Compose plugin found: $compose_version"
         
         # Check version compatibility
         if version_compare "$compose_version" "${MIN_DOCKER_COMPOSE_VERSION:-2.0.0}" "ge"; then
-            milou_log "SUCCESS" "Docker Compose version meets requirements"
+            log "SUCCESS" "Docker Compose version meets requirements"
             return 0
         else
-            milou_log "WARN" "Docker Compose version might be too old (recommended: ${MIN_DOCKER_COMPOSE_VERSION:-2.0.0}+)"
+            log "WARN" "Docker Compose version might be too old (recommended: ${MIN_DOCKER_COMPOSE_VERSION:-2.0.0}+)"
             return 0  # Don't fail, just warn
         fi
     else
-        milou_log "ERROR" "Docker Compose plugin not found"
-        milou_log "INFO" "💡 Docker Compose should be installed automatically with modern Docker installations"
-        milou_log "INFO" "💡 Try upgrading Docker or installing Docker Compose manually"
+        log "ERROR" "Docker Compose plugin not found"
+        log "INFO" "💡 Docker Compose should be installed automatically with modern Docker installations"
+        log "INFO" "💡 Try upgrading Docker or installing Docker Compose manually"
         return 1
     fi
 }

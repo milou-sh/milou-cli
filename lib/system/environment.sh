@@ -5,12 +5,7 @@
 # State-of-the-art environment management for Milou CLI
 # =============================================================================
 
-# Safe logging function for when main log function is not available
-safe_log() {
-    if command -v log >/dev/null 2>&1; then
-        log "$@"
-    fi
-}
+# Logging is handled by the centralized module loader
 
 # Global environment state
 declare -g ENV_FILE_PATH=""
@@ -77,8 +72,8 @@ discover_environment_file() {
                 score=$((score + 100))
             fi
             
-            if command -v safe_log >/dev/null 2>&1; then
-                safe_log "DEBUG" "Environment file: $env_file, score: $score, vars: $var_count"
+            if command -v log >/dev/null 2>&1; then
+                log "DEBUG" "Environment file: $env_file, score: $score, vars: $var_count"
             fi
             
             if [[ $score -gt $best_score ]]; then
@@ -90,13 +85,13 @@ discover_environment_file() {
     
     if [[ -n "$best_env_file" ]]; then
         ENV_FILE_PATH="$best_env_file"
-        if command -v safe_log >/dev/null 2>&1; then
-            safe_log "SUCCESS" "Using environment file: $ENV_FILE_PATH (score: $best_score)"
+        if command -v log >/dev/null 2>&1; then
+            log "SUCCESS" "Using environment file: $ENV_FILE_PATH (score: $best_score)"
         fi
         return 0
     else
-        if command -v safe_log >/dev/null 2>&1; then
-            safe_log "ERROR" "No valid environment file found"
+        if command -v log >/dev/null 2>&1; then
+            log "ERROR" "No valid environment file found"
         fi
         return 1
     fi
@@ -106,12 +101,7 @@ discover_environment_file() {
 validate_environment_file() {
     local env_file="${1:-$ENV_FILE_PATH}"
     
-    # Load centralized validation if available
-    if [[ -f "${BASH_SOURCE%/*}/config/validation.sh" ]]; then
-        source "${BASH_SOURCE%/*}/config/validation.sh" 2>/dev/null || true
-    fi
-    
-    # Use centralized validation if available
+    # Use centralized validation (already loaded by module loader)
     if command -v validate_environment_essential >/dev/null 2>&1; then
         if validate_environment_essential "$env_file"; then
             ENV_FILE_VALIDATED=true
@@ -122,28 +112,28 @@ validate_environment_file() {
     else
         # Fallback validation for essential variables only
         if [[ ! -f "$env_file" ]]; then
-            safe_log "ERROR" "Environment file not found: $env_file"
+            log "ERROR" "Environment file not found: $env_file"
             return 1
         fi
         
         if [[ ! -r "$env_file" ]]; then
-            safe_log "ERROR" "Environment file not readable: $env_file"
+            log "ERROR" "Environment file not readable: $env_file"
             return 1
         fi
         
         if [[ ! -s "$env_file" ]]; then
-            safe_log "ERROR" "Environment file is empty: $env_file"
+            log "ERROR" "Environment file is empty: $env_file"
             return 1
         fi
         
         # Basic syntax check
         if ! env -i bash -n "$env_file" 2>/dev/null; then
-            safe_log "ERROR" "Environment file has syntax errors"
+            log "ERROR" "Environment file has syntax errors"
             return 1
         fi
         
         ENV_FILE_VALIDATED=true
-        safe_log "SUCCESS" "Environment file validated successfully (basic check)"
+        log "SUCCESS" "Environment file validated successfully (basic check)"
         return 0
     fi
 }
@@ -177,8 +167,8 @@ generate_credentials_hash() {
 
 # Consolidate multiple environment files into the canonical location
 consolidate_environment_files() {
-    if command -v safe_log >/dev/null 2>&1; then
-        safe_log "STEP" "Consolidating environment files..."
+    if command -v log >/dev/null 2>&1; then
+        log "STEP" "Consolidating environment files..."
     fi
     
     # Safely determine script directory
@@ -205,11 +195,11 @@ consolidate_environment_files() {
     done
     
     if [[ ${#found_files[@]} -eq 0 ]]; then
-        safe_log "INFO" "No additional environment files found to consolidate"
+        log "INFO" "No additional environment files found to consolidate"
         return 0
     fi
     
-    safe_log "INFO" "Found ${#found_files[@]} environment files to consolidate"
+    log "INFO" "Found ${#found_files[@]} environment files to consolidate"
     
     # Find the best source file
     local best_file=""
@@ -229,7 +219,7 @@ consolidate_environment_files() {
             score=$((score + 30))
         fi
         
-        safe_log "DEBUG" "Environment file: $file, score: $score"
+        log "DEBUG" "Environment file: $file, score: $score"
         
         if [[ $score -gt $best_score ]]; then
             best_score=$score
@@ -238,27 +228,27 @@ consolidate_environment_files() {
     done
     
     if [[ -n "$best_file" ]]; then
-        safe_log "INFO" "Using $best_file as source (score: $best_score)"
+        log "INFO" "Using $best_file as source (score: $best_score)"
         
         # Backup existing canonical file if it exists
         if [[ -f "$canonical_path" ]]; then
             local backup_path="${canonical_path}.backup.$(date +%Y%m%d_%H%M%S)"
             cp "$canonical_path" "$backup_path"
-            safe_log "INFO" "Backed up existing file to: $backup_path"
+            log "INFO" "Backed up existing file to: $backup_path"
         fi
         
         # Copy the best file to canonical location
         cp "$best_file" "$canonical_path"
         chmod 600 "$canonical_path"
         
-        safe_log "SUCCESS" "Environment file consolidated to: $canonical_path"
+        log "SUCCESS" "Environment file consolidated to: $canonical_path"
         
         # Clean up other files (with confirmation)
         for file in "${found_files[@]}"; do
             if [[ "$file" != "$best_file" ]]; then
                 if [[ "${FORCE:-false}" == "true" ]] || confirm "Remove duplicate environment file: $file?" "N"; then
                     rm -f "$file"
-                    safe_log "INFO" "Removed duplicate: $file"
+                    log "INFO" "Removed duplicate: $file"
                 fi
             fi
         done
@@ -295,8 +285,8 @@ load_environment() {
     # Store credential hash for change detection
     ENV_CREDENTIALS_HASH=$(generate_credentials_hash "$env_file")
     
-    safe_log "DEBUG" "Environment loaded from: $env_file"
-    safe_log "DEBUG" "Credentials hash: ${ENV_CREDENTIALS_HASH:0:8}..."
+    log "DEBUG" "Environment loaded from: $env_file"
+    log "DEBUG" "Credentials hash: ${ENV_CREDENTIALS_HASH:0:8}..."
     
     return 0
 }
@@ -312,7 +302,7 @@ export_environment_for_docker() {
     local target_file="${1:-${script_dir}/.env}"
     
     if [[ "$ENV_FILE_PATH" != "$target_file" ]]; then
-        safe_log "DEBUG" "Copying environment to Docker location: $target_file"
+        log "DEBUG" "Copying environment to Docker location: $target_file"
         cp "$ENV_FILE_PATH" "$target_file"
         chmod 600 "$target_file"
     fi
@@ -330,7 +320,7 @@ check_credentials_changed() {
     current_hash=$(generate_credentials_hash)
     
     if [[ -z "$current_hash" ]]; then
-        safe_log "WARN" "Could not generate credentials hash"
+        log "WARN" "Could not generate credentials hash"
         return 1
     fi
     
@@ -342,15 +332,15 @@ check_credentials_changed() {
         stored_hash=$(cat "$stored_hash_file" 2>/dev/null)
         
         if [[ "$current_hash" != "$stored_hash" ]]; then
-            safe_log "INFO" "Credential changes detected"
-            safe_log "DEBUG" "Stored hash: ${stored_hash:0:8}..., Current hash: ${current_hash:0:8}..."
+            log "INFO" "Credential changes detected"
+            log "DEBUG" "Stored hash: ${stored_hash:0:8}..., Current hash: ${current_hash:0:8}..."
             return 0  # Changed
         else
-            safe_log "DEBUG" "No credential changes detected"
+            log "DEBUG" "No credential changes detected"
             return 1  # Not changed
         fi
     else
-        safe_log "DEBUG" "No previous credential hash found"
+        log "DEBUG" "No previous credential hash found"
         return 0  # Assume changed if no previous hash
     fi
 }
@@ -364,7 +354,7 @@ store_credentials_hash() {
         local stored_hash_file="${CONFIG_DIR}/credentials.hash"
         mkdir -p "$(dirname "$stored_hash_file")"
         echo "$hash" > "$stored_hash_file"
-        safe_log "DEBUG" "Stored credentials hash: ${hash:0:8}..."
+        log "DEBUG" "Stored credentials hash: ${hash:0:8}..."
     fi
 }
 
@@ -393,7 +383,7 @@ resolve_ssl_path_for_docker() {
     # Normalize the path
     absolute_path=$(readlink -f "$absolute_path" 2>/dev/null || echo "$absolute_path")
     
-    safe_log "DEBUG" "Resolved SSL path: $ssl_path -> $absolute_path"
+    log "DEBUG" "Resolved SSL path: $ssl_path -> $absolute_path"
     echo "$absolute_path"
 }
 
@@ -403,23 +393,23 @@ resolve_ssl_path_for_docker() {
 
 # Initialize environment management
 initialize_environment_manager() {
-    safe_log "DEBUG" "Initializing environment manager..."
+    log "DEBUG" "Initializing environment manager..."
     
     # Ensure config directory exists
     mkdir -p "${CONFIG_DIR}"
     
     # Consolidate environment files
     if ! consolidate_environment_files; then
-        safe_log "WARN" "Failed to consolidate environment files"
+        log "WARN" "Failed to consolidate environment files"
     fi
     
     # Load the environment
     if ! load_environment; then
-        safe_log "ERROR" "Failed to load environment"
+        log "ERROR" "Failed to load environment"
         return 1
     fi
     
-    safe_log "SUCCESS" "Environment manager initialized successfully"
+    log "SUCCESS" "Environment manager initialized successfully"
     return 0
 }
 
@@ -453,7 +443,7 @@ is_environment_configured() {
 # Show environment status
 show_environment_status() {
     echo
-    safe_log "INFO" "Environment Status:"
+    log "INFO" "Environment Status:"
     echo "  📁 Environment file: ${ENV_FILE_PATH:-'Not found'}"
     echo "  ✅ Validated: ${ENV_FILE_VALIDATED}"
     echo "  🔑 Credentials hash: ${ENV_CREDENTIALS_HASH:0:8}..."
@@ -488,6 +478,6 @@ show_environment_status() {
 #     if discover_environment_file 2>/dev/null; then
 #         initialize_environment_manager
 #     else
-#         safe_log "DEBUG" "No environment file found, skipping auto-initialization"
+#         log "DEBUG" "No environment file found, skipping auto-initialization"
 #     fi
 # fi 

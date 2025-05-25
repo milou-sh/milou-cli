@@ -5,19 +5,34 @@
 # Coordinates all prerequisite installation sub-modules
 # =============================================================================
 
-# Load all prerequisite sub-modules
-source "${BASH_SOURCE%/*}/prerequisites/detection.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/prerequisites/docker.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/prerequisites/tools.sh" 2>/dev/null || true
-
 # This module depends on logging and utilities being already loaded
 # by the module loader system - no need to source anything manually
 
 # Validation that required functions are available
-if ! command -v milou_log >/dev/null 2>&1; then
+if ! command -v log >/dev/null 2>&1; then
     echo "ERROR: Logging functions not available - ensure core modules are loaded" >&2
     return 1
 fi
+
+# Load prerequisite sub-modules on-demand to ensure dependencies are available
+load_prerequisites_modules() {
+    if [[ "${PREREQUISITES_MODULES_LOADED:-false}" != "true" ]]; then
+        source "${BASH_SOURCE%/*}/prerequisites/detection.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load detection module"
+            return 1
+        }
+        source "${BASH_SOURCE%/*}/prerequisites/docker.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load docker module"
+            return 1
+        }
+        source "${BASH_SOURCE%/*}/prerequisites/tools.sh" 2>/dev/null || {
+            log "ERROR" "Failed to load tools module"
+            return 1
+        }
+        PREREQUISITES_MODULES_LOADED="true"
+        log "DEBUG" "Prerequisites sub-modules loaded successfully"
+    fi
+}
 
 # =============================================================================
 # Main Prerequisites Installation Function - Uses Sub-modules
@@ -32,6 +47,12 @@ install_prerequisites() {
     local auto_install="${1:-true}"
     local enable_firewall="${2:-false}"
     local skip_confirmation="${3:-false}"
+    
+    # Load prerequisite sub-modules now that dependencies are available
+    if ! load_prerequisites_modules; then
+        log "ERROR" "Failed to load prerequisites modules"
+        return 1
+    fi
     
     log "STEP" "🔧 Milou Prerequisites Installer"
     echo

@@ -58,44 +58,44 @@ detect_package_manager() {
 update_system_packages() {
     local pkg_manager="$1"
     
-    milou_log "STEP" "Updating system packages..."
+    log "STEP" "Updating system packages..."
     
     case "$pkg_manager" in
         "apt")
             if ! sudo apt-get update; then
-                milou_log "ERROR" "Failed to update package lists"
+                log "ERROR" "Failed to update package lists"
                 return 1
             fi
             ;;
         "yum")
             if ! sudo yum check-update; then
-                milou_log "DEBUG" "YUM check-update returned non-zero (normal behavior)"
+                log "DEBUG" "YUM check-update returned non-zero (normal behavior)"
             fi
             ;;
         "dnf")
             if ! sudo dnf check-update; then
-                milou_log "DEBUG" "DNF check-update returned non-zero (normal behavior)"
+                log "DEBUG" "DNF check-update returned non-zero (normal behavior)"
             fi
             ;;
         "pacman")
             if ! sudo pacman -Sy; then
-                milou_log "ERROR" "Failed to sync package databases"
+                log "ERROR" "Failed to sync package databases"
                 return 1
             fi
             ;;
         "zypper")
             if ! sudo zypper refresh; then
-                milou_log "ERROR" "Failed to refresh repositories"
+                log "ERROR" "Failed to refresh repositories"
                 return 1
             fi
             ;;
         *)
-            milou_log "WARN" "Unknown package manager, skipping system update"
+            log "WARN" "Unknown package manager, skipping system update"
             return 1
             ;;
     esac
     
-    milou_log "SUCCESS" "System packages updated successfully"
+    log "SUCCESS" "System packages updated successfully"
     return 0
 }
 

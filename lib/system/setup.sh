@@ -730,4 +730,120 @@ interactive_setup_wizard() {
     fi
     
     return 0
-} 
+}
+
+# =============================================================================
+# Non-Interactive Setup Function
+# =============================================================================
+
+# Non-interactive setup using environment variables and defaults
+run_non_interactive_setup() {
+    log "INFO" "🤖 Starting non-interactive configuration setup..."
+    
+    # Use environment variables or defaults
+    local github_token="${GITHUB_TOKEN:-}"
+    local domain="${DOMAIN:-localhost}"
+    local ssl_path="${SSL_PATH:-./ssl}"
+    local admin_email="${ADMIN_EMAIL:-}"
+    local use_latest="${USE_LATEST_IMAGES:-true}"
+    
+    # Validate required parameters
+    if [[ -z "$github_token" ]]; then
+        log "ERROR" "GitHub token is required for non-interactive setup"
+        log "INFO" "Set GITHUB_TOKEN environment variable or use --token flag"
+        return 1
+    fi
+    
+    log "INFO" "📋 Configuration parameters:"
+    log "INFO" "  🌍 Domain: $domain"
+    log "INFO" "  🔒 SSL Path: $ssl_path"
+    log "INFO" "  📧 Admin Email: ${admin_email:-Not provided}"
+    log "INFO" "  🐳 Image Strategy: $([ "$use_latest" == "true" ] && echo "Latest versions" || echo "Fixed version")"
+    echo
+    
+    # Step 1: Generate Configuration
+    log "STEP" "Generating configuration..."
+    if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
+        log "ERROR" "Failed to generate configuration"
+        return 1
+    fi
+    log "SUCCESS" "✅ Configuration generated successfully"
+    echo
+    
+    # Step 2: SSL Certificate Setup
+    log "STEP" "Setting up SSL certificates..."
+    mkdir -p "$ssl_path"
+    
+    # Check if certificates already exist
+    if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
+        log "SUCCESS" "✅ Using existing SSL certificates"
+    else
+        log "INFO" "Generating self-signed SSL certificate for $domain..."
+        if generate_self_signed_cert "$ssl_path" "$domain"; then
+            log "SUCCESS" "✅ SSL certificate generated successfully"
+        else
+            log "WARN" "⚠️  SSL certificate generation failed, continuing with HTTP only"
+        fi
+    fi
+    echo
+    
+    # Step 3: Docker Authentication
+    log "STEP" "Authenticating with Docker registry..."
+    if echo "$github_token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Docker registry authentication successful"
+        docker logout ghcr.io >/dev/null 2>&1
+    else
+        log "ERROR" "❌ Docker registry authentication failed"
+        return 1
+    fi
+    echo
+    
+    # Step 4: Pull Docker Images
+    log "STEP" "Pulling Docker images..."
+    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+    if [[ ! -f "$compose_file" ]]; then
+        compose_file="./static/docker-compose.yml"
+    fi
+    
+    if [[ -f "$compose_file" ]]; then
+        if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
+            log "SUCCESS" "✅ Docker images pulled successfully"
+        else
+            log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+        fi
+    else
+        log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
+    fi
+    echo
+    
+    # Step 5: Final Validation
+    log "STEP" "Validating setup..."
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        log "SUCCESS" "✅ Configuration file created"
+    else
+        log "ERROR" "❌ Configuration file missing"
+        return 1
+    fi
+    
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Docker is accessible"
+    else
+        log "ERROR" "❌ Docker is not accessible"
+        return 1
+    fi
+    
+    log "SUCCESS" "🎉 Non-interactive setup completed successfully!"
+    echo
+    log "INFO" "📋 Setup Summary:"
+    log "INFO" "  🌍 Domain: $domain"
+    log "INFO" "  🔒 SSL: $([ -f "$ssl_path/milou.crt" ] && echo "Configured" || echo "HTTP only")"
+    log "INFO" "  🐳 Docker: Authenticated and ready"
+    log "INFO" "  📝 Configuration: Generated"
+    echo
+    log "INFO" "🚀 Ready to start services with: ./milou.sh start"
+    
+    return 0
+}
+
+# Export functions
+export -f interactive_setup_wizard run_non_interactive_setup 

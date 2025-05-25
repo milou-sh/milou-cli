@@ -297,10 +297,23 @@ handle_setup() {
     echo
     
     # Use the appropriate wizard based on mode
+    local setup_completed=false
+    local services_started=false
+    
     if [[ "$setup_mode" == "interactive" ]]; then
         log "INFO" "🎯 Starting interactive configuration wizard..."
         if command -v interactive_setup_wizard >/dev/null 2>&1; then
-            interactive_setup_wizard
+            if interactive_setup_wizard; then
+                setup_completed=true
+                # Check if interactive wizard already started services
+                if docker compose -f "${SCRIPT_DIR}/static/docker-compose.yml" ps --services --filter 'status=running' >/dev/null 2>&1; then
+                    services_started=true
+                    log "DEBUG" "Services already started by interactive wizard"
+                fi
+            else
+                log "ERROR" "Interactive setup wizard failed"
+                return 1
+            fi
         else
             log "ERROR" "Setup wizard not available"
             return 1
@@ -308,7 +321,13 @@ handle_setup() {
     else
         log "INFO" "🤖 Running non-interactive configuration..."
         if command -v run_non_interactive_setup >/dev/null 2>&1; then
-            run_non_interactive_setup
+            if run_non_interactive_setup; then
+                setup_completed=true
+                services_started=true  # Non-interactive setup starts services automatically
+            else
+                log "ERROR" "Non-interactive setup failed"
+                return 1
+            fi
         else
             log "ERROR" "Non-interactive setup not available"
             return 1
@@ -335,24 +354,33 @@ handle_setup() {
         log "WARN" "Configuration validation not available"
     fi
     
-    # Offer to start services
+    # Only offer to start services if they haven't been started already
     echo
     log "SUCCESS" "🎉 Setup completed successfully!"
     echo
     
-    if [[ "$setup_mode" == "interactive" ]]; then
-        if confirm "Start Milou services now?" "Y"; then
-            log "INFO" "🚀 Starting services..."
-            if command -v handle_start >/dev/null 2>&1; then
-                handle_start
-            else
-                log "ERROR" "Start command not available"
-            fi
+    if [[ "$setup_completed" == "true" ]]; then
+        if [[ "$services_started" == "true" ]]; then
+            log "SUCCESS" "✅ Services are already running from the setup process"
+            log "INFO" "💡 Use './milou.sh status' to check service health"
+            log "INFO" "💡 Use './milou.sh logs' to view service logs"
         else
-            log "INFO" "Setup complete. Use './milou.sh start' to start services when ready."
+            # Only ask to start services if they weren't already started
+            if [[ "$setup_mode" == "interactive" ]]; then
+                if confirm "Start Milou services now?" "Y"; then
+                    log "INFO" "🚀 Starting services..."
+                    if command -v handle_start >/dev/null 2>&1; then
+                        handle_start
+                    else
+                        log "ERROR" "Start command not available"
+                    fi
+                else
+                    log "INFO" "Setup complete. Use './milou.sh start' to start services when ready."
+                fi
+            else
+                log "INFO" "Setup complete. Use './milou.sh start' to start services."
+            fi
         fi
-    else
-        log "INFO" "Setup complete. Use './milou.sh start' to start services."
     fi
     
     echo

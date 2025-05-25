@@ -32,6 +32,9 @@ complete_milou_uninstall() {
     local include_logs="${5:-true}"
     local aggressive_mode="${6:-false}"
     
+    # Temporarily disable strict error handling for this function
+    set +e
+    
     log "INFO" "🗑️ Starting complete Milou uninstall..."
     echo
     
@@ -64,6 +67,25 @@ complete_milou_uninstall() {
     log "INFO" "  🌍 Aggressive mode: $([ "$aggressive_mode" == "true" ] && echo "YES" || echo "NO")"
     echo
     
+    # Safety confirmation unless --force is used
+    if [[ "${FORCE:-false}" != "true" && "${INTERACTIVE:-true}" == "true" ]]; then
+        echo -n "Are you sure you want to proceed with the uninstall? [y/N]: "
+        read -r confirmation
+        case "$confirmation" in
+            [Yy]|[Yy][Ee][Ss])
+                log "INFO" "Proceeding with uninstall..."
+                ;;
+            *)
+                log "INFO" "Uninstall cancelled by user"
+                return 0
+                ;;
+        esac
+        echo
+    elif [[ "${FORCE:-false}" == "true" ]]; then
+        log "INFO" "Force mode enabled - skipping confirmation"
+        echo
+    fi
+    
     # Step 1: Stop and remove containers
     log "STEP" "Step 1: Stopping and removing Milou containers"
     local containers_removed=0
@@ -72,10 +94,21 @@ complete_milou_uninstall() {
     
     if [[ -n "$containers" ]]; then
         log "INFO" "🛑 Stopping containers..."
-        echo "$containers" | xargs docker stop >/dev/null 2>&1 || true
+        # Stop containers with timeout and error handling
+        local container_list=()
+        while IFS= read -r container; do
+            if [[ -n "$container" ]]; then
+                container_list+=("$container")
+                if docker stop "$container" --time 30 >/dev/null 2>&1; then
+                    log "SUCCESS" "Stopped container: $container"
+                else
+                    log "WARN" "Failed to stop container: $container (may already be stopped)"
+                fi
+            fi
+        done <<< "$containers"
         
         log "INFO" "🗑️ Removing containers..."
-        echo "$containers" | while read -r container; do
+        for container in "${container_list[@]}"; do
             if docker rm -f "$container" >/dev/null 2>&1; then
                 log "SUCCESS" "Removed container: $container"
                 ((containers_removed++))
@@ -85,9 +118,17 @@ complete_milou_uninstall() {
         done
         
         # Try to remove by pattern for any missed containers
-        docker ps -a --filter "name=static-*" --format "{{.Names}}" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
+        local static_containers
+        static_containers=$(docker ps -a --filter "name=static-*" --format "{{.Names}}" 2>/dev/null || true)
+        if [[ -n "$static_containers" ]]; then
+            while IFS= read -r container; do
+                if [[ -n "$container" ]]; then
+                    docker rm -f "$container" >/dev/null 2>&1 || true
+                fi
+            done <<< "$static_containers"
+        fi
         
-        log "SUCCESS" "Removed containers: $(echo "$containers" | wc -l | tr -d ' ')"
+        log "SUCCESS" "Container removal step completed (processed: ${#container_list[@]} containers)"
     else
         log "INFO" "No Milou containers found"
     fi
@@ -104,14 +145,20 @@ complete_milou_uninstall() {
         
         if [[ -n "$all_images" ]]; then
             log "INFO" "🗑️ Removing Milou images from registry..."
-            echo "$all_images" | while read -r image; do
+            local image_count=0
+            local image_list=()
+            while IFS= read -r image; do
                 if [[ -n "$image" ]]; then
-                    if docker rmi -f "$image" >/dev/null 2>&1; then
-                        log "SUCCESS" "Removed image: $image"
-                        ((images_removed++))
-                    else
-                        log "WARN" "Failed to remove image: $image"
-                    fi
+                    image_list+=("$image")
+                fi
+            done <<< "$all_images"
+            
+            for image in "${image_list[@]}"; do
+                if docker rmi -f "$image" >/dev/null 2>&1; then
+                    log "SUCCESS" "Removed image: $image"
+                    ((image_count++))
+                else
+                    log "WARN" "Failed to remove image: $image"
                 fi
             done
             
@@ -122,7 +169,7 @@ complete_milou_uninstall() {
                 log "INFO" "💾 Disk space potentially freed: $space_freed"
             fi
             
-            log "SUCCESS" "Removed images: $(echo "$all_images" | wc -l | tr -d ' ')"
+            log "SUCCESS" "Image removal step completed (processed: ${#image_list[@]} images)"
         else
             log "INFO" "No Milou images found"
         fi
@@ -150,18 +197,24 @@ complete_milou_uninstall() {
         
         if [[ -n "$volumes" ]]; then
             log "INFO" "🗑️ Removing volumes..."
-            echo "$volumes" | while read -r volume; do
+            local volume_count=0
+            local volume_list=()
+            while IFS= read -r volume; do
                 if [[ -n "$volume" ]]; then
-                    if docker volume rm -f "$volume" >/dev/null 2>&1; then
-                        log "SUCCESS" "Removed volume: $volume"
-                        ((volumes_removed++))
-                    else
-                        log "WARN" "Failed to remove volume: $volume"
-                    fi
+                    volume_list+=("$volume")
+                fi
+            done <<< "$volumes"
+            
+            for volume in "${volume_list[@]}"; do
+                if docker volume rm -f "$volume" >/dev/null 2>&1; then
+                    log "SUCCESS" "Removed volume: $volume"
+                    ((volume_count++))
+                else
+                    log "WARN" "Failed to remove volume: $volume"
                 fi
             done
             
-            log "SUCCESS" "Removed volumes: $(echo "$volumes" | wc -l | tr -d ' ')"
+            log "SUCCESS" "Volume removal step completed (processed: ${#volume_list[@]} volumes)"
         else
             log "INFO" "No Milou volumes found"
         fi
@@ -188,18 +241,24 @@ complete_milou_uninstall() {
     
     if [[ -n "$networks" ]]; then
         log "INFO" "🗑️ Removing networks..."
-        echo "$networks" | while read -r network; do
+        local network_count=0
+        local network_list=()
+        while IFS= read -r network; do
             if [[ -n "$network" && "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
-                if docker network rm "$network" >/dev/null 2>&1; then
-                    log "SUCCESS" "Removed network: $network"
-                    ((networks_removed++))
-                else
-                    log "WARN" "Failed to remove network: $network (may be in use)"
-                fi
+                network_list+=("$network")
+            fi
+        done <<< "$networks"
+        
+        for network in "${network_list[@]}"; do
+            if docker network rm "$network" >/dev/null 2>&1; then
+                log "SUCCESS" "Removed network: $network"
+                ((network_count++))
+            else
+                log "WARN" "Failed to remove network: $network (may be in use)"
             fi
         done
         
-        log "SUCCESS" "Removed networks: $(echo "$networks" | wc -l | tr -d ' ')"
+        log "SUCCESS" "Network removal step completed (processed: ${#network_list[@]} networks)"
     else
         log "INFO" "No Milou networks found"
     fi
@@ -334,9 +393,9 @@ complete_milou_uninstall() {
     log "STEP" "Step 9: Final verification"
     
     local remaining_containers remaining_images remaining_volumes
-    remaining_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
-    remaining_images=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(milou|ghcr\.io/milou-sh)" | wc -l || echo "0")
-    remaining_volumes=$(docker volume ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null | wc -l || echo "0")
+    remaining_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
+    remaining_images=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(milou|ghcr\.io/milou-sh)" | wc -l | tr -d ' \n' || echo "0")
+    remaining_volumes=$(docker volume ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
     
     log "INFO" "📊 Uninstall Summary:"
     log "INFO" "  🗂️ Remaining containers: $remaining_containers"
@@ -361,6 +420,9 @@ complete_milou_uninstall() {
         log "INFO" "  • Use './milou.sh setup' to create a completely fresh installation"
         log "INFO" "  • You can now safely remove this directory if desired"
     fi
+    
+    # Restore strict error handling
+    set -e
     
     return 0
 }

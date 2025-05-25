@@ -379,15 +379,40 @@ handle_uninstall() {
         echo "⚠️  WARNING: This operation is DESTRUCTIVE and cannot be undone!"
         return 0
     fi
+
+    # Ensure the uninstall module is loaded
+    if ! command -v complete_milou_uninstall >/dev/null 2>&1; then
+        log "INFO" "Loading uninstall module..."
+        if command -v milou_load_module >/dev/null 2>&1; then
+            milou_load_module "docker/uninstall" || {
+                log "ERROR" "Failed to load uninstall module"
+                return 1
+            }
+        else
+            log "ERROR" "Module loader not available"
+            return 1
+        fi
+    fi
     
-    # Call the enhanced complete cleanup function
+    # Call the enhanced complete cleanup function with proper parameters
     if command -v complete_milou_uninstall >/dev/null 2>&1; then
-        complete_milou_uninstall "$include_images" "$include_volumes" "$include_config" "$include_ssl" "$include_logs" "$include_user_data" "$aggressive_cleanup"
+        complete_milou_uninstall "$include_images" "$include_volumes" "$include_config" "$include_ssl" "$include_logs" "$aggressive_cleanup"
+        local exit_code=$?
+        
+        if [[ $exit_code -eq 0 ]]; then
+            log "SUCCESS" "🎉 Uninstall completed successfully"
+        else
+            log "ERROR" "Uninstall completed with errors (exit code: $exit_code)"
+        fi
+        
+        return $exit_code
     elif command -v complete_cleanup_milou_resources >/dev/null 2>&1; then
         log "WARN" "Using legacy cleanup function (limited options)"
         complete_cleanup_milou_resources
+        return $?
     else
         log "ERROR" "Uninstall function not available"
+        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(uninstall|cleanup)' | head -5 | tr '\n' ' ')"
         return 1
     fi
 }

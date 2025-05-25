@@ -42,8 +42,8 @@ milou_load_module() {
         return 1
     fi
     
-    # Source the module
-    if source "$module_path"; then
+    # Source the module with error handling for readonly variables
+    if source "$module_path" 2>/dev/null; then
         MILOU_MODULES_LOADED[$module_name]="true"
         
         # Initialize logging if available
@@ -53,8 +53,25 @@ milou_load_module() {
         
         return 0
     else
-        echo "ERROR: Failed to load module: $module_path" >&2
-        return 1
+        # Try again with stderr captured to handle readonly variable warnings
+        local stderr_output
+        stderr_output=$(source "$module_path" 2>&1)
+        local exit_code=$?
+        
+        # If it's just readonly variable warnings, consider it successful
+        if [[ $exit_code -ne 0 ]] && echo "$stderr_output" | grep -q "readonly variable"; then
+            MILOU_MODULES_LOADED[$module_name]="true"
+            if command -v milou_log >/dev/null 2>&1; then
+                milou_log "DEBUG" "Loaded module: $module_name (with readonly variable warnings)"
+            fi
+            return 0
+        else
+            echo "ERROR: Failed to load module: $module_path" >&2
+            if [[ -n "$stderr_output" ]]; then
+                echo "Error details: $stderr_output" >&2
+            fi
+            return 1
+        fi
     fi
 }
 
@@ -171,6 +188,7 @@ milou_load_docker_modules() {
         "docker/compose"       # Docker Compose operations (already loaded in essentials)
         "docker/core"          # Core Docker functions
         "docker/registry"      # Docker registry operations
+        "docker/uninstall"     # Docker uninstall operations
     )
     
     milou_load_modules "${docker_modules[@]}"

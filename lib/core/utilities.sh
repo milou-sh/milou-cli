@@ -5,6 +5,12 @@
 # Contains unique utility functions not covered by other modules
 # =============================================================================
 
+# Module guard to prevent multiple loading
+if [[ "${MILOU_UTILITIES_LOADED:-}" == "true" ]]; then
+    return 0
+fi
+readonly MILOU_UTILITIES_LOADED="true"
+
 # Ensure logging is available
 if ! command -v milou_log >/dev/null 2>&1; then
     source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || {
@@ -13,11 +19,11 @@ if ! command -v milou_log >/dev/null 2>&1; then
     }
 fi
 
-# Constants
-readonly MIN_DOCKER_VERSION="20.10.0"
-readonly MIN_DOCKER_COMPOSE_VERSION="2.0.0"
-readonly MIN_DISK_SPACE_GB=2
-readonly MIN_RAM_MB=2048
+# Constants - Use declare -g instead of readonly to prevent conflicts during module reloading
+declare -g MIN_DOCKER_VERSION="20.10.0"
+declare -g MIN_DOCKER_COMPOSE_VERSION="2.0.0"
+declare -g MIN_DISK_SPACE_GB=2
+declare -g MIN_RAM_MB=2048
 
 # =============================================================================
 # Secure Random Generation

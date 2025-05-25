@@ -74,7 +74,7 @@ services:
   # RabbitMQ Service (Message Queue)
   # ==========================================================================
   rabbitmq:
-    image: rabbitmq:${RABBITMQ_VERSION:-3-management-alpine}
+    image: rabbitmq:${RABBITMQ_VERSION:-3-alpine}
     container_name: milou-rabbitmq
     restart: unless-stopped
     hostname: milou-rabbitmq
@@ -88,7 +88,6 @@ services:
       - rabbitmq_logs:/var/log/rabbitmq:rw
     ports:
       - "${RABBITMQ_EXTERNAL_PORT:-5672}:5672"
-      - "${RABBITMQ_MANAGEMENT_EXTERNAL_PORT:-15672}:15672"
     networks:
       - milou_network
     healthcheck:

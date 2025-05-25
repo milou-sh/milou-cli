@@ -249,5 +249,11 @@ install_prerequisites() {
 # Export Functions - Sub-modules already export their own functions
 # =============================================================================
 
+# Create alias for compatibility with setup script
+install_system_dependencies() {
+    install_prerequisites "$@"
+}
+
 export -f install_prerequisites
+export -f install_system_dependencies
 

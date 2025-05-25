@@ -206,11 +206,11 @@ switch_to_milou_user() {
             script_path=$(readlink -f "$script_path")
         fi
         
-        # If we're in utils directory, go up one level
+        # If we're in lib directory, go up one level
         script_dir=$(dirname "$script_path")
-        if [[ "$(basename "$script_dir")" == "utils" ]]; then
+        if [[ "$(basename "$script_dir")" == "lib" ]]; then
             script_dir=$(dirname "$script_dir")
-            log "DEBUG" "Detected utils directory, using parent: $script_dir"
+            log "DEBUG" "Detected lib directory, using parent: $script_dir"
         fi
         
         # Verify we found the main script
@@ -243,8 +243,8 @@ switch_to_milou_user() {
         error_exit "Cannot locate main script: $script_path"
     fi
     
-    if [[ ! -d "$script_dir/utils" ]]; then
-        error_exit "Cannot locate utils directory: $script_dir/utils"
+    if [[ ! -d "$script_dir/lib" ]]; then
+        error_exit "Cannot locate lib directory: $script_dir/lib"
     fi
     
     # Ensure milou user has access to the script directory

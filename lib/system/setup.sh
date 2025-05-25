@@ -2,9 +2,15 @@
 
 # Interactive Setup Wizard for Milou CLI
 
-# Import utility functions
-source "${SCRIPT_DIR}/utils/utils.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/utils/docker-registry.sh" 2>/dev/null || true
+# Import utility functions from centralized modules
+if [[ -f "${SCRIPT_DIR}/lib/core/utilities.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/core/utilities.sh"
+fi
+
+# Import Docker registry functions
+if [[ -f "${SCRIPT_DIR}/lib/docker/registry.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/docker/registry.sh"
+fi
 
 # Load user interface module for colors and prompts
 if [[ -f "${SCRIPT_DIR}/lib/core/user-interface.sh" ]]; then

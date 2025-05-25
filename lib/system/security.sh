@@ -5,8 +5,12 @@
 # Comprehensive security measures and compliance checks
 # =============================================================================
 
-# Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
+# Source utility functions from core module
+if [[ -f "${SCRIPT_DIR}/lib/core/utilities.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/core/utilities.sh"
+elif [[ -f "${BASH_SOURCE%/*}/../core/utilities.sh" ]]; then
+    source "${BASH_SOURCE%/*}/../core/utilities.sh"
+fi
 source "${BASH_SOURCE%/*}/user-management.sh" 2>/dev/null || true
 
 # Security Constants

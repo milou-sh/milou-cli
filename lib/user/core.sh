@@ -5,8 +5,12 @@
 # Handles basic user detection, creation, and fundamental operations
 # =============================================================================
 
-# Source utility functions
-source "${BASH_SOURCE%/*}/utils.sh" 2>/dev/null || true
+# Source utility functions from core module
+if [[ -f "${SCRIPT_DIR}/lib/core/utilities.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/core/utilities.sh"
+elif [[ -f "${BASH_SOURCE%/*}/../core/utilities.sh" ]]; then
+    source "${BASH_SOURCE%/*}/../core/utilities.sh"
+fi
 
 # Constants - Export for use by other modules
 export MILOU_USER="milou"

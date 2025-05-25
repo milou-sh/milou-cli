@@ -83,9 +83,9 @@ backup_system_config() {
         cp "${SCRIPT_DIR}/.env.example" "${config_backup_dir}/" || true
     fi
     
-    # Backup utility scripts
-    if [[ -d "${SCRIPT_DIR}/utils" ]]; then
-        cp -r "${SCRIPT_DIR}/utils" "${config_backup_dir}/" || true
+    # Backup library modules
+    if [[ -d "${SCRIPT_DIR}/lib" ]]; then
+        cp -r "${SCRIPT_DIR}/lib" "${config_backup_dir}/" || true
     fi
     
     return 0

@@ -6,7 +6,7 @@
 # =============================================================================
 
 # Source modular components
-source "${BASH_SOURCE%/*}/docker-registry.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/registry.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/docker-services.sh" 2>/dev/null || true
 
 # =============================================================================

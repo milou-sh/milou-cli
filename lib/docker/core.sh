@@ -214,6 +214,20 @@ complete_cleanup_milou_resources() {
     return 0
 }
 
+# Load uninstall module - function moved to dedicated module to reduce file size
+if [[ -f "${SCRIPT_DIR}/lib/docker/uninstall.sh" ]]; then
+    source "${SCRIPT_DIR}/lib/docker/uninstall.sh"
+else
+    log "ERROR" "Uninstall module not found: ${SCRIPT_DIR}/lib/docker/uninstall.sh"
+    
+    # Fallback function
+    complete_milou_uninstall() {
+        log "ERROR" "Uninstall functionality not available - module missing"
+        log "INFO" "Please ensure lib/docker/uninstall.sh exists"
+        return 1
+    }
+fi
+
 # =============================================================================
 # Installation State Management
 # =============================================================================

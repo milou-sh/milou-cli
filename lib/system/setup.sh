@@ -119,111 +119,7 @@ test_github_auth() {
     fi
 }
 
-# Interactive SSL certificate setup
-setup_ssl_interactive() {
-    local ssl_path="$1"
-    local domain="$2"
-    
-    echo -e "\n${BOLD_PROMPT}${MAGENTA_PROMPT}=== SSL Certificate Setup ===${NC_PROMPT}"
-    echo "SSL certificates are required for secure HTTPS access."
-    echo
-    
-    # Check if certificates already exist
-    if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
-        echo -e "${GREEN}[INFO]${NC_PROMPT} SSL certificates found at $ssl_path"
-        if confirm "Use existing certificates?"; then
-            return 0
-        fi
-    fi
-    
-    # Create SSL directory if it doesn't exist
-    mkdir -p "$ssl_path"
-    
-    echo "Choose SSL certificate option:"
-    echo "1) Use existing certificates (place milou.crt and milou.key in $ssl_path)"
-    echo "2) Generate self-signed certificate for development"
-    echo "3) Use Let's Encrypt (for production domains)"
-    echo "4) Skip SSL setup (HTTP only - not recommended for production)"
-    
-    while true; do
-        echo -ne "${CYAN_PROMPT}Enter your choice (1-4): ${NC_PROMPT}"
-        read ssl_choice
-        
-        case "$ssl_choice" in
-            1)
-                echo "Please place your SSL certificate files in $ssl_path:"
-                echo "  - milou.crt (certificate file)"
-                echo "  - milou.key (private key file)"
-                echo
-                echo "Press Enter when ready to continue..."
-                read
-                
-                if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
-                    echo -e "${GREEN}[SUCCESS]${NC_PROMPT} SSL certificates found"
-                    return 0
-                else
-                    echo -e "${RED}[ERROR]${NC_PROMPT} Certificate files not found"
-                    continue
-                fi
-                ;;
-            2)
-                echo "Generating self-signed certificate for $domain..."
-                generate_self_signed_cert "$ssl_path" "$domain"
-                return $?
-                ;;
-            3)
-                echo "Let's Encrypt setup not implemented yet."
-                echo "Please use option 1 or 2 for now."
-                continue
-                ;;
-            4)
-                echo -e "${YELLOW}[WARNING]${NC_PROMPT} Skipping SSL setup"
-                echo "Your Milou instance will run on HTTP only"
-                return 0
-                ;;
-            *)
-                echo -e "${RED}Invalid choice. Please enter 1-4.${NC_PROMPT}"
-                continue
-                ;;
-        esac
-    done
-}
-
-# Generate self-signed certificate
-generate_self_signed_cert() {
-    local ssl_path="$1"
-    local domain="$2"
-    
-    # Check if OpenSSL is available
-    if ! command -v openssl >/dev/null 2>&1; then
-        echo -e "${RED}[ERROR]${NC_PROMPT} OpenSSL is not installed"
-        return 1
-    fi
-    
-    echo "Generating self-signed certificate for $domain..."
-    
-    # Generate private key
-    openssl genrsa -out "$ssl_path/milou.key" 2048 2>/dev/null || {
-        echo -e "${RED}[ERROR]${NC_PROMPT} Failed to generate private key"
-        return 1
-    }
-    
-    # Generate certificate
-    openssl req -new -x509 -key "$ssl_path/milou.key" -out "$ssl_path/milou.crt" -days 365 \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" 2>/dev/null || {
-        echo -e "${RED}[ERROR]${NC_PROMPT} Failed to generate certificate"
-        return 1
-    }
-    
-    # Set appropriate permissions
-    chmod 600 "$ssl_path/milou.key"
-    chmod 644 "$ssl_path/milou.crt"
-    
-    echo -e "${GREEN}[SUCCESS]${NC_PROMPT} Self-signed certificate generated"
-    echo "Certificate valid for 365 days"
-    
-    return 0
-}
+# SSL setup is now handled by the dedicated SSL module
 
 # Main interactive setup wizard
 interactive_setup() {
@@ -313,8 +209,18 @@ interactive_setup() {
     
     # Set up SSL
     echo -e "\n${BOLD_PROMPT}Step 5: SSL Certificate Setup${NC_PROMPT}"
-    if ! setup_ssl_interactive "$ssl_path" "$domain"; then
-        echo -e "${RED}[ERROR]${NC_PROMPT} SSL setup failed"
+    if command -v setup_ssl_interactive >/dev/null 2>&1; then
+        if ! setup_ssl_interactive "$ssl_path" "$domain"; then
+            echo -e "${RED}[ERROR]${NC_PROMPT} SSL setup failed"
+            return 1
+        fi
+    elif command -v setup_ssl >/dev/null 2>&1; then
+        if ! setup_ssl "$ssl_path" "$domain"; then
+            echo -e "${RED}[ERROR]${NC_PROMPT} SSL setup failed"
+            return 1
+        fi
+    else
+        echo -e "${RED}[ERROR]${NC_PROMPT} SSL module not available"
         return 1
     fi
     
@@ -639,9 +545,16 @@ interactive_setup_wizard() {
     # Step 8: SSL Certificate Setup (only if not using existing)
     echo -e "${BOLD}Step 8: SSL Certificate Setup${NC}"
     if [[ "$ssl_choice" != "1" ]]; then
-        if ! setup_ssl "$ssl_path" "$domain"; then
-            if ! confirm "SSL setup failed. Continue anyway?" "N"; then
-                error_exit "Setup cancelled due to SSL certificate issues"
+        if command -v setup_ssl >/dev/null 2>&1; then
+            if ! setup_ssl "$ssl_path" "$domain"; then
+                if ! confirm "SSL setup failed. Continue anyway?" "N"; then
+                    error_exit "Setup cancelled due to SSL certificate issues"
+                fi
+            fi
+        else
+            log "ERROR" "SSL module not available"
+            if ! confirm "Continue without SSL certificates?" "N"; then
+                error_exit "Setup cancelled - SSL required"
             fi
         fi
     else
@@ -787,12 +700,41 @@ run_non_interactive_setup() {
     # Check if certificates already exist
     if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
         log "SUCCESS" "✅ Using existing SSL certificates"
-    else
+        
+        # Validate existing certificates using SSL module if available
+        if command -v validate_certificate >/dev/null 2>&1; then
+            if ! validate_certificate "$ssl_path/milou.crt" "$ssl_path/milou.key"; then
+                log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
+                rm -f "$ssl_path/milou.crt" "$ssl_path/milou.key"
+            fi
+        elif command -v openssl >/dev/null 2>&1; then
+            if ! openssl x509 -in "$ssl_path/milou.crt" -noout -text >/dev/null 2>&1; then
+                log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
+                rm -f "$ssl_path/milou.crt" "$ssl_path/milou.key"
+            fi
+        fi
+    fi
+    
+    # Generate certificates if needed
+    if [[ ! -f "$ssl_path/milou.crt" || ! -f "$ssl_path/milou.key" ]]; then
         log "INFO" "Generating self-signed SSL certificate for $domain..."
-        if generate_self_signed_cert "$ssl_path" "$domain"; then
-            log "SUCCESS" "✅ SSL certificate generated successfully"
+        
+        # Use the centralized SSL module
+        if command -v setup_ssl >/dev/null 2>&1; then
+            if setup_ssl "$ssl_path" "$domain"; then
+                log "SUCCESS" "✅ SSL certificate generated successfully"
+                log "INFO" "  📄 Certificate: $ssl_path/milou.crt"
+                log "INFO" "  🔑 Private key: $ssl_path/milou.key"
+                log "INFO" "  🌍 Domain: $domain"
+                log "INFO" "  ⏰ Valid for: 365 days"
+            else
+                log "ERROR" "❌ SSL certificate generation failed"
+                log "WARN" "⚠️  Continuing with HTTP only - nginx may fail to start"
+                log "INFO" "💡 You can generate SSL certificates manually with: ./milou.sh ssl setup"
+            fi
         else
-            log "WARN" "⚠️  SSL certificate generation failed, continuing with HTTP only"
+            log "ERROR" "❌ SSL module not available"
+            log "WARN" "⚠️  Continuing without SSL certificates"
         fi
     fi
     echo

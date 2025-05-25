@@ -265,14 +265,21 @@ handle_cleanup() {
                 cleanup_system_resources
             fi
             ;;
+        complete|--complete|uninstall|--uninstall)
+            log "INFO" "🗑️ Complete Milou uninstallation..."
+            handle_uninstall "${@:2}"
+            ;;
         --help|-h)
             echo "Cleanup command usage:"
-            echo "  ./milou.sh cleanup [docker|system|all]"
+            echo "  ./milou.sh cleanup [docker|system|all|complete]"
             echo ""
             echo "Options:"
-            echo "  docker    Clean Docker resources (default)"
-            echo "  system    Clean system temporary files"
-            echo "  all       Clean everything"
+            echo "  docker     Clean Docker resources (default)"
+            echo "  system     Clean system temporary files"
+            echo "  all        Clean everything (non-destructive)"
+            echo "  complete   Complete uninstall (DESTRUCTIVE - removes all data)"
+            echo ""
+            echo "For complete uninstall, see: ./milou.sh uninstall --help"
             ;;
         *)
             log "WARN" "Unknown cleanup type: $cleanup_type, defaulting to docker cleanup"
@@ -284,6 +291,105 @@ handle_cleanup() {
             fi
             ;;
     esac
+}
+
+# Complete uninstall command handler
+handle_uninstall() {
+    local show_help=false
+    local include_images=true
+    local include_volumes=true
+    local include_config=true
+    local include_ssl=true
+    local include_logs=true
+    local include_user_data=false
+    local aggressive_cleanup=false
+    
+    # Parse uninstall-specific options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                show_help=true
+                shift
+                ;;
+            --keep-images)
+                include_images=false
+                shift
+                ;;
+            --keep-volumes)
+                include_volumes=false
+                shift
+                ;;
+            --keep-config)
+                include_config=false
+                shift
+                ;;
+            --keep-ssl)
+                include_ssl=false
+                shift
+                ;;
+            --keep-logs)
+                include_logs=false
+                shift
+                ;;
+            --include-user-data)
+                include_user_data=true
+                shift
+                ;;
+            --aggressive|--nuclear)
+                aggressive_cleanup=true
+                include_images=true
+                include_volumes=true
+                include_config=true
+                include_ssl=true
+                include_logs=true
+                include_user_data=true
+                shift
+                ;;
+            *)
+                # Ignore unknown flags
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ "$show_help" == "true" ]]; then
+        echo "Milou Complete Uninstall"
+        echo "========================="
+        echo "This command completely removes Milou from your system."
+        echo ""
+        echo "Usage: ./milou.sh uninstall [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --keep-images         Keep downloaded Docker images"
+        echo "  --keep-volumes        Keep data volumes (databases, etc.)"
+        echo "  --keep-config         Keep configuration files (.env, etc.)"
+        echo "  --keep-ssl            Keep SSL certificates"
+        echo "  --keep-logs           Keep log files"
+        echo "  --include-user-data   Remove user data directories (~/.milou)"
+        echo "  --aggressive          Remove everything including system data"
+        echo "  --force               Skip confirmation prompts"
+        echo "  --help, -h            Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  ./milou.sh uninstall                    # Standard uninstall"
+        echo "  ./milou.sh uninstall --keep-config      # Keep configuration"
+        echo "  ./milou.sh uninstall --aggressive       # Remove everything"
+        echo "  ./milou.sh uninstall --force            # Skip confirmations"
+        echo ""
+        echo "⚠️  WARNING: This operation is DESTRUCTIVE and cannot be undone!"
+        return 0
+    fi
+    
+    # Call the enhanced complete cleanup function
+    if command -v complete_milou_uninstall >/dev/null 2>&1; then
+        complete_milou_uninstall "$include_images" "$include_volumes" "$include_config" "$include_ssl" "$include_logs" "$include_user_data" "$aggressive_cleanup"
+    elif command -v complete_cleanup_milou_resources >/dev/null 2>&1; then
+        log "WARN" "Using legacy cleanup function (limited options)"
+        complete_cleanup_milou_resources
+    else
+        log "ERROR" "Uninstall function not available"
+        return 1
+    fi
 }
 
 # Debug images command handler
@@ -310,16 +416,16 @@ handle_diagnose() {
     fi
 }
 
-# Cleanup test files command handler
+# Cleanup test files command handler (DEPRECATED - use uninstall instead)
 handle_cleanup_test_files() {
-    log "INFO" "🧹 Cleaning up test configuration files..."
-    
-    if command -v cleanup_test_configuration_files >/dev/null 2>&1; then
-        cleanup_test_configuration_files "$@"
-    else
-        log "ERROR" "Test cleanup function not available"
-        return 1
-    fi
+    log "WARN" "⚠️  The 'cleanup-test-files' command is deprecated"
+    log "INFO" "💡 Use 'cleanup' or 'uninstall' commands instead:"
+    echo "  • './milou.sh cleanup all' - Clean temporary files and unused resources"
+    echo "  • './milou.sh uninstall --keep-config' - Remove everything except config"
+    echo "  • './milou.sh uninstall' - Complete removal"
+    echo ""
+    echo "See './milou.sh cleanup --help' or './milou.sh uninstall --help' for details"
+    return 1
 }
 
 # Install dependencies command handler  
@@ -392,4 +498,4 @@ handle_install_deps() {
 
 # Export all functions
 export -f handle_config handle_validate handle_backup handle_restore
-export -f handle_update handle_ssl handle_cleanup handle_debug_images
+export -f handle_update handle_ssl handle_cleanup handle_uninstall handle_debug_images

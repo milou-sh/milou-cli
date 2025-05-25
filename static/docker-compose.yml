@@ -235,7 +235,13 @@ services:
       # Redis Configuration
       - REDIS_URL=${REDIS_URL}
       - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # Security Configuration (CRITICAL: Required for API key decryption)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SSO_CONFIG_ENCRYPTION_KEY=${SSO_CONFIG_ENCRYPTION_KEY}
+      - JWT_SECRET=${JWT_SECRET}
       
       # Python Configuration
       - PYTHONUNBUFFERED=1

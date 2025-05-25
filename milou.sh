@@ -194,6 +194,7 @@ show_help() {
     printf "    ${cyan}update${nc}            Update to latest version\n"
     printf "    ${cyan}ssl${nc}               Manage SSL certificates\n"
     printf "    ${cyan}cleanup${nc}           Clean up Docker resources\n"
+    printf "    ${cyan}uninstall${nc}         Complete removal of Milou (DESTRUCTIVE)\n"
     printf "    ${cyan}shell${nc} [SERVICE]   Get shell access to a running container\n"
     printf "    ${cyan}debug-images${nc}      Debug Docker image availability (troubleshooting)\n"
     printf "    ${cyan}diagnose${nc}          Run comprehensive Docker environment diagnosis\n"
@@ -204,7 +205,7 @@ show_help() {
     printf "    ${cyan}security-harden${nc}   Apply security hardening measures (requires sudo)\n"
     printf "    ${cyan}security-report${nc}   Generate detailed security report\n"
     printf "    ${cyan}install-deps${nc}      Install system dependencies (Docker, tools, etc.)\n"
-    printf "    ${cyan}cleanup-test-files${nc} Remove test configuration files\n"
+
     printf "    ${cyan}help${nc}              Show this help message\n\n"
 
     printf "${bold}OPTIONS:${nc}\n"
@@ -361,7 +362,7 @@ main() {
                 ;;
             --help|-h)
                 # Command-specific help
-                if [[ "$command" == "cleanup" || "$command" == "backup" || "$command" == "ssl" ]]; then
+                if [[ "$command" == "cleanup" || "$command" == "backup" || "$command" == "ssl" || "$command" == "uninstall" ]]; then
                     remaining_args+=("$1")
                     shift
                 else
@@ -453,7 +454,7 @@ milou_load_and_execute_command() {
         start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps|diagnose)
+        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose)
             handler_file="system.sh"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)
@@ -531,8 +532,8 @@ if [[ ! -d "$SCRIPT_DIR" ]]; then
     exit 1
 fi
 
-if [[ ! -d "$SCRIPT_DIR/utils" ]]; then
-    echo "ERROR: Utils directory not found: $SCRIPT_DIR/utils" >&2
+if [[ ! -d "$SCRIPT_DIR/lib" ]]; then
+    echo "ERROR: Library directory not found: $SCRIPT_DIR/lib" >&2
     exit 1
 fi
 

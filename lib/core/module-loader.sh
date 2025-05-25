@@ -213,7 +213,7 @@ milou_load_command_modules() {
             milou_load_docker_modules
             milou_load_system_modules
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps|diagnose)
+        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose)
             milou_load_system_modules
             milou_load_docker_modules
             ;;

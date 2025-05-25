@@ -37,25 +37,34 @@ setup_ssl_interactive_enhanced() {
             ssl_setup_wizard "$ssl_path" "$domain" "$restart_nginx" "${remaining_args[@]}"
             ;;
         status|info|show)
-            ssl_status_enhanced "$ssl_path" "$domain"
-            ;;
-        copy)
-            ssl_copy_wizard "$ssl_path" "$domain" "$restart_nginx" "${remaining_args[@]}"
+            # Now shows container status (renamed from status-container)
+            ssl_status_container_enhanced "$domain"
             ;;
         validate|check)
             ssl_validate_enhanced "$ssl_path" "$domain"
             ;;
         backup)
-            ssl_backup_enhanced "$ssl_path"
+            # Now only does container backup (simplified)
+            ssl_backup_container_enhanced
+            ;;
+        inject)
+            # Enhanced inject command with direct cert file support
+            if command -v inject_ssl_certificates_enhanced >/dev/null 2>&1; then
+                inject_ssl_certificates_enhanced "$ssl_path" "$domain" "${remaining_args[@]}"
+            else
+                ssl_inject_enhanced "$ssl_path" "$domain"
+            fi
             ;;
         restart|restart-nginx)
             ssl_restart_nginx
             ;;
-        help|--help|-h)
+        help|--help|-h|"")
+            # Show help by default when no command provided
             ssl_show_help
             ;;
         *)
             milou_log "ERROR" "Unknown SSL command: $action"
+            milou_log "INFO" "Available commands: setup, status, backup, inject, validate, restart, help"
             ssl_show_help
             return 1
             ;;
@@ -658,6 +667,52 @@ ssl_backup_enhanced() {
     fi
 }
 
+# Enhanced SSL backup from container
+ssl_backup_container_enhanced() {
+    milou_log "INFO" "💾 Creating SSL certificate backup from nginx container"
+    echo
+    
+    if command -v backup_nginx_ssl_certificates >/dev/null 2>&1; then
+        backup_nginx_ssl_certificates "./ssl_backups"
+    else
+        milou_log "ERROR" "Nginx SSL backup function not available"
+        return 1
+    fi
+}
+
+# Enhanced SSL status from container
+ssl_status_container_enhanced() {
+    local domain="$1"
+    
+    milou_log "INFO" "📋 SSL Certificate Status (from nginx container)"
+    echo
+    
+    if command -v show_nginx_certificate_status >/dev/null 2>&1; then
+        show_nginx_certificate_status "$domain"
+    else
+        milou_log "ERROR" "Nginx certificate status function not available"
+        return 1
+    fi
+}
+
+# Enhanced SSL injection
+ssl_inject_enhanced() {
+    local ssl_path="$1"
+    local domain="$2"
+    
+    milou_log "INFO" "💉 Injecting SSL certificates into nginx container"
+    echo
+    
+    ssl_path=$(get_appropriate_ssl_path "$ssl_path" "$(pwd)")
+    
+    if command -v inject_ssl_certificates >/dev/null 2>&1; then
+        inject_ssl_certificates "$ssl_path" "$domain" true
+    else
+        milou_log "ERROR" "SSL injection function not available"
+        return 1
+    fi
+}
+
 # Restart nginx container
 ssl_restart_nginx() {
     milou_log "INFO" "🔄 Restarting nginx container..."
@@ -682,32 +737,40 @@ ssl_restart_nginx() {
 
 # Show SSL help
 ssl_show_help() {
-    echo "Enhanced SSL Management for Milou"
-    echo "================================="
+    echo "Streamlined SSL Management for Milou"
+    echo "===================================="
     echo
     echo "Usage: ./milou.sh ssl [COMMAND] [OPTIONS]"
     echo
     echo "Commands:"
-    echo "  setup     Interactive SSL certificate setup wizard"
-    echo "  status    Show detailed certificate information"
-    echo "  validate  Validate certificates against domain"
-    echo "  backup    Create backup of current certificates"
-    echo "  copy      Import certificates from external files"
-    echo "  restart   Restart nginx to apply SSL changes"
-    echo "  help      Show this help"
+    echo "  setup             Interactive SSL certificate setup wizard"
+    echo "  status            Show certificate information from running nginx container"
+    echo "  backup            Create backup from running nginx container"
+    echo "  inject [CERT]     Inject certificates into nginx container"
+    echo "  validate          Validate certificates against domain"
+    echo "  restart           Restart nginx to apply SSL changes"
+    echo "  help              Show this help"
     echo
     echo "Options:"
     echo "  --domain DOMAIN       Target domain (default: current SERVER_NAME)"
     echo "  --restart-nginx       Restart nginx after setup"
     echo
+    echo "Inject Command Usage:"
+    echo "  ./milou.sh ssl inject                    # Use certificates from default SSL path"
+    echo "  ./milou.sh ssl inject cert.crt           # Inject specific certificate (auto-find key)"
+    echo "  ./milou.sh ssl inject cert.crt key.key   # Inject specific certificate and key"
+    echo "  ./milou.sh ssl inject --cert=cert.crt --key=key.key  # Using explicit options"
+    echo
     echo "Certificate Types Supported:"
     echo "  🌟 Let's Encrypt     Free, trusted, auto-renewable"
     echo "  🔧 Self-signed       Quick setup, browser warnings"
-    echo "  📁 Import existing   Use your own certificates"
+    echo "  📁 Direct inject     Use any certificate files directly"
     echo
     echo "Examples:"
     echo "  ./milou.sh ssl setup --domain example.com --restart-nginx"
     echo "  ./milou.sh ssl status --domain example.com"
     echo "  ./milou.sh ssl backup"
+    echo "  ./milou.sh ssl inject /path/to/new-cert.crt"
+    echo "  ./milou.sh ssl inject --cert=/etc/ssl/cert.pem --key=/etc/ssl/key.pem"
     echo
 } 

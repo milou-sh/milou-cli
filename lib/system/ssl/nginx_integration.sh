@@ -138,6 +138,162 @@ inject_certificates_to_container() {
     fi
 }
 
+# Enhanced inject SSL certificates with flexible input
+inject_ssl_certificates_enhanced() {
+    local ssl_path="$1"
+    local domain="${2:-localhost}"
+    shift 2  # Remove first two arguments
+    
+    milou_log "STEP" "🔄 Injecting SSL certificates into nginx container (enhanced)"
+    
+    # Check if a certificate file was provided directly as argument
+    local cert_file=""
+    local key_file=""
+    local backup=true
+    
+    # Parse remaining arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            *.crt|*.cert|*.pem)
+                cert_file="$1"
+                shift
+                ;;
+            *.key)
+                key_file="$1"
+                shift
+                ;;
+            --no-backup)
+                backup=false
+                shift
+                ;;
+            --cert=*)
+                cert_file="${1#*=}"
+                shift
+                ;;
+            --key=*)
+                key_file="${1#*=}"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    # If certificate files were provided directly, validate them
+    if [[ -n "$cert_file" ]]; then
+        if [[ ! -f "$cert_file" ]]; then
+            milou_log "ERROR" "Certificate file not found: $cert_file"
+            return 1
+        fi
+        
+        # If key file not provided, try to infer it
+        if [[ -z "$key_file" ]]; then
+            # Try common patterns
+            local base_name="${cert_file%.*}"
+            local possible_keys=(
+                "${base_name}.key"
+                "${cert_file%.crt}.key"
+                "${cert_file%.cert}.key"
+                "${cert_file%.pem}.key"
+                "$(dirname "$cert_file")/milou.key"
+            )
+            
+            for possible_key in "${possible_keys[@]}"; do
+                if [[ -f "$possible_key" ]]; then
+                    key_file="$possible_key"
+                    milou_log "INFO" "Auto-detected private key: $key_file"
+                    break
+                fi
+            done
+            
+            if [[ -z "$key_file" ]]; then
+                milou_log "ERROR" "Private key file not found. Please specify with --key=path/to/key.key"
+                milou_log "INFO" "Tried: ${possible_keys[*]}"
+                return 1
+            fi
+        fi
+        
+        if [[ ! -f "$key_file" ]]; then
+            milou_log "ERROR" "Private key file not found: $key_file"
+            return 1
+        fi
+        
+        milou_log "INFO" "Using provided certificate files:"
+        milou_log "INFO" "  📄 Certificate: $cert_file"
+        milou_log "INFO" "  🔑 Private Key: $key_file"
+        
+        # Use the provided files directly
+        inject_ssl_certificates_from_files "$cert_file" "$key_file" "$domain" "$backup"
+    else
+        # Use standard SSL path
+        milou_log "INFO" "Using certificates from SSL path: $ssl_path"
+        inject_ssl_certificates "$ssl_path" "$domain" "$backup"
+    fi
+}
+
+# Inject certificates from specific files
+inject_ssl_certificates_from_files() {
+    local cert_file="$1"
+    local key_file="$2"
+    local domain="${3:-localhost}"
+    local backup="${4:-true}"
+    
+    milou_log "STEP" "🔄 Injecting SSL certificates from specific files"
+    
+    # Validate certificate and key
+    if ! validate_cert_key_pair "$cert_file" "$key_file"; then
+        milou_log "ERROR" "Certificate and private key do not match"
+        return 1
+    fi
+    
+    # Check if nginx container is running
+    if ! is_nginx_container_running; then
+        milou_log "WARN" "⚠️  Nginx container is not running"
+        milou_log "INFO" "Starting nginx container first..."
+        if ! start_nginx_container; then
+            milou_log "ERROR" "Failed to start nginx container"
+            return 1
+        fi
+    fi
+    
+    # Backup existing certificates from container if requested
+    if [[ "$backup" == "true" ]]; then
+        backup_nginx_certificates_from_container
+    fi
+    
+    # Inject certificates into container
+    milou_log "INFO" "📋 Injecting certificates into nginx container..."
+    
+    if inject_certificates_to_container "$cert_file" "$key_file"; then
+        milou_log "SUCCESS" "✅ Certificates injected successfully"
+        
+        # Validate nginx configuration
+        if validate_nginx_config_in_container; then
+            milou_log "SUCCESS" "✅ Nginx configuration is valid"
+            
+            # Reload nginx to apply changes
+            if reload_nginx_config; then
+                milou_log "SUCCESS" "✅ Nginx reloaded successfully"
+                
+                # Show certificate info
+                show_nginx_certificate_status "$domain"
+                
+                return 0
+            else
+                milou_log "ERROR" "❌ Failed to reload nginx configuration"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "❌ Invalid nginx configuration after certificate injection"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "❌ Failed to inject certificates into container"
+        return 1
+    fi
+}
+
 # =============================================================================
 # Nginx Container Management Functions  
 # =============================================================================
@@ -321,32 +477,80 @@ show_nginx_certificate_status() {
     
     # Check if certificates exist in container
     if docker exec milou-nginx test -f /etc/ssl/milou.crt >/dev/null 2>&1; then
-        # Get certificate details from container
-        local cert_info
-        cert_info=$(docker exec milou-nginx openssl x509 -in /etc/ssl/milou.crt -noout -text 2>/dev/null)
+        milou_log "SUCCESS" "✅ Certificate file exists in container: /etc/ssl/milou.crt"
         
-        if [[ -n "$cert_info" ]]; then
-            local subject issuer not_before not_after
-            subject=$(echo "$cert_info" | grep "Subject:" | sed 's/.*Subject: //')
-            issuer=$(echo "$cert_info" | grep "Issuer:" | sed 's/.*Issuer: //')
-            not_before=$(echo "$cert_info" | grep "Not Before:" | sed 's/.*Not Before: //')
-            not_after=$(echo "$cert_info" | grep "Not After:" | sed 's/.*Not After: //')
+        # Try to get certificate details from container (if openssl is available)
+        local cert_info
+        if docker exec milou-nginx which openssl >/dev/null 2>&1; then
+            cert_info=$(docker exec milou-nginx openssl x509 -in /etc/ssl/milou.crt -noout -text 2>/dev/null)
             
-            milou_log "INFO" "🔒 Certificate Details:"
-            milou_log "INFO" "  👤 Subject: $subject"
-            milou_log "INFO" "  🏢 Issuer: $issuer"
-            milou_log "INFO" "  📅 Valid From: $not_before"
-            milou_log "INFO" "  📅 Valid Until: $not_after"
-            
-            # Check if certificate is valid for domain
-            if echo "$cert_info" | grep -q "CN=$domain\|DNS:$domain\|DNS:\*.$domain"; then
-                milou_log "SUCCESS" "  ✅ Certificate is valid for domain: $domain"
+            if [[ -n "$cert_info" ]]; then
+                local subject issuer not_before not_after
+                subject=$(echo "$cert_info" | grep "Subject:" | sed 's/.*Subject: //')
+                issuer=$(echo "$cert_info" | grep "Issuer:" | sed 's/.*Issuer: //')
+                not_before=$(echo "$cert_info" | grep "Not Before:" | sed 's/.*Not Before: //')
+                not_after=$(echo "$cert_info" | grep "Not After:" | sed 's/.*Not After: //')
+                
+                milou_log "INFO" "🔒 Certificate Details (from container):"
+                milou_log "INFO" "  👤 Subject: $subject"
+                milou_log "INFO" "  🏢 Issuer: $issuer"
+                milou_log "INFO" "  📅 Valid From: $not_before"
+                milou_log "INFO" "  📅 Valid Until: $not_after"
+                
+                # Check if certificate is valid for domain
+                if echo "$cert_info" | grep -q "CN=$domain\|DNS:$domain\|DNS:\*.$domain"; then
+                    milou_log "SUCCESS" "  ✅ Certificate is valid for domain: $domain"
+                else
+                    milou_log "WARN" "  ⚠️  Certificate may not be valid for domain: $domain"
+                fi
             else
-                milou_log "WARN" "  ⚠️  Certificate may not be valid for domain: $domain"
+                milou_log "WARN" "⚠️  Could not parse certificate information from container"
             fi
         else
-            milou_log "ERROR" "❌ Could not read certificate information"
+            milou_log "INFO" "ℹ️  OpenSSL not available in container, copying certificate for analysis..."
+            
+            # Copy certificate from container and analyze it locally
+            local temp_cert="/tmp/nginx_cert_$(date +%s).crt"
+            if docker cp milou-nginx:/etc/ssl/milou.crt "$temp_cert" 2>/dev/null; then
+                if command -v openssl >/dev/null 2>&1; then
+                    local subject issuer not_before not_after
+                    subject=$(openssl x509 -in "$temp_cert" -noout -subject 2>/dev/null | sed 's/subject=//')
+                    issuer=$(openssl x509 -in "$temp_cert" -noout -issuer 2>/dev/null | sed 's/issuer=//')
+                    not_before=$(openssl x509 -in "$temp_cert" -noout -startdate 2>/dev/null | sed 's/notBefore=//')
+                    not_after=$(openssl x509 -in "$temp_cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//')
+                    
+                    milou_log "INFO" "🔒 Certificate Details (analyzed locally):"
+                    milou_log "INFO" "  👤 Subject: $subject"
+                    milou_log "INFO" "  🏢 Issuer: $issuer"
+                    milou_log "INFO" "  📅 Valid From: $not_before"
+                    milou_log "INFO" "  📅 Valid Until: $not_after"
+                    
+                    # Check if certificate is valid for domain
+                    local cert_text
+                    cert_text=$(openssl x509 -in "$temp_cert" -noout -text 2>/dev/null)
+                    if echo "$cert_text" | grep -q "CN=$domain\|DNS:$domain\|DNS:\*.$domain"; then
+                        milou_log "SUCCESS" "  ✅ Certificate is valid for domain: $domain"
+                    else
+                        milou_log "WARN" "  ⚠️  Certificate may not be valid for domain: $domain"
+                    fi
+                else
+                    milou_log "WARN" "⚠️  OpenSSL not available locally either"
+                fi
+                
+                # Clean up temporary file
+                rm -f "$temp_cert"
+            else
+                milou_log "WARN" "⚠️  Could not copy certificate from container for analysis"
+            fi
         fi
+        
+        # Check private key exists
+        if docker exec milou-nginx test -f /etc/ssl/milou.key >/dev/null 2>&1; then
+            milou_log "SUCCESS" "✅ Private key file exists in container: /etc/ssl/milou.key"
+        else
+            milou_log "ERROR" "❌ Private key file missing in container: /etc/ssl/milou.key"
+        fi
+        
     else
         milou_log "ERROR" "❌ No certificate found in nginx container"
         return 1
@@ -354,7 +558,7 @@ show_nginx_certificate_status() {
     
     # Test HTTPS connectivity
     milou_log "INFO" "🌐 Testing HTTPS connectivity..."
-    test_https_connectivity "$domain"
+    test_https_connectivity "$domain" || true  # Don't fail the command if connectivity test fails
 }
 
 # Test HTTPS connectivity to the domain

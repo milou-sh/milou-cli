@@ -112,11 +112,11 @@ milou_show_dev_mode_status() {
 milou_build_dev_images() {
     milou_log "STEP" "Building local development images..."
     
-    local build_script="${SCRIPT_DIR}/build-local-images.sh"
+    local build_script="${SCRIPT_DIR}/scripts/dev/build-local-images.sh"
     
     if [[ ! -f "$build_script" ]]; then
         milou_log "ERROR" "Build script not found: $build_script"
-        milou_log "INFO" "Please ensure build-local-images.sh exists in the milou-cli directory"
+        milou_log "INFO" "Expected location: scripts/dev/build-local-images.sh"
         return 1
     fi
     

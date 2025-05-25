@@ -16,6 +16,7 @@ source "${BASH_SOURCE%/*}/ssl/paths.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/ssl/generation.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/ssl/validation.sh" 2>/dev/null || true
 source "${BASH_SOURCE%/*}/ssl/interactive.sh" 2>/dev/null || true
+source "${BASH_SOURCE%/*}/ssl/nginx_integration.sh" 2>/dev/null || true
 
 # Ensure logging is available
 if ! command -v milou_log >/dev/null 2>&1; then

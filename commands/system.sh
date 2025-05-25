@@ -119,7 +119,7 @@ handle_ssl() {
     local restart_nginx=false
     
     # Parse basic options
-    local action="${1:-status}"
+    local action="${1:-}"
     if [[ $# -gt 0 ]]; then
         shift
     fi
@@ -171,29 +171,67 @@ handle_ssl() {
                 fi
                 ;;
             status|info|show)
-                if command -v show_certificate_info >/dev/null 2>&1; then
-                    local cert_file="$ssl_path/milou.crt"
-                    if [[ -f "$cert_file" ]]; then
-                        show_certificate_info "$cert_file" "$domain"
-                    else
-                        log "ERROR" "Certificate file not found: $cert_file"
-                        return 1
-                    fi
+                # Show status from nginx container (renamed from status-container)
+                if command -v show_nginx_certificate_status >/dev/null 2>&1; then
+                    show_nginx_certificate_status "$domain"
                 else
-                    log "ERROR" "Certificate info function not available"
+                    log "ERROR" "Nginx certificate status function not available"
                     return 1
+                fi
+                ;;
+            backup)
+                # Backup directly from nginx container (simplified - only container backup)
+                if command -v backup_nginx_ssl_certificates >/dev/null 2>&1; then
+                    backup_nginx_ssl_certificates "./ssl_backups"
+                else
+                    log "ERROR" "Nginx SSL backup function not available"
+                    return 1
+                fi
+                ;;
+            inject)
+                # Enhanced inject command - can accept cert file directly as argument
+                if command -v inject_ssl_certificates_enhanced >/dev/null 2>&1; then
+                    inject_ssl_certificates_enhanced "$ssl_path" "$domain" "$@"
+                elif command -v inject_ssl_certificates >/dev/null 2>&1; then
+                    log "INFO" "💉 Injecting SSL certificates into nginx container..."
+                    inject_ssl_certificates "$ssl_path" "$domain" true
+                else
+                    log "ERROR" "SSL injection function not available"
+                    return 1
+                fi
+                ;;
+            validate)
+                # Validate certificates
+                if command -v ssl_validate_enhanced >/dev/null 2>&1; then
+                    ssl_validate_enhanced "$ssl_path" "$domain"
+                elif command -v validate_ssl_certificates >/dev/null 2>&1; then
+                    validate_ssl_certificates "$ssl_path/milou.crt" "$ssl_path/milou.key" "$domain"
+                else
+                    log "ERROR" "SSL validation function not available"
+                    return 1
+                fi
+                ;;
+            restart)
+                # Restart nginx
+                restart_nginx_container
+                ;;
+            help|--help|-h)
+                # Show help
+                if command -v ssl_show_help >/dev/null 2>&1; then
+                    ssl_show_help
+                else
+                    echo "SSL Management Commands - see detailed help with ssl help"
                 fi
                 ;;
             *)
                 log "ERROR" "Unknown SSL command: $action"
-                log "INFO" "Available commands: setup, status"
+                log "INFO" "Available commands: setup, status, backup, inject, validate, restart, help"
+                log "INFO" "Use './milou.sh ssl help' for detailed information"
                 return 1
                 ;;
         esac
     fi
 }
-
-
 
 # Update domain configuration in environment files
 update_domain_configuration() {

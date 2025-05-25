@@ -325,7 +325,8 @@ generate_letsencrypt_standalone() {
         --domains "$domain" \
         --preferred-challenges http >/dev/null 2>&1; then
         
-        return copy_letsencrypt_certificates "$ssl_path" "$domain"
+        copy_letsencrypt_certificates "$ssl_path" "$domain"
+        return $?
     else
         milou_log "DEBUG" "Standalone mode failed"
         return 1
@@ -394,7 +395,7 @@ copy_letsencrypt_certificates() {
         chmod 600 "$ssl_path/milou.key"
         
         milou_log "DEBUG" "Certificates copied from Let's Encrypt directory"
-    return 0
+        return 0
     else
         milou_log "ERROR" "Let's Encrypt certificates not found in expected location: $le_cert_dir"
         return 1

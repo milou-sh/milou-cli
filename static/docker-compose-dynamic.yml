@@ -141,6 +141,7 @@ services:
       # Security Configuration
       - SESSION_SECRET=${SESSION_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SSO_CONFIG_ENCRYPTION_KEY=${SSO_CONFIG_ENCRYPTION_KEY}
       - JWT_SECRET=${JWT_SECRET}
       
       # Feature Flags

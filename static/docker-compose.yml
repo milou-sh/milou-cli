@@ -139,6 +139,7 @@ services:
       # Security Configuration
       - SESSION_SECRET=${SESSION_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SSO_CONFIG_ENCRYPTION_KEY=${SSO_CONFIG_ENCRYPTION_KEY}
       - JWT_SECRET=${JWT_SECRET}
       
       # Feature Flags
@@ -164,7 +165,7 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:${PORT:-9999}/api/health > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "netstat -tln | grep :${PORT:-9999} || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -214,8 +215,15 @@ services:
     container_name: milou-engine
     restart: unless-stopped
     environment:
-      # Database Configuration
+      # Database Configuration (preferred)
       - DATABASE_URI=${DATABASE_URI}
+      
+      # Database Configuration (individual vars for backward compatibility)
+      - DB_HOST=${DB_HOST:-db}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-milou}
       
       # RabbitMQ Configuration
       - RABBITMQ_URL=${RABBITMQ_URL}

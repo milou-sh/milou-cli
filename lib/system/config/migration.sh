@@ -204,7 +204,8 @@ generate_config_with_preservation() {
         db_password="${PRESERVED_CONFIG[DB_PASSWORD]:-$(generate_secure_random 32 "safe")}"
         redis_password="${PRESERVED_CONFIG[REDIS_PASSWORD]:-$(generate_secure_random 32 "safe")}"
         session_secret="${PRESERVED_CONFIG[SESSION_SECRET]:-$(generate_secure_random 64 "safe")}"
-        encryption_key="${PRESERVED_CONFIG[ENCRYPTION_KEY]:-$(generate_secure_random 32 "hex")}"
+        encryption_key="${PRESERVED_CONFIG[ENCRYPTION_KEY]:-$(generate_secure_random 64 "hex")}"  # 32 bytes for AES-256
+        sso_encryption_key="${PRESERVED_CONFIG[SSO_CONFIG_ENCRYPTION_KEY]:-$(generate_secure_random 64 "hex")}"  # Separate key for SSO
         jwt_secret="${PRESERVED_CONFIG[JWT_SECRET]:-$(generate_secure_random 64 "safe")}"
         rabbitmq_user="${PRESERVED_CONFIG[RABBITMQ_USER]:-milou_$(generate_secure_random 6 "alphanumeric")}"
         rabbitmq_password="${PRESERVED_CONFIG[RABBITMQ_PASSWORD]:-$(generate_secure_random 32 "safe")}"
@@ -219,7 +220,8 @@ generate_config_with_preservation() {
         db_password=$(generate_secure_random 32 "safe")
         redis_password=$(generate_secure_random 32 "safe")
         session_secret=$(generate_secure_random 64 "safe")
-        encryption_key=$(generate_secure_random 32 "hex")
+        encryption_key=$(generate_secure_random 64 "hex")  # 32 bytes for AES-256
+        sso_encryption_key=$(generate_secure_random 64 "hex")  # Separate key for SSO
         jwt_secret=$(generate_secure_random 64 "safe")
         rabbitmq_user="milou_$(generate_secure_random 6 "alphanumeric")"
         rabbitmq_password=$(generate_secure_random 32 "safe")
@@ -365,6 +367,7 @@ SESSION_MAX_AGE=86400
 # SECURITY CONFIGURATION
 # =============================================================================
 ENCRYPTION_KEY=$encryption_key
+SSO_CONFIG_ENCRYPTION_KEY=$sso_encryption_key
 JWT_SECRET=$jwt_secret
 JWT_EXPIRATION=24h
 JWT_REFRESH_EXPIRATION=7d

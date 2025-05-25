@@ -101,7 +101,7 @@ discover_environment_file() {
 validate_environment_file() {
     local env_file="${1:-$ENV_FILE_PATH}"
     
-    # Use centralized validation (already loaded by module loader)
+""    # Use centralized validation (already loaded by module loader)
     if command -v validate_environment_essential >/dev/null 2>&1; then
         if validate_environment_essential "$env_file"; then
             ENV_FILE_VALIDATED=true

@@ -13,16 +13,7 @@ fi
 
 # Setup command handler
 handle_setup() {
-    # Load required modules for setup
-    if command -v milou_load_user_modules >/dev/null 2>&1; then
-        milou_load_user_modules
-    fi
-    if command -v milou_load_system_modules >/dev/null 2>&1; then
-        milou_load_system_modules
-    fi
-    if command -v milou_load_docker_modules >/dev/null 2>&1; then
-        milou_load_docker_modules
-    fi
+    # Modules are loaded centrally by milou_load_command_modules() in main script
     
     echo
     echo -e "${BOLD}${PURPLE}🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION}${NC}"

@@ -435,6 +435,11 @@ milou_load_and_execute_command() {
     shift
     local args=("$@")
     
+    # Load command-specific modules using centralized loader
+    if command -v milou_load_command_modules >/dev/null 2>&1; then
+        milou_load_command_modules "$cmd"
+    fi
+    
     # Try to load command handler on-demand
     local commands_dir="${SCRIPT_DIR}/commands"
     local handler_function="handle_${cmd//-/_}"

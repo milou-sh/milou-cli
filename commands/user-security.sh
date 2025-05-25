@@ -11,31 +11,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# Ensure user modules are loaded (using centralized loader)
-ensure_user_modules() {
-    # Use the centralized module loader function
-    if command -v milou_load_user_modules >/dev/null 2>&1; then
-        milou_load_user_modules
-    else
-        # Fallback if centralized loader not available
-        if command -v milou_log >/dev/null 2>&1; then
-            milou_log "WARN" "Centralized module loader not available, loading minimal modules"
-        fi
-        # Only load essential user modules as fallback
-        if command -v milou_load_module >/dev/null 2>&1; then
-            milou_load_module "user/core" 2>/dev/null || true
-            milou_load_module "user/management" 2>/dev/null || true
-            milou_load_module "system/prerequisites" 2>/dev/null || true
-        fi
-    fi
-}
+# Modules are loaded centrally by milou_load_command_modules() in main script
 
 # User status command handler
 handle_user_status() {
     log "INFO" "👤 Checking user and permission status..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v show_user_status >/dev/null 2>&1; then
         show_user_status "$@"
@@ -53,7 +35,6 @@ handle_create_user() {
     log "INFO" "👥 Creating dedicated milou user..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v create_milou_user >/dev/null 2>&1; then
         create_milou_user "$@"
@@ -71,7 +52,6 @@ handle_migrate_user() {
     log "INFO" "🔄 Migrating existing installation to milou user..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v migrate_to_milou_user >/dev/null 2>&1; then
         migrate_to_milou_user "$@"
@@ -89,7 +69,6 @@ handle_security_check() {
     log "INFO" "🔒 Running comprehensive security assessment..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v security_assessment >/dev/null 2>&1; then
         security_assessment "$@"
@@ -107,7 +86,6 @@ handle_security_harden() {
     log "INFO" "🛡️ Applying security hardening measures..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v harden_milou_user >/dev/null 2>&1; then
         harden_milou_user "$@"
@@ -123,7 +101,6 @@ handle_security_report() {
     log "INFO" "📊 Generating detailed security report..."
     
     # Ensure user modules are loaded
-    ensure_user_modules
     
     if command -v generate_security_report >/dev/null 2>&1; then
         generate_security_report "$@"
@@ -137,4 +114,3 @@ handle_security_report() {
 # Export all functions
 export -f handle_user_status handle_create_user handle_migrate_user
 export -f handle_security_check handle_security_harden handle_security_report
-export -f ensure_user_modules 

@@ -199,8 +199,39 @@ milou_load_all_modules() {
     milou_load_user_modules
 }
 
+# Load modules for specific commands (centralized command-specific loading)
+milou_load_command_modules() {
+    local command="$1"
+    
+    case "$command" in
+        setup)
+            milou_load_user_modules
+            milou_load_system_modules
+            milou_load_docker_modules
+            ;;
+        start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
+            milou_load_docker_modules
+            milou_load_system_modules
+            ;;
+        config|validate|backup|restore|update|ssl|cleanup|cleanup-test-files|install-deps|diagnose)
+            milou_load_system_modules
+            milou_load_docker_modules
+            ;;
+        user-status|create-user|migrate-user|security-check|security-harden|security-report)
+            milou_load_user_modules
+            milou_load_system_modules
+            ;;
+        *)
+            # For unknown commands, load essentials only
+            if command -v milou_log >/dev/null 2>&1; then
+                milou_log "DEBUG" "Unknown command '$command', loading essential modules only"
+            fi
+            ;;
+    esac
+}
+
 # Export functions
 export -f milou_modules_init milou_load_module milou_load_modules
 export -f milou_load_category milou_module_loaded milou_list_loaded_modules
 export -f milou_load_essentials milou_load_system_modules milou_load_docker_modules
-export -f milou_load_user_modules milou_load_all_modules 
+export -f milou_load_user_modules milou_load_all_modules milou_load_command_modules 

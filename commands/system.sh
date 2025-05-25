@@ -12,32 +12,13 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 # Ensure system modules are loaded (using centralized loader)
-ensure_system_modules() {
-    # Use the centralized module loader function
-    if command -v milou_load_system_modules >/dev/null 2>&1; then
-        milou_load_system_modules
-    else
-        # Fallback if centralized loader not available
-        if command -v milou_log >/dev/null 2>&1; then
-            milou_log "WARN" "Centralized module loader not available, loading minimal modules"
-        fi
-        # Only load essential system modules as fallback
-        if command -v milou_load_module >/dev/null 2>&1; then
-            milou_load_module "system/configuration" 2>/dev/null || true
-            milou_load_module "system/backup" 2>/dev/null || true
-            milou_load_module "system/update" 2>/dev/null || true
-            milou_load_module "system/ssl" 2>/dev/null || true
-            milou_load_module "docker/core" 2>/dev/null || true
-        fi
-    fi
-}
+# Modules are loaded centrally by milou_load_command_modules() in main script
 
 # Configuration display command handler
 handle_config() {
     log "INFO" "📋 Displaying current configuration..."
     
     # Load required modules
-    ensure_system_modules
     
     if command -v show_config >/dev/null 2>&1; then
         show_config "$@"
@@ -55,7 +36,6 @@ handle_validate() {
     log "INFO" "🔍 Validating configuration and environment..."
     
     # Load required modules
-    ensure_system_modules
     
     if command -v validate_configuration >/dev/null 2>&1; then
         validate_configuration "$@"
@@ -75,7 +55,6 @@ handle_backup() {
     log "INFO" "💾 Creating system backup..."
     
     # Load required modules
-    ensure_system_modules
     
     if command -v backup_config >/dev/null 2>&1; then
         backup_config "$@"
@@ -101,7 +80,6 @@ handle_restore() {
     log "INFO" "📁 Restoring from backup: $backup_file"
     
     # Load required modules
-    ensure_system_modules
     
     if command -v restore_config >/dev/null 2>&1; then
         restore_config "$backup_file"
@@ -119,7 +97,6 @@ handle_update() {
     log "INFO" "🔄 Updating to latest version..."
     
     # Load required modules
-    ensure_system_modules
     
     if command -v update_milou_system >/dev/null 2>&1; then
         update_milou_system "$@"
@@ -137,7 +114,6 @@ handle_ssl() {
     log "INFO" "🔒 Managing SSL certificates..."
     
     # Load required modules
-    ensure_system_modules
     
     # Get current environment values for SSL and resolve Docker-compatible path
     local ssl_path_raw="${SSL_CERT_PATH:-./ssl}"
@@ -351,7 +327,6 @@ handle_install_deps() {
     log "INFO" "📦 Installing system dependencies..."
     
     # Ensure system modules are loaded
-    ensure_system_modules
     
     # Parse command-specific options
     local auto_install="true"
@@ -418,4 +393,3 @@ handle_install_deps() {
 # Export all functions
 export -f handle_config handle_validate handle_backup handle_restore
 export -f handle_update handle_ssl handle_cleanup handle_debug_images
-export -f handle_diagnose handle_cleanup_test_files handle_install_deps ensure_system_modules 

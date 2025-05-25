@@ -11,10 +11,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# Load required Docker modules on-demand
-if command -v milou_load_docker_modules >/dev/null 2>&1; then
-    milou_load_docker_modules
-fi
+# Modules are loaded centrally by milou_load_command_modules() in main script
 
 # Start services command handler
 handle_start() {

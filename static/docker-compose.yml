@@ -148,6 +148,10 @@ services:
       
       # CORS Configuration
       - CORS_ORIGIN=${CORS_ORIGIN}
+      
+      # Admin Configuration
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     expose:
       - "${PORT:-9999}"
     volumes:

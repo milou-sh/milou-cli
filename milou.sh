@@ -79,7 +79,11 @@ declare -g USER_SWITCH_IN_PROGRESS=false
 if [[ -f "${SCRIPT_DIR}/lib/core/module-loader.sh" ]]; then
     source "${SCRIPT_DIR}/lib/core/module-loader.sh"
     milou_modules_init "$SCRIPT_DIR"
-    milou_load_essentials
+    
+    # Load essential modules with error handling
+    if ! milou_load_essentials; then
+        log "WARN" "Some essential modules failed to load, continuing with reduced functionality"
+    fi
     
     # Initialize logging with the correct config directory
     if command -v milou_log_init >/dev/null 2>&1; then

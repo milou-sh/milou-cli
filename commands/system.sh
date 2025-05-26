@@ -635,7 +635,258 @@ handle_build_images() {
     exec "$build_script" "$@"
 }
 
+# Admin management command handlers
+handle_admin() {
+    local subcommand="${1:-}"
+    
+    case "$subcommand" in
+        credentials|creds|show)
+            handle_admin_credentials "${@:2}"
+            ;;
+        reset|reset-password)
+            handle_admin_reset "${@:2}"
+            ;;
+        help|--help|-h)
+            show_admin_help
+            ;;
+        "")
+            log "ERROR" "Admin subcommand is required"
+            show_admin_help
+            return 1
+            ;;
+        *)
+            log "ERROR" "Unknown admin subcommand: $subcommand"
+            show_admin_help
+            return 1
+            ;;
+    esac
+}
+
+show_admin_help() {
+    echo "Admin Management Commands"
+    echo "========================="
+    echo ""
+    echo "Usage: ./milou.sh admin <subcommand> [options]"
+    echo ""
+    echo "Subcommands:"
+    echo "  credentials, creds, show  Display current admin credentials"
+    echo "  reset, reset-password     Reset admin password and force change"
+    echo "  help                      Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  ./milou.sh admin credentials      # Show current admin login info"
+    echo "  ./milou.sh admin reset           # Generate new password & force change"
+    echo "  ./milou.sh admin help            # Show detailed help"
+    echo ""
+    echo "Security Notes:"
+    echo "  • Admin credentials provide full system access"
+    echo "  • After reset, users must change password on first login"
+    echo "  • Credentials are securely stored in the environment file"
+}
+
+handle_admin_credentials() {
+    log "INFO" "🔐 Displaying admin credentials..."
+    
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        log "ERROR" "Environment file not found: $env_file"
+        log "INFO" "Run './milou.sh setup' to create configuration"
+        return 1
+    fi
+    
+    local admin_email admin_password
+    admin_email=$(grep "^ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+    admin_password=$(grep "^ADMIN_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+    
+    if [[ -n "$admin_email" && -n "$admin_password" ]]; then
+        # Check if password has been changed by looking for requirePasswordChange in database
+        local password_changed="false"
+        if command -v milou_docker_status >/dev/null 2>&1 && milou_docker_status "false" >/dev/null 2>&1; then
+            # Services are running, check database
+            local db_user db_name
+            db_user=$(grep "^DB_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//') 
+            db_name=$(grep "^DB_NAME=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
+            db_user="${db_user:-milou}"
+            db_name="${db_name:-milou}"
+            
+            local require_change
+            require_change=$(docker exec milou-database psql -U "$db_user" -d "$db_name" -t -c "SELECT \"requirePasswordChange\" FROM users WHERE email = '$admin_email';" 2>/dev/null | tr -d ' \n' || echo "")
+            
+            if [[ "$require_change" == "f" ]]; then
+                password_changed="true"
+            fi
+        fi
+        
+        echo
+        log "SUCCESS" "🔐 ADMIN CREDENTIALS"
+        echo "=================================================================="
+        echo "  📧 Email:    $admin_email"
+        
+        if [[ "$password_changed" == "true" ]]; then
+            echo "  🔑 Password: *** (changed by user - no longer visible) ***"
+            echo "=================================================================="
+            echo
+            log "INFO" "ℹ️  The admin password has been changed by the user"
+            log "INFO" "   • The original password is no longer valid"
+            log "INFO" "   • Use './milou.sh admin reset' if you've lost access"
+        else
+            echo "  🔑 Password: $admin_password"
+            echo "=================================================================="
+            echo
+            log "WARN" "⚠️  These credentials provide full system access"
+            log "WARN" "   • Keep them secure and change them after first login"
+            log "WARN" "   • Use './milou.sh admin reset' to generate a new password"
+        fi
+    else
+        log "ERROR" "Admin credentials not found in configuration"
+        log "INFO" "Run './milou.sh setup' to configure admin credentials"
+        return 1
+    fi
+}
+
+handle_admin_reset() {
+    log "INFO" "🔄 Resetting admin credentials..."
+    
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        log "ERROR" "Environment file not found: $env_file"
+        log "INFO" "Run './milou.sh setup' to create configuration"
+        return 1
+    fi
+    
+    # Check if services are running
+    if ! command -v milou_docker_status >/dev/null 2>&1 || ! milou_docker_status "false" >/dev/null 2>&1; then
+        log "ERROR" "Docker services are not running"
+        log "INFO" "💡 Start services first: ./milou.sh start"
+        return 1
+    fi
+    
+    # Load configuration generation module
+    if ! command -v generate_secure_random >/dev/null 2>&1; then
+        log "ERROR" "Configuration generation functions not available"
+        return 1
+    fi
+    
+    # Generate new admin password
+    local new_password
+    new_password=$(generate_secure_random 16 "safe")
+    
+    # Get current admin email
+    local admin_email
+    admin_email=$(grep "^ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "admin@localhost")
+    
+    log "INFO" "📧 Resetting password for admin user: $admin_email"
+    
+    # Update the database with the new password and force password change
+    log "INFO" "🔄 Updating database with new credentials..."
+    if reset_admin_in_database "$admin_email" "$new_password"; then
+        log "SUCCESS" "✅ Database updated successfully"
+        
+        # Update the environment file
+        if command -v update_env_variable >/dev/null 2>&1; then
+            update_env_variable "$env_file" "ADMIN_PASSWORD" "$new_password"
+        else
+            # Fallback method using sed
+            sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$new_password/" "$env_file"
+        fi
+        
+        echo
+        log "SUCCESS" "🔐 ADMIN PASSWORD RESET COMPLETED"
+        echo "=================================================================="
+        echo "  📧 Email:    $admin_email"
+        echo "  🔑 Password: $new_password"
+        echo "=================================================================="
+        echo
+        log "WARN" "⚠️  IMPORTANT SECURITY NOTICE:"
+        log "WARN" "   • Please save these credentials in a secure location"
+        log "WARN" "   • User will be forced to change password on first login"
+        log "WARN" "   • The old password is no longer valid"
+        echo
+        log "INFO" "✅ Ready to use! The admin user can now log in with:"
+        log "INFO" "   • Email: $admin_email"
+        log "INFO" "   • Password: $new_password"
+        log "INFO" "   • They will be prompted to change the password on first login"
+    else
+        log "ERROR" "❌ Failed to update database"
+        log "INFO" "💡 Try restarting services and running the command again"
+        return 1
+    fi
+}
+
+# Function to reset admin password in the database
+reset_admin_in_database() {
+    local admin_email="$1"
+    local new_password="$2"
+    
+    if [[ -z "$admin_email" || -z "$new_password" ]]; then
+        log "ERROR" "Admin email and password are required"
+        return 1
+    fi
+    
+    # Get database credentials from environment
+    local db_user db_name
+    db_user=$(grep "^DB_USER=" "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//') 
+    db_name=$(grep "^DB_NAME=" "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
+    
+    # Default values if not found
+    db_user="${db_user:-milou}"
+    db_name="${db_name:-milou}"
+    
+    log "DEBUG" "Using database: $db_name, user: $db_user"
+    
+    # Generate bcrypt hash for the new password using a safer approach
+    local password_hash
+    if ! password_hash=$(docker exec milou-backend node -p "
+        const bcrypt = require('bcrypt');
+        const password = process.argv[1];
+        bcrypt.hashSync(password, 10);
+    " "$new_password" 2>/dev/null); then
+        log "ERROR" "Failed to generate password hash"
+        return 1
+    fi
+    
+    log "DEBUG" "Generated password hash: ${password_hash:0:20}..."
+    
+    # Create a temporary SQL file to avoid quoting issues
+    local temp_sql="/tmp/reset_admin_$$.sql"
+    cat > "$temp_sql" << EOF
+UPDATE users 
+SET password = '$password_hash', 
+    "requirePasswordChange" = true,
+    "updatedAt" = NOW()
+WHERE email = '$admin_email';
+EOF
+    
+    # Copy SQL file to container and execute
+    if docker cp "$temp_sql" milou-database:/tmp/reset_admin.sql && \
+       docker exec milou-database psql -U "$db_user" -d "$db_name" -f /tmp/reset_admin.sql >/dev/null 2>&1; then
+        
+        # Clean up
+        rm -f "$temp_sql"
+        docker exec milou-database rm -f /tmp/reset_admin.sql
+        
+        log "DEBUG" "Password updated in database for user: $admin_email"
+        
+        # Verify the update worked
+        local updated_count
+        updated_count=$(docker exec milou-database psql -U "$db_user" -d "$db_name" -t -c "SELECT COUNT(*) FROM users WHERE email = '$admin_email' AND \"requirePasswordChange\" = true;" | tr -d ' \n')
+        
+        if [[ "$updated_count" == "1" ]]; then
+            log "DEBUG" "Verified: requirePasswordChange is set for $admin_email"
+            return 0
+        else
+            log "ERROR" "Update verification failed"
+            return 1
+        fi
+    else
+        log "ERROR" "Failed to update password in database"
+        rm -f "$temp_sql"
+        return 1
+    fi
+}
+
 # Export all functions
 export -f handle_config handle_validate handle_backup handle_restore
 export -f handle_update handle_ssl handle_cleanup handle_uninstall handle_debug_images
 export -f handle_install_deps handle_diagnose handle_cleanup_test_files handle_build_images
+export -f handle_admin handle_admin_credentials handle_admin_reset reset_admin_in_database show_admin_help

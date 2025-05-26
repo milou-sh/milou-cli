@@ -1,45 +1,104 @@
-# Milou CLI - Modular Architecture ✅
+# Milou CLI - State-of-the-Art Infrastructure Management
 
-## 🎉 Successfully Refactored!
+Comprehensive CLI tool for deploying and managing Milou, the AI Pentest Orchestration platform.
 
-This Milou CLI has been completely refactored into a world-class modular architecture:
-
-- **📊 73% size reduction**: Main script reduced from 1,880 → 508 lines
-- **⚡ On-demand loading**: Revolutionary performance with instant startup
-- **🏗️ 32 organized modules**: 24 lib modules + 4 command handlers + 4 core modules
-- **🔄 100% compatibility**: All existing commands work exactly the same
-- **🚀 Zero hangs**: All logging and loading issues completely resolved
-
-## Architecture Overview
-
-```
-milou.sh (508 lines) ← Streamlined orchestrator
-├── lib/ (24 organized modules)
-│   ├── core/ (6 modules) - Logging, validation, UI, utilities
-│   ├── docker/ (3 modules) - Compose, core, registry  
-│   ├── system/ (8 modules) - Config, SSL, security, backup
-│   └── user/ (7 modules) - Management, switching, permissions
-├── commands/ (4 modules) - On-demand command handlers
-└── lib/ (modular architecture with centralized utilities)
-```
-
-## Usage (Unchanged)
-
-All commands work exactly as before:
+## Quick Start
 
 ```bash
-./milou.sh help          # Show help
-./milou.sh setup         # Interactive setup
-./milou.sh start         # Start services  
-./milou.sh status        # Check status
-./milou.sh logs          # View logs
+# Clone the repository
+git clone <repository-url>
+cd milou-cli
+
+# Development mode (uses locally built images)
+./milou.sh setup --dev
+
+# Production mode (uses registry images)
+./milou.sh setup
 ```
 
-## Benefits
+## Development Setup
 
-- **Lightning fast startup** (on-demand module loading)
-- **Easy maintenance** (clear modular organization)
-- **Enhanced reliability** (robust error handling)
-- **Future-proof** (extensible architecture)
+The CLI supports two development approaches:
 
-**Status**: ✅ Production Ready | **Architecture**: 🏆 World-Class 
+### 1. Local Development with Override (Recommended)
+
+Uses `docker-compose.local.yml` as an override file to replace registry images with locally built images.
+
+```bash
+# Build local images and setup development environment
+./milou.sh setup --dev
+
+# This automatically:
+# 1. Builds local Docker images if needed
+# 2. Uses docker-compose.local.yml to override image sources
+# 3. Starts services with local images
+```
+
+**Docker Compose Files:**
+- `static/docker-compose.yml` - Main production compose file
+- `static/docker-compose.local.yml` - Development override (uses local images)
+
+### 2. Full Development Environment
+
+For active development with source mounting and hot-reload, use the development compose file directly in your main project:
+
+```bash
+cd /path/to/milou_fresh
+docker compose -f docker-compose.dev.yml up
+```
+
+## Architecture
+
+The setup uses a layered Docker Compose approach:
+
+1. **Base Layer**: `docker-compose.yml` - Production services with registry images
+2. **Development Override**: `docker-compose.local.yml` - Replaces image sources with local builds
+3. **Development Standalone**: `docker-compose.dev.yml` (in main project) - Full dev environment with source mounting
+
+## Key Features
+
+- 🚀 Automated setup and configuration
+- 🔧 Development mode with local image building
+- 🔒 SSL certificate management
+- 🌐 Domain configuration
+- 🔐 Secure credential generation
+- 📊 Comprehensive health monitoring
+- 🛡️ Security checks and validation
+
+## Commands
+
+```bash
+# Setup and configuration
+./milou.sh setup [--dev] [--token TOKEN]
+
+# Service management
+./milou.sh start|stop|restart|status
+
+# Monitoring and debugging
+./milou.sh logs [service]
+./milou.sh health
+./milou.sh shell <service>
+
+# Utilities
+./milou.sh ssl-manager
+./milou.sh security-check
+./milou.sh backup|restore
+```
+
+## Development Workflow
+
+1. **Initial Setup**: `./milou.sh setup --dev`
+2. **Build Local Images**: Done automatically or manually with build scripts
+3. **Start Development**: Services use local images via override
+4. **Active Development**: Use standalone dev compose in main project for source mounting
+5. **Testing**: `./milou.sh health` and `./milou.sh logs`
+
+## Configuration
+
+All configuration is stored in `.env` file with secure defaults:
+- Database credentials (auto-generated)
+- Security keys and secrets
+- Domain and SSL settings
+- Service-specific configurations
+
+For detailed documentation, see the individual script files and inline help. 

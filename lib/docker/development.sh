@@ -26,16 +26,9 @@ fi
 # Enable development mode
 milou_enable_dev_mode() {
     local compose_dir="${SCRIPT_DIR}/static"
-    local override_source="${SCRIPT_DIR}/docker-compose.local.yml"
     local override_target="${compose_dir}/docker-compose.local.yml"
     
     milou_log "STEP" "Enabling development mode..."
-    
-    # Check if source override file exists
-    if [[ ! -f "$override_source" ]]; then
-        milou_log "ERROR" "Development override file not found: $override_source"
-        return 1
-    fi
     
     # Create target directory if needed
     if [[ ! -d "$compose_dir" ]]; then
@@ -43,14 +36,15 @@ milou_enable_dev_mode() {
         return 1
     fi
     
-    # Copy override file to static directory
-    if cp "$override_source" "$override_target"; then
+    # Check if override file already exists in static directory
+    if [[ -f "$override_target" ]]; then
         milou_log "SUCCESS" "✅ Development mode enabled"
         milou_log "INFO" "Using local Docker images instead of registry images"
         milou_log "INFO" "Override file: $override_target"
         return 0
     else
-        milou_log "ERROR" "Failed to copy development override file"
+        milou_log "ERROR" "Development override file not found: $override_target"
+        milou_log "INFO" "Expected local development override file in static directory"
         return 1
     fi
 }

@@ -1,29 +1,100 @@
 # =============================================================================
 # Docker Compose Local Development Override
-# Uses locally built images instead of pulling from registry
+# Uses locally built images with source code mounting for development
 # =============================================================================
 
 services:
-  # Override database to use local image
+  # Development database
   db:
-    image: ghcr.io/milou-sh/milou/database:latest
+    image: postgres:16
     
-  # Override backend to use local image  
+  # Development backend with live code mounting  
   backend:
-    image: ghcr.io/milou-sh/milou/backend:latest
+    build:
+      context: /home/milou_fresh/dashboard
+      dockerfile: backend/Dockerfile.backend.dev
     environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
       # Admin credentials from environment variables (set by CLI)
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    volumes:
+      - /home/milou_fresh/dashboard/backend/src:/app/backend/src:delegated
+      - /home/milou_fresh/dashboard/backend/tsconfig.json:/app/backend/tsconfig.json:ro
+      - backend_node_modules:/app/node_modules
+      - backend_workspace_node_modules:/app/backend/node_modules
+    command: >
+      /bin/sh -c "
+        cd /app/backend &&
+        npm run dev
+      "
     
-  # Override frontend to use local image
+  # Development frontend with live code mounting
   frontend:
-    image: ghcr.io/milou-sh/milou/frontend:latest
+    build:
+      context: /home/milou_fresh/dashboard
+      dockerfile: frontend/Dockerfile.frontend.dev
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=100
+      - WATCHPACK_POLLING=true
+      - FAST_REFRESH=false
+    volumes:
+      - /home/milou_fresh/dashboard/frontend:/app/frontend:delegated
+      - /app/node_modules
+      - /app/frontend/node_modules
+    command: >
+      /bin/sh -c "
+        cd /app/frontend &&
+        if [ ! -d node_modules ] || [ ! -f node_modules/.installed ]; then
+          npm install && touch node_modules/.installed
+        fi &&
+        npm run dev -- --host 0.0.0.0
+      "
     
-  # Override engine to use local image
+  # Development engine with live code mounting
   engine:
-    image: ghcr.io/milou-sh/milou/engine:latest
+    build:
+      context: /home/milou_fresh/engine
+      dockerfile: Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WATCHDOG_POLLING=true
+      - WATCHDOG_POLLING_INTERVAL=1
+    volumes:
+      - /home/milou_fresh/engine:/app:delegated
+      - engine_logs:/app/src/logger/logs:rw
+      - engine_venv:/app/venv
+    command: >
+      /bin/sh -c "
+        if [ ! -f venv/bin/activate ]; then
+          python -m venv venv &&
+          . venv/bin/activate &&
+          pip install -r requirements.txt &&
+          pip install watchdog
+        elif [ ! -f /tmp/requirements.md5 ] || ! md5sum -c /tmp/requirements.md5 >/dev/null 2>&1; then
+          . venv/bin/activate &&
+          pip install -r requirements.txt &&
+          md5sum requirements.txt > /tmp/requirements.md5
+        else
+          . venv/bin/activate
+        fi &&
+        watchmedo auto-restart --directory=./src --pattern=*.py --recursive -- python src/main.py
+      "
     
-  # Override nginx to use local image
+  # Development nginx
   nginx:
-    image: ghcr.io/milou-sh/milou/nginx:latest 
+    build:
+      context: /home/milou_fresh/docker/nginx
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  backend_node_modules: {}
+  backend_workspace_node_modules: {}
+  engine_logs: {}
+  engine_venv: {} 

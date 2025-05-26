@@ -314,6 +314,20 @@ milou_create_networks() {
 milou_docker_start() {
     log "STEP" "Starting Milou services..."
     
+    # Detect current mode and handle conflicts
+    local current_mode="prod"
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        current_mode="dev"
+    fi
+    
+    # Detect and handle conflicting environments
+    if command -v detect_and_handle_conflicts >/dev/null 2>&1; then
+        if ! detect_and_handle_conflicts "$current_mode"; then
+            log "ERROR" "Failed to resolve environment conflicts"
+            return 1
+        fi
+    fi
+    
     # Initialize Docker environment
     if ! milou_docker_init; then
         return 1
@@ -571,12 +585,47 @@ milou_docker_status() {
     
     # Show quick access information if services are running
     if [[ $running_services -gt 0 ]]; then
-        local domain="${SERVER_NAME:-localhost}"
-        log "INFO" "🌐 Access Information:"
-        if [[ -f "${SSL_CERT_PATH:-./ssl}/milou.crt" ]]; then
-            log "INFO" "   HTTPS: https://$domain"
+        # Load domain and SSL settings from environment file
+        local domain="localhost"
+        local ssl_path="./ssl"
+        local http_port="80"
+        local ssl_port="443"
+        
+        if [[ -f "$DOCKER_ENV_FILE" ]]; then
+            # Extract configuration values from environment file
+            domain=$(grep "^SERVER_NAME=" "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "localhost")
+            ssl_path=$(grep "^SSL_CERT_PATH=" "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "./ssl")
+            http_port=$(grep "^HTTP_PORT=" "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "80")
+            ssl_port=$(grep "^SSL_PORT=" "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "443")
         fi
-        log "INFO" "   HTTP: http://$domain:${HTTP_PORT:-8080}"
+        
+        log "INFO" "🌐 Access Information:"
+        
+        # Check for SSL certificates and show appropriate URLs
+        local full_ssl_path
+        if [[ "$ssl_path" = /* ]]; then
+            full_ssl_path="$ssl_path"
+        else
+            full_ssl_path="$(dirname "$DOCKER_COMPOSE_FILE")/$ssl_path"
+        fi
+        
+        if [[ -f "$full_ssl_path/milou.crt" && -f "$full_ssl_path/milou.key" ]]; then
+            if [[ "$ssl_port" == "443" ]]; then
+                log "INFO" "   🔒 HTTPS: https://$domain"
+            else
+                log "INFO" "   🔒 HTTPS: https://$domain:$ssl_port"
+            fi
+        fi
+        
+        if [[ "$http_port" == "80" ]]; then
+            log "INFO" "   🌐 HTTP:  http://$domain"
+        else
+            log "INFO" "   🌐 HTTP:  http://$domain:$http_port"
+        fi
+        
+        # Admin credentials moved to dedicated command for security
+        # Use './milou.sh admin-credentials' to view login credentials
+        
         echo
         log "INFO" "📊 Quick Commands:"
         log "INFO" "   ./milou.sh logs       # View service logs"
@@ -790,6 +839,9 @@ export -f milou_check_credentials_changed milou_store_credentials_hash
 export -f milou_cleanup_volumes_on_credential_change milou_create_networks
 export -f start_services_with_checks
 
+# Export health check functions
+export -f run_health_checks quick_health_check
+
 # Export backward compatibility functions
 export -f run_docker_compose start_services stop_services restart_services
 export -f show_service_status show_service_logs get_service_shell exec_in_service 
@@ -961,4 +1013,129 @@ pull_required_images() {
 
 # Export the new functions
 export -f get_milou_images_from_compose get_all_required_images
-export -f validate_required_images pull_required_images 
+export -f validate_required_images pull_required_images
+
+# =============================================================================
+# Health Check Functions
+# =============================================================================
+
+# Run comprehensive health checks
+run_health_checks() {
+    log "STEP" "Running comprehensive health checks..."
+    
+    # Initialize if needed
+    if ! milou_docker_init; then
+        log "ERROR" "Failed to initialize Docker environment"
+        return 1
+    fi
+    
+    local issues_found=0
+    
+    echo
+    log "INFO" "🏥 Health Check Report"
+    echo
+    
+    # 1. Docker daemon check
+    log "INFO" "1️⃣  Docker Daemon Status"
+    if docker info >/dev/null 2>&1; then
+        log "SUCCESS" "   ✅ Docker daemon is running"
+    else
+        log "ERROR" "   ❌ Docker daemon is not accessible"
+        ((issues_found++))
+    fi
+    
+    # 2. Service status check
+    log "INFO" "2️⃣  Service Status"
+    local total_services running_services
+    total_services=$(milou_docker_compose config --services 2>/dev/null | wc -l || echo "0")
+    running_services=$(milou_docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
+    
+    if [[ "$running_services" -eq "$total_services" && "$total_services" -gt 0 ]]; then
+        log "SUCCESS" "   ✅ All services running ($running_services/$total_services)"
+    else
+        log "WARN" "   ⚠️  Some services not running ($running_services/$total_services)"
+        ((issues_found++))
+    fi
+    
+    # 3. Network connectivity
+    log "INFO" "3️⃣  Network Connectivity"
+    local network_name="${DOCKER_PROJECT_NAME}_default"
+    if docker network inspect "$network_name" >/dev/null 2>&1; then
+        log "SUCCESS" "   ✅ Docker network exists: $network_name"
+    else
+        log "ERROR" "   ❌ Docker network missing: $network_name"
+        ((issues_found++))
+    fi
+    
+    # 4. Volume health
+    log "INFO" "4️⃣  Volume Health"
+    local volumes
+    volumes=$(docker volume ls --filter "name=${DOCKER_PROJECT_NAME}_" --format "{{.Name}}" 2>/dev/null || true)
+    if [[ -n "$volumes" ]]; then
+        local volume_count
+        volume_count=$(echo "$volumes" | wc -l)
+        log "SUCCESS" "   ✅ Data volumes found: $volume_count volumes"
+    else
+        log "WARN" "   ⚠️  No data volumes found"
+    fi
+    
+    # 5. Configuration validation
+    log "INFO" "5️⃣  Configuration Validation"
+    if [[ -f "$DOCKER_ENV_FILE" ]]; then
+        log "SUCCESS" "   ✅ Environment file exists"
+    else
+        log "ERROR" "   ❌ Environment file missing"
+        ((issues_found++))
+    fi
+    
+    if [[ -f "$DOCKER_COMPOSE_FILE" ]]; then
+        log "SUCCESS" "   ✅ Docker Compose file exists"
+    else
+        log "ERROR" "   ❌ Docker Compose file missing"
+        ((issues_found++))
+    fi
+    
+    # 6. Port accessibility test
+    log "INFO" "6️⃣  Port Accessibility"
+    if curl -k -s https://localhost >/dev/null 2>&1; then
+        log "SUCCESS" "   ✅ HTTPS endpoint accessible"
+    else
+        log "WARN" "   ⚠️  HTTPS endpoint not accessible"
+        ((issues_found++))
+    fi
+    
+    # Summary
+    echo
+    if [[ $issues_found -eq 0 ]]; then
+        log "SUCCESS" "🎉 Health check passed! No issues found."
+    else
+        log "WARN" "⚠️  Health check completed with $issues_found issue(s) found."
+        log "INFO" "💡 Run './milou.sh diagnose' for detailed troubleshooting"
+    fi
+    
+    echo
+    return $issues_found
+}
+
+# Quick health check
+quick_health_check() {
+    log "INFO" "⚡ Running quick health check..."
+    
+    if ! milou_docker_init; then
+        log "ERROR" "Docker environment not available"
+        return 1
+    fi
+    
+    local running_services
+    running_services=$(milou_docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
+    local total_services
+    total_services=$(milou_docker_compose config --services 2>/dev/null | wc -l || echo "0")
+    
+    if [[ "$running_services" -eq "$total_services" && "$total_services" -gt 0 ]]; then
+        log "SUCCESS" "✅ Quick check passed: All $total_services services running"
+        return 0
+    else
+        log "WARN" "⚠️  Quick check: $running_services/$total_services services running"
+        return 1
+    fi
+} 

@@ -211,6 +211,7 @@ show_help() {
     printf "    ${cyan}security-report${nc}   Generate detailed security report\n"
     printf "    ${cyan}install-deps${nc}      Install system dependencies (Docker, tools, etc.)\n"
     printf "    ${cyan}build-images${nc}      Build Docker images locally for development\n"
+    printf "    ${cyan}admin${nc}             Admin management (credentials, reset)\n"
 
     printf "    ${cyan}help${nc}              Show this help message\n\n"
 
@@ -466,7 +467,7 @@ milou_load_and_execute_command() {
         start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|build-images)
+        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|build-images|admin)
             handler_file="system.sh"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)

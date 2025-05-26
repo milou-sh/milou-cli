@@ -189,6 +189,7 @@ milou_load_docker_modules() {
         "docker/core"          # Core Docker functions
         "docker/registry"      # Docker registry operations
         "docker/uninstall"     # Docker uninstall operations
+        "docker/health"        # Docker health check functions
     )
     
     milou_load_modules "${docker_modules[@]}"
@@ -231,7 +232,7 @@ milou_load_command_modules() {
             milou_load_docker_modules
             milou_load_system_modules
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose)
+        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|admin)
             milou_load_system_modules
             milou_load_docker_modules
             ;;

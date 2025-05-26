@@ -25,6 +25,115 @@ REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 # Docker Environment Management
 # =============================================================================
 
+# Detect and handle conflicting Milou services
+detect_and_handle_conflicts() {
+    local current_mode="${1:-prod}"  # dev or prod
+    
+    log "DEBUG" "Checking for conflicting Milou services (current mode: $current_mode)"
+    
+    # Check for different types of Milou containers
+    local cli_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null || true)
+    local source_containers=$(docker ps -a --filter "name=milou_fresh-" --format "{{.Names}}" 2>/dev/null || true)
+    
+    if [[ -n "$cli_containers" && -n "$source_containers" ]]; then
+        log "WARN" "⚠️  Conflicting Milou environments detected!"
+        log "WARN" "   CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
+        log "WARN" "   Source containers: $(echo "$source_containers" | tr '\n' ' ')"
+        
+        if [[ "${INTERACTIVE:-true}" == "false" ]]; then
+            log "INFO" "Non-interactive mode: automatically stopping conflicting services"
+            stop_conflicting_services "$current_mode"
+        else
+            echo
+            echo "Multiple Milou environments are running simultaneously."
+            echo "This can cause port conflicts and resource issues."
+            echo
+            echo "Options:"
+            echo "  1. Stop CLI-managed containers (keep source development)"
+            echo "  2. Stop source containers (keep CLI deployment)"
+            echo "  3. Stop all containers and continue with $current_mode mode"
+            echo "  4. Cancel operation"
+            echo
+            
+            local choice
+            read -p "Please select an option [1-4]: " choice
+            
+            case "$choice" in
+                1)
+                    log "INFO" "Stopping CLI-managed containers..."
+                    stop_containers_by_pattern "milou-"
+                    ;;
+                2)
+                    log "INFO" "Stopping source containers..."
+                    stop_containers_by_pattern "milou_fresh-"
+                    ;;
+                3)
+                    log "INFO" "Stopping all Milou containers..."
+                    stop_containers_by_pattern "milou-"
+                    stop_containers_by_pattern "milou_fresh-"
+                    ;;
+                4)
+                    log "INFO" "Operation cancelled"
+                    return 1
+                    ;;
+                *)
+                    log "ERROR" "Invalid choice. Operation cancelled"
+                    return 1
+                    ;;
+            esac
+        fi
+    elif [[ -n "$cli_containers" ]]; then
+        log "DEBUG" "Found existing CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
+    elif [[ -n "$source_containers" ]]; then
+        log "DEBUG" "Found existing source containers: $(echo "$source_containers" | tr '\n' ' ')"
+        if [[ "${INTERACTIVE:-true}" == "false" ]]; then
+            log "INFO" "Non-interactive mode: stopping source containers to avoid conflicts"
+            stop_containers_by_pattern "milou_fresh-"
+        fi
+    fi
+    
+    return 0
+}
+
+# Stop containers matching a pattern
+stop_containers_by_pattern() {
+    local pattern="$1"
+    
+    log "DEBUG" "Stopping containers matching pattern: $pattern"
+    
+    local containers
+    containers=$(docker ps --filter "name=$pattern" --format "{{.Names}}" 2>/dev/null || true)
+    
+    if [[ -n "$containers" ]]; then
+        log "INFO" "Stopping containers: $(echo "$containers" | tr '\n' ' ')"
+        echo "$containers" | xargs docker stop >/dev/null 2>&1 || true
+        log "SUCCESS" "✅ Stopped containers matching pattern: $pattern"
+    else
+        log "DEBUG" "No running containers found matching pattern: $pattern"
+    fi
+}
+
+# Stop conflicting services based on current mode
+stop_conflicting_services() {
+    local current_mode="$1"
+    
+    case "$current_mode" in
+        "dev")
+            log "INFO" "Development mode requested - stopping production containers"
+            stop_containers_by_pattern "milou_fresh-"
+            ;;
+        "prod")
+            log "INFO" "Production mode requested - stopping source development containers"
+            stop_containers_by_pattern "milou_fresh-"
+            ;;
+        *)
+            log "WARN" "Unknown mode: $current_mode - stopping all conflicting containers"
+            stop_containers_by_pattern "milou-"
+            stop_containers_by_pattern "milou_fresh-"
+            ;;
+    esac
+}
+
 # Check if Docker daemon is accessible
 check_docker_access() {
     if ! docker info >/dev/null 2>&1; then

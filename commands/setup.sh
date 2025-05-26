@@ -408,6 +408,31 @@ handle_setup() {
         fi
     fi
     
+    # Display admin credentials prominently at the end
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ -f "$env_file" ]]; then
+        local admin_email admin_password
+        admin_email=$(grep "^ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        admin_password=$(grep "^ADMIN_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        
+        if [[ -n "$admin_email" && -n "$admin_password" ]]; then
+            echo
+            echo "════════════════════════════════════════════════════════════════"
+            log "SUCCESS" "🔐 SETUP COMPLETE - ADMIN CREDENTIALS"
+            echo "════════════════════════════════════════════════════════════════"
+            echo "  📧 Email:    $admin_email"
+            echo "  🔑 Password: $admin_password"
+            echo "════════════════════════════════════════════════════════════════"
+            echo
+            log "WARN" "⚠️  IMPORTANT SECURITY NOTICE:"
+            log "WARN" "   • Save these credentials in a secure location"
+            log "WARN" "   • Change the password after first login"
+            log "WARN" "   • Use './milou.sh admin-credentials' to view again"
+            log "WARN" "   • Use './milou.sh reset-admin' to generate new password"
+            echo
+        fi
+    fi
+    
     echo
     log "SUCCESS" "✅ Milou CLI setup completed successfully!"
 }

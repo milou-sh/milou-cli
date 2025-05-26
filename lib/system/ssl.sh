@@ -11,12 +11,28 @@ if [[ "${MILOU_SSL_LOADED:-}" == "true" ]]; then
 fi
 readonly MILOU_SSL_LOADED="true"
 
-# Load SSL sub-modules
-source "${BASH_SOURCE%/*}/ssl/paths.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/ssl/generation.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/ssl/validation.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/ssl/interactive.sh" 2>/dev/null || true
-source "${BASH_SOURCE%/*}/ssl/nginx_integration.sh" 2>/dev/null || true
+# Load SSL sub-modules with better path resolution
+readonly SSL_MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SSL_MODULE_DIR}/ssl/paths.sh" || {
+    echo "ERROR: Failed to load SSL paths module" >&2
+    return 1
+}
+source "${SSL_MODULE_DIR}/ssl/generation.sh" || {
+    echo "ERROR: Failed to load SSL generation module" >&2
+    return 1
+}
+source "${SSL_MODULE_DIR}/ssl/validation.sh" || {
+    echo "ERROR: Failed to load SSL validation module" >&2
+    return 1
+}
+source "${SSL_MODULE_DIR}/ssl/interactive.sh" || {
+    echo "ERROR: Failed to load SSL interactive module" >&2
+    return 1
+}
+source "${SSL_MODULE_DIR}/ssl/nginx_integration.sh" || {
+    echo "ERROR: Failed to load SSL nginx integration module" >&2
+    return 1
+}
 
 # Ensure logging is available
 if ! command -v milou_log >/dev/null 2>&1; then
@@ -104,31 +120,178 @@ setup_ssl() {
             return 0
         fi
     else
-        # Real domain - try Let's Encrypt first, then fallback to self-signed
+        # Real domain - ask user for preference in interactive mode
         milou_log "INFO" "Real domain detected: $domain"
         
-        # Check if Let's Encrypt is available and domain is publicly accessible
-        if is_domain_publicly_accessible "$domain" && can_use_letsencrypt; then
-            milou_log "INFO" "Attempting to obtain Let's Encrypt certificate for $domain"
-            if generate_letsencrypt_certificate "$ssl_path" "$domain"; then
-                milou_log "SUCCESS" "Let's Encrypt certificate obtained successfully"
-                show_certificate_info "$cert_file" "$domain"
-                
-                # Ensure Docker compatibility
-                local docker_ssl_path
-                docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
-                if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
-                    milou_log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
-                fi
-                
-                return 0
-            else
-                milou_log "WARN" "Let's Encrypt failed, falling back to self-signed certificate"
-            fi
-        else
-            milou_log "INFO" "Let's Encrypt not available, using self-signed certificate"
+        local cert_choice=""
+        local use_letsencrypt=false
+        
+        # Check for environment variable override
+        if [[ -n "${SSL_CERT_TYPE:-}" ]]; then
+            case "${SSL_CERT_TYPE}" in
+                "letsencrypt"|"le"|"1")
+                    use_letsencrypt=true
+                    milou_log "INFO" "🌟 Using Let's Encrypt (from SSL_CERT_TYPE environment variable)"
+                    ;;
+                "selfsigned"|"self"|"2")
+                    use_letsencrypt=false
+                    milou_log "INFO" "🔧 Using self-signed certificate (from SSL_CERT_TYPE environment variable)"
+                    ;;
+                *)
+                    milou_log "WARN" "Invalid SSL_CERT_TYPE value: ${SSL_CERT_TYPE}. Valid values: letsencrypt, selfsigned"
+                    ;;
+            esac
         fi
         
+        # In interactive mode, ask user for preference (unless already set by env var)
+        if [[ "${INTERACTIVE:-true}" == "true" && -z "${SSL_CERT_TYPE:-}" ]]; then
+            echo
+            milou_log "INFO" "🔒 SSL Certificate Options for domain: $domain"
+            echo
+            milou_log "INFO" "  1. 🌟 Let's Encrypt (Recommended)"
+            milou_log "INFO" "     ✅ Free trusted certificate"
+            milou_log "INFO" "     ✅ Recognized by all browsers"
+            milou_log "INFO" "     ⚠️  Requires public domain pointing to this server"
+            milou_log "INFO" "     ⚠️  Port 80 must be accessible from internet"
+            echo
+            milou_log "INFO" "  2. 🔧 Self-signed certificate"
+            milou_log "INFO" "     ✅ Works immediately"
+            milou_log "INFO" "     ✅ No internet requirements"
+            milou_log "INFO" "     ⚠️  Browser security warnings"
+            milou_log "INFO" "     ⚠️  Not suitable for production"
+            
+            # Check Let's Encrypt prerequisites and inform user
+            echo
+            milou_log "INFO" "🔍 Checking Let's Encrypt compatibility..."
+            
+            local can_le=false
+            local le_issues=()
+            
+            # Check domain accessibility
+            if ! is_domain_publicly_accessible "$domain"; then
+                le_issues+=("Domain '$domain' does not resolve publicly")
+            fi
+            
+            # Check certbot availability
+            if ! command -v certbot >/dev/null 2>&1; then
+                le_issues+=("Certbot not installed (will attempt auto-install)")
+            fi
+            
+            # Check root privileges
+            if [[ $EUID -ne 0 ]]; then
+                le_issues+=("Root privileges required for Let's Encrypt")
+            fi
+            
+            # Check port 80 availability
+            if command -v netstat >/dev/null 2>&1; then
+                if netstat -tlnp 2>/dev/null | grep -q ":80 "; then
+                    le_issues+=("Port 80 is occupied (needed for validation)")
+                fi
+            fi
+            
+            if [[ ${#le_issues[@]} -eq 0 ]]; then
+                milou_log "SUCCESS" "✅ Let's Encrypt appears to be compatible!"
+                can_le=true
+            else
+                milou_log "WARN" "⚠️  Let's Encrypt compatibility issues detected:"
+                for issue in "${le_issues[@]}"; do
+                    milou_log "WARN" "   • $issue"
+                done
+                echo
+                milou_log "INFO" "You can still try Let's Encrypt, but it may fail."
+            fi
+            
+            echo
+            if [[ "$can_le" == true ]]; then
+                echo -n "Choose certificate type [1 for Let's Encrypt (recommended), 2 for Self-signed]: "
+            else
+                echo -n "Choose certificate type [1 for Let's Encrypt (may fail), 2 for Self-signed (recommended)]: "
+            fi
+            read -r cert_choice
+            
+            case "$cert_choice" in
+                1)
+                    use_letsencrypt=true
+                    milou_log "INFO" "🌟 Let's Encrypt selected"
+                    ;;
+                2)
+                    use_letsencrypt=false
+                    milou_log "INFO" "🔧 Self-signed certificate selected"
+                    ;;
+                "")
+                    # Default choice based on compatibility
+                    if [[ "$can_le" == true ]]; then
+                        use_letsencrypt=true
+                        milou_log "INFO" "🌟 Using default: Let's Encrypt (recommended)"
+                    else
+                        use_letsencrypt=false
+                        milou_log "INFO" "🔧 Using default: Self-signed certificate (recommended)"
+                    fi
+                    ;;
+                *)
+                    use_letsencrypt=false
+                    milou_log "INFO" "🔧 Invalid choice, using self-signed certificate"
+                    ;;
+            esac
+                 elif [[ -z "${SSL_CERT_TYPE:-}" ]]; then
+             # Non-interactive mode without env var - check if Let's Encrypt is available and use it by default
+             milou_log "INFO" "Non-interactive mode: checking Let's Encrypt availability..."
+             if is_domain_publicly_accessible "$domain" && can_use_letsencrypt; then
+                 use_letsencrypt=true
+                 milou_log "INFO" "Let's Encrypt available - will attempt automatic certificate generation"
+             else
+                 use_letsencrypt=false
+                 milou_log "INFO" "Let's Encrypt not available - using self-signed certificate"
+             fi
+         fi
+        
+        # Try Let's Encrypt if selected/available
+        if [[ "$use_letsencrypt" == true ]]; then
+            # Install certbot if needed and in interactive mode
+            if ! command -v certbot >/dev/null 2>&1; then
+                if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                    milou_log "INFO" "📦 Certbot is required for Let's Encrypt certificates"
+                    if install_certbot; then
+                        milou_log "SUCCESS" "Certbot installed successfully"
+                    else
+                        milou_log "WARN" "Certbot installation failed, falling back to self-signed certificate"
+                        use_letsencrypt=false
+                    fi
+                else
+                    milou_log "WARN" "Certbot not available in non-interactive mode, falling back to self-signed certificate"
+                    use_letsencrypt=false
+                fi
+            fi
+            
+            # Attempt Let's Encrypt certificate generation
+            if [[ "$use_letsencrypt" == true ]]; then
+                local le_email=""
+                if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+                    echo -n "Enter email address for Let's Encrypt notifications [admin@$domain]: "
+                    read -r le_email
+                fi
+                le_email=${le_email:-"admin@$domain"}
+                
+                milou_log "INFO" "Attempting to obtain Let's Encrypt certificate for $domain"
+                if generate_letsencrypt_certificate "$ssl_path" "$domain" "$le_email"; then
+                    milou_log "SUCCESS" "Let's Encrypt certificate obtained successfully"
+                    show_certificate_info "$cert_file" "$domain"
+                    
+                    # Ensure Docker compatibility
+                    local docker_ssl_path
+                    docker_ssl_path=$(ensure_docker_compatible_ssl "$ssl_path" "$(pwd)")
+                    if [[ "$docker_ssl_path" != "$ssl_path" ]]; then
+                        milou_log "INFO" "SSL certificates prepared for Docker at: $docker_ssl_path"
+                    fi
+                    
+                    return 0
+                else
+                    milou_log "WARN" "Let's Encrypt failed, falling back to self-signed certificate"
+                fi
+            fi
+        fi
+        
+        # Generate self-signed certificate (fallback or user choice)
         milou_log "INFO" "Generating production self-signed certificate for $domain"
         if generate_production_certificate "$ssl_path" "$domain"; then
             milou_log "SUCCESS" "Production SSL certificate generated"

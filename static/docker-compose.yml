@@ -113,6 +113,7 @@ services:
       # Application Environment
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-9999}
+      - DOCKER_CONTAINER=true
       
       # Database Configuration
       - DATABASE_URI=${DATABASE_URI}

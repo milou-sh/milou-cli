@@ -11,12 +11,29 @@ if [[ "${MILOU_SSL_VALIDATION_LOADED:-}" == "true" ]]; then
 fi
 readonly MILOU_SSL_VALIDATION_LOADED="true"
 
-# Ensure logging is available
+# Ensure logging is available with fallback
 if ! command -v milou_log >/dev/null 2>&1; then
-    source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || {
-        echo "ERROR: Cannot load logging module" >&2
-        exit 1
-    }
+    # Try to load logging module if SCRIPT_DIR is available
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/core/logging.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || true
+    fi
+    
+    # Provide fallback logging function if still not available
+    if ! command -v milou_log >/dev/null 2>&1; then
+        milou_log() {
+            local level="$1"
+            shift
+            local message="$*"
+            case "$level" in
+                "ERROR") echo "[ERROR] $message" >&2 ;;
+                "WARN") echo "[WARN] $message" >&2 ;;
+                "INFO") echo "[INFO] $message" ;;
+                "DEBUG") [[ "${VERBOSE:-false}" == "true" ]] && echo "[DEBUG] $message" ;;
+                "SUCCESS") echo "[SUCCESS] $message" ;;
+                *) echo "[$level] $message" ;;
+            esac
+        }
+    fi
 fi
 
 # =============================================================================

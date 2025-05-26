@@ -46,8 +46,10 @@ declare -g DEBUG=${DEBUG:-false}
 declare -g LOG_TO_FILE=${LOG_TO_FILE:-true}
 declare -g INTERACTIVE=${INTERACTIVE:-true}
 
-# Paths and Files
-SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Paths and Files - Only set if not already defined
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 CONFIG_DIR="${CONFIG_DIR:-${HOME}/.milou}"
 LOG_FILE="${LOG_FILE:-${CONFIG_DIR}/milou.log}"
 
@@ -420,7 +422,10 @@ get_absolute_path() {
     if [[ -d "$path" ]]; then
         (cd "$path" && pwd)
     elif [[ -f "$path" ]]; then
-        (cd "$(dirname "$path")" && pwd)/$(basename "$path")
+        local dir_path file_name
+        dir_path="$(cd "$(dirname "$path")" && pwd)"
+        file_name="$(basename "$path")"
+        echo "${dir_path}/${file_name}"
     else
         # Path doesn't exist, resolve relative to current directory
         if [[ "$path" = /* ]]; then

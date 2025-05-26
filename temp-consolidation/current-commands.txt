@@ -1,0 +1,66 @@
+[1m[0;35mMilou Management CLI v3.1.0[0m
+
+[1mUSAGE:[0m
+    milou.sh [COMMAND] [OPTIONS]
+
+[1mCOMMANDS:[0m
+    [0;36msetup[0m             Interactive setup wizard (recommended for first-time setup)
+    [0;36mstart[0m             Start all services
+    [0;36mstop[0m              Stop all services
+    [0;36mrestart[0m           Restart all services
+    [0;36mstatus[0m            Show detailed status of all services
+    [0;36mdetailed-status[0m   Show comprehensive system status and conflicts
+    [0;36mlogs[0m [SERVICE]    View logs for all or specific service
+    [0;36mhealth[0m            Run comprehensive health checks
+    [0;36mhealth-check[0m      Quick health check for running services
+    [0;36mconfig[0m            View current configuration
+    [0;36mvalidate[0m          Validate configuration and environment
+    [0;36mbackup[0m            Create system backup
+    [0;36mrestore[0m [FILE]    Restore from backup file
+    [0;36mupdate[0m            Update to latest version
+    [0;36mssl[0m               Manage SSL certificates
+    [0;36mcleanup[0m           Clean up Docker resources
+    [0;36muninstall[0m         Complete removal of Milou (DESTRUCTIVE)
+    [0;36mshell[0m [SERVICE]   Get shell access to a running container
+    [0;36mdebug-images[0m      Debug Docker image availability (troubleshooting)
+    [0;36mdiagnose[0m          Run comprehensive Docker environment diagnosis
+    [0;36muser-status[0m       Show current user and permission status
+    [0;36mcreate-user[0m       Create dedicated milou user (requires sudo)
+    [0;36mmigrate-user[0m      Migrate existing installation to milou user
+    [0;36msecurity-check[0m    Run comprehensive security assessment
+    [0;36msecurity-harden[0m   Apply security hardening measures (requires sudo)
+    [0;36msecurity-report[0m   Generate detailed security report
+    [0;36minstall-deps[0m      Install system dependencies (Docker, tools, etc.)
+    [0;36mbuild-images[0m      Build Docker images locally for development
+    [0;36madmin[0m             Admin management (credentials, reset)
+    [0;36mhelp[0m              Show this help message
+
+[1mOPTIONS:[0m
+    [0;36m--verbose[0m         Enable verbose output
+    [0;36m--force[0m           Force operations without confirmation
+    [0;36m--dry-run[0m         Show what would be done without executing
+    [0;36m--token TOKEN[0m     GitHub personal access token
+    [0;36m--domain DOMAIN[0m   Domain name for SSL certificates
+    [0;36m--ssl-path PATH[0m   Path to SSL certificates
+    [0;36m--email EMAIL[0m     Admin email address
+    [0;36m--latest[0m          Use latest Docker images (default)
+    [0;36m--fixed-version[0m   Use fixed/pinned Docker image versions
+    [0;36m--non-interactive[0m Run in non-interactive mode
+    [0;36m--auto-create-user[0m Automatically create milou user if needed
+    [0;36m--skip-user-check[0m  Skip user permission validation
+    [0;36m--auto-install-deps[0m Automatically install missing dependencies
+    [0;36m--fresh-install[0m   Optimize for fresh server installation
+    [0;36m--dev[0m             Enable development mode (use local Docker images)
+    [0;36m--help, -h[0m        Show this help message
+
+[1mEXAMPLES:[0m
+    milou.sh setup --fresh-install
+    milou.sh start --verbose
+    milou.sh backup
+    milou.sh setup --token ghp_xxxx --domain example.com --non-interactive
+    milou.sh security-check --verbose
+
+[1mDOCUMENTATION:[0m
+    For detailed documentation, visit: https://github.com/dougxc/milou
+    For support, create an issue at: https://github.com/dougxc/milou/issues
+

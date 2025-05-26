@@ -149,6 +149,10 @@ services:
       # CORS Configuration
       - CORS_ORIGIN=${CORS_ORIGIN}
       
+      # URL Configuration (Backend App Config)
+      - FRONTEND_URL=${FRONTEND_URL}
+      - BACKEND_URL=${BACKEND_URL}
+      
       # Admin Configuration
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -199,7 +203,7 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:5173 > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:5173/ || curl -f -k https://localhost:5173/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -301,6 +305,7 @@ services:
       - BACKEND_PORT=${PORT:-9999}
       - FRONTEND_HOST=frontend
       - FRONTEND_PORT=5173
+      - FRONTEND_PROTOCOL=${FRONTEND_PROTOCOL:-http}
       - ENABLE_COMPRESSION=${ENABLE_COMPRESSION:-true}
       - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
     ports:
@@ -365,7 +370,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.21.0.0/16
+        - subnet: 172.20.0.0/16
     labels:
       - "project=milou"
       - "environment=${NODE_ENV:-production}"

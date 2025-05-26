@@ -149,11 +149,15 @@ milou_docker_compose() {
     # Build compose command with base file
     local compose_cmd="docker compose --env-file '$DOCKER_ENV_FILE' -f '$DOCKER_COMPOSE_FILE'"
     
-    # Check for local development override
-    local override_file="$(dirname "$DOCKER_COMPOSE_FILE")/docker-compose.local.yml"
-    if [[ -f "$override_file" ]]; then
-        compose_cmd="$compose_cmd -f '$override_file'"
-        log "DEBUG" "Using local development override: $override_file"
+    # Check for local development override ONLY if DEV_MODE is enabled
+    if [[ "${DEV_MODE:-false}" == "true" ]]; then
+        local override_file="$(dirname "$DOCKER_COMPOSE_FILE")/docker-compose.local.yml"
+        if [[ -f "$override_file" ]]; then
+            compose_cmd="$compose_cmd -f '$override_file'"
+            log "DEBUG" "Using local development override: $override_file"
+        else
+            log "WARN" "Development mode enabled but local override file not found: $override_file"
+        fi
     fi
     
     # Check for standard override file

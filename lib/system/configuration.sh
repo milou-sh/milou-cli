@@ -68,14 +68,15 @@ generate_config() {
     local admin_email="${3:-}"
     
     # Check if this is an existing installation
+    # detect_existing_installation returns 0 for fresh install, 1 for existing
     if detect_existing_installation; then
+        # Existing installation detected - preserve credentials
+        milou_log "DEBUG" "Existing installation detected - preserving credentials where possible"
+        generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"
+    else
         # Fresh installation - use new credentials
         milou_log "DEBUG" "Fresh installation detected - generating new credentials"
         generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "never"
-    else
-        # Existing installation - preserve credentials
-        milou_log "DEBUG" "Existing installation detected - preserving credentials where possible"
-        generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto"
     fi
 }
 

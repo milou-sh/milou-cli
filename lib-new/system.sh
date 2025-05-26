@@ -448,7 +448,7 @@ milou_validate_system() {
     milou_log "info" "🔍 Validating Milou system..."
     
     # Check configuration
-    if ! milou_config_validate; then
+    if ! test_config; then
         milou_log "error" "❌ Configuration validation failed"
         ((errors++))
     fi
@@ -537,7 +537,7 @@ milou_system_health() {
     fi
     
     # Check configuration
-    if milou_config_validate >/dev/null 2>&1; then
+    if test_config >/dev/null 2>&1; then
         milou_log "success" "✅ Configuration valid"
         ((health_score += 1))
     else

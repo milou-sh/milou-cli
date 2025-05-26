@@ -16,12 +16,12 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # =============================================================================
 
 # Load all consolidated modules in dependency order
-source "${SCRIPT_DIR}/lib/utils.sh"    # Core utilities & logging (must be first)
-source "${SCRIPT_DIR}/lib/config.sh"   # Configuration management
-source "${SCRIPT_DIR}/lib/ssl.sh"      # SSL certificate management
-source "${SCRIPT_DIR}/lib/docker.sh"   # Docker operations
-source "${SCRIPT_DIR}/lib/users.sh"    # User management
-source "${SCRIPT_DIR}/lib/system.sh"   # System operations
+source "${SCRIPT_DIR}/lib-new/utils.sh"    # Core utilities & logging (must be first)
+source "${SCRIPT_DIR}/lib-new/config.sh"   # Configuration management
+source "${SCRIPT_DIR}/lib-new/ssl.sh"      # SSL certificate management
+source "${SCRIPT_DIR}/lib-new/docker.sh"   # Docker operations
+source "${SCRIPT_DIR}/lib-new/users.sh"    # User management
+source "${SCRIPT_DIR}/lib-new/system.sh"   # System operations
 
 # =============================================================================
 # CONFIGURATION
@@ -46,18 +46,6 @@ ORIGINAL_COMMAND=""
 ORIGINAL_ARGUMENTS=()
 ORIGINAL_ARGUMENTS_STR=""
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-
-# Default option values
-AUTO_INSTALL_DEPS="${AUTO_INSTALL_DEPS:-false}"
-AUTO_CREATE_USER="${AUTO_CREATE_USER:-false}"
-SKIP_USER_CHECK="${SKIP_USER_CHECK:-false}"
-FRESH_INSTALL="${FRESH_INSTALL:-false}"
-DEV_MODE="${DEV_MODE:-false}"
-INTERACTIVE="${INTERACTIVE:-true}"
-USE_LATEST="${USE_LATEST:-true}"
-VERBOSE="${VERBOSE:-false}"
-FORCE="${FORCE:-false}"
-DRY_RUN="${DRY_RUN:-false}"
 
 # =============================================================================
 # ARGUMENT PRESERVATION FOR USER SWITCHING
@@ -106,7 +94,7 @@ show_help() {
     echo
     
     log "INFO" "${BOLD}USAGE:${NC}"
-    echo "    milou.sh [COMMAND] [OPTIONS]"
+    echo "    milou-new.sh [COMMAND] [OPTIONS]"
     echo
     
     log "INFO" "${BOLD}COMMANDS:${NC}"
@@ -153,11 +141,11 @@ show_help() {
     echo
     
     log "INFO" "${BOLD}EXAMPLES:${NC}"
-    echo "    milou.sh setup --fresh-install"
-    echo "    milou.sh start --verbose"
-    echo "    milou.sh backup"
-    echo "    milou.sh setup --token ghp_xxxx --domain example.com --non-interactive"
-    echo "    milou.sh security-check --verbose"
+    echo "    milou-new.sh setup --fresh-install"
+    echo "    milou-new.sh start --verbose"
+    echo "    milou-new.sh backup"
+    echo "    milou-new.sh setup --token ghp_xxxx --domain example.com --non-interactive"
+    echo "    milou-new.sh security-check --verbose"
     echo
 }
 

@@ -690,10 +690,10 @@ CORS_ORIGIN=https://${DOMAIN}
 # =============================================================================
 SSL_MODE=${SSL_MODE:-generate}
 SSL_PORT=${HTTPS_PORT:-443}
-    SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
-    SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl}
-    SSL_CERT_FILE=${SSL_CERT_FILE:-./ssl/milou.crt}
-    SSL_KEY_FILE=${SSL_KEY_FILE:-./ssl/milou.key}
+SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
+SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl}
+SSL_CERT_FILE=${SSL_CERT_FILE:-./ssl/milou.crt}
+SSL_KEY_FILE=${SSL_KEY_FILE:-./ssl/milou.key}
 
 # =============================================================================
 # DATABASE CONFIGURATION (PostgreSQL - Required)

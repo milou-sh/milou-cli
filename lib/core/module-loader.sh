@@ -138,7 +138,7 @@ milou_load_command_modules() {
     local -a system_modules=(
         "config/core" "config/validation" "config/migration"
         "ssl/core" "ssl/generation" "ssl/interactive"
-        "prerequisites" "system" "security" "setup"
+        "prerequisites" "system" "security"
     )
     
     local -a docker_modules=(

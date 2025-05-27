@@ -398,16 +398,5 @@ milou_select_option() {
     done
 }
 
-# =============================================================================
-# Backward Compatibility Aliases
-# =============================================================================
-
-# Maintain backward compatibility with existing code
-prompt_user() { milou_prompt_user "$@"; }
-confirm() { milou_confirm "$@"; }
-show_progress() { milou_show_progress "$@"; }
-validate_input() { milou_validate_input "$@"; }
-
 # Export all functions
-export -f milou_prompt_user milou_confirm milou_show_progress milou_validate_input milou_select_option
-export -f prompt_user confirm show_progress validate_input 
+export -f milou_prompt_user milou_confirm milou_show_progress milou_validate_input milou_select_option 

@@ -141,15 +141,14 @@ milou_log() {
     _safe_log_to_file "[$timestamp] [$level] [$caller] $message"
 }
 
-# Backward compatibility aliases
-log() { milou_log "$@"; }
+# Essential error exit function
 error_exit() { 
     milou_log "ERROR" "$1"
     exit "${2:-1}"
 }
 
 # Export functions for use by other modules
-export -f milou_log_init milou_log log error_exit
+export -f milou_log_init milou_log error_exit
 
 # Export color variables for use by other modules
 export RED GREEN YELLOW BLUE PURPLE CYAN WHITE BOLD DIM NC

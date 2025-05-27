@@ -19,24 +19,17 @@ readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly NC='\033[0m'
 
-# Enhanced log function that uses milou_log if available
 log() {
-    if command -v milou_log >/dev/null 2>&1; then
-        milou_log "$@"
-    else
-        # Fallback for standalone script execution
-        local level="$1"
-        shift
-        local message="$*"
-        case "$level" in
-            "ERROR") echo -e "${RED}[ERROR]${NC} $message" >&2 ;;
-            "WARN") echo -e "${YELLOW}[WARN]${NC} $message" >&2 ;;
-            "INFO") echo -e "${GREEN}[INFO]${NC} $message" ;;
-            "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-            "DEBUG") [[ "${VERBOSE:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $message" ;;
-            *) echo "[INFO] $message" ;;
-        esac
-    fi
+    local level="$1"
+    shift
+    local message="$*"
+    case "$level" in
+        "ERROR") echo -e "${RED}[ERROR]${NC} $message" >&2 ;;
+        "WARN") echo -e "${YELLOW}[WARN]${NC} $message" >&2 ;;
+        "INFO") echo -e "${GREEN}[INFO]${NC} $message" ;;
+        "DEBUG") echo -e "${BLUE}[DEBUG]${NC} $message" ;;
+        *) echo "[INFO] $message" ;;
+    esac
 }
 
 # Setup test environment

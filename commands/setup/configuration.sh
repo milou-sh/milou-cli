@@ -52,6 +52,10 @@ setup_run_configuration_wizard() {
         auto)
             _run_automatic_configuration
             ;;
+        smart)
+            # Smart mode: automated with prompts only when needed
+            _run_smart_configuration
+            ;;
         *)
             milou_log "ERROR" "Unknown setup mode: $setup_mode"
             return 1
@@ -209,11 +213,23 @@ _collect_ssl_configuration() {
     milou_log "INFO" "🌐 Domain for SSL: ${DOMAIN}"
     echo
     
-    # SSL mode selection
+    # Enhanced SSL mode selection with better explanations
     echo "SSL Configuration Options:"
-    echo "  1. Generate self-signed certificates for '${DOMAIN}' (development/testing)"
-    echo "  2. Use existing certificates (production)"
-    echo "  3. Skip SSL setup (HTTP only - not recommended)"
+    echo
+    echo "  1. 🔒 Generate self-signed certificates (Recommended for development)"
+    echo "     • Automatically creates SSL certificates for your domain"
+    echo "     • Works immediately, no external setup needed"
+    echo "     • Valid for: ${DOMAIN}, localhost, 127.0.0.1"
+    echo
+    echo "  2. 📁 Use existing SSL certificates (For production)"
+    echo "     • Provide your own SSL certificate files"
+    echo "     • Requires valid certificate and private key files"
+    echo "     • Best for production with real domain certificates"
+    echo
+    echo "  3. ⚠️  HTTP only (No SSL - not recommended for production)"
+    echo "     • Disables SSL completely"
+    echo "     • All traffic will be unencrypted"
+    echo "     • Only use for testing or development"
     echo
     
     local choice
@@ -223,46 +239,114 @@ _collect_ssl_configuration() {
     case "$ssl_choice" in
         1)
             SSL_MODE="generate"
-            milou_log "INFO" "✅ Will generate self-signed certificates for domain: ${DOMAIN}"
-            milou_log "INFO" "💡 Certificate will be valid for: ${DOMAIN}, localhost, 127.0.0.1"
+            # Set SSL directory path (not file paths) for Docker mounting
+                                      SSL_CERT_DIR="./ssl"
+            SSL_CERT_PATH="./ssl"  # Directory for Docker volume mount (relative to compose context)
+            SSL_KEY_PATH="./ssl"   # Directory for Docker volume mount
+            
+            milou_log "SUCCESS" "✅ Will generate self-signed certificates"
+            milou_log "INFO" "📂 Certificates will be stored in: $SSL_CERT_DIR/"
+            milou_log "INFO" "🌐 Valid for domains: ${DOMAIN}, localhost, 127.0.0.1"
+            milou_log "INFO" "📅 Validity: 365 days"
             ;;
         2)
             SSL_MODE="existing"
             milou_log "INFO" "📁 Using existing SSL certificates"
-            local path
-            milou_prompt_user "Path to certificate file (.crt)" "" "path" "false" 3
-            SSL_CERT_PATH="$path"
-            milou_prompt_user "Path to private key file (.key)" "" "path" "false" 3
-            SSL_KEY_PATH="$path"
+            echo
+            milou_log "INFO" "💡 You can provide either:"
+            echo "  • Individual certificate files (.crt and .key)"
+            echo "  • A directory containing 'milou.crt' and 'milou.key'"
+            echo
             
-            # Validate paths
-            if [[ ! -f "$SSL_CERT_PATH" ]]; then
-                milou_log "ERROR" "Certificate file not found: $SSL_CERT_PATH"
-                return 1
-            fi
-            if [[ ! -f "$SSL_KEY_PATH" ]]; then
-                milou_log "ERROR" "Private key file not found: $SSL_KEY_PATH"
+            local cert_input
+            milou_prompt_user "Certificate path (file or directory)" "" "cert_input" "false" 3
+            
+            # Determine if input is file or directory
+            if [[ -f "$cert_input" ]]; then
+                # It's a certificate file
+                SSL_CERT_FILE="$cert_input"
+                local cert_dir
+                cert_dir=$(dirname "$cert_input")
+                
+                # Ask for private key
+                local key_input
+                milou_prompt_user "Private key path" "${cert_dir}/milou.key" "key_input" "false" 3
+                
+                if [[ ! -f "$key_input" ]]; then
+                    milou_log "ERROR" "Private key file not found: $key_input"
+                    return 1
+                fi
+                
+                SSL_KEY_FILE="$key_input"
+                
+                # For Docker, we need to mount the directory, not individual files
+                SSL_CERT_PATH="$cert_dir"
+                SSL_KEY_PATH="$cert_dir"
+                
+                milou_log "SUCCESS" "✅ Using certificate: $SSL_CERT_FILE"
+                milou_log "INFO" "🔑 Using private key: $SSL_KEY_FILE"
+                
+            elif [[ -d "$cert_input" ]]; then
+                # It's a directory
+                SSL_CERT_DIR="$cert_input"
+                SSL_CERT_PATH="$cert_input"
+                SSL_KEY_PATH="$cert_input"
+                
+                # Check for expected files
+                if [[ ! -f "$cert_input/milou.crt" ]]; then
+                    milou_log "ERROR" "Certificate file not found: $cert_input/milou.crt"
+                    milou_log "INFO" "💡 Expected file names: milou.crt and milou.key"
+                    return 1
+                fi
+                if [[ ! -f "$cert_input/milou.key" ]]; then
+                    milou_log "ERROR" "Private key file not found: $cert_input/milou.key"
+                    milou_log "INFO" "💡 Expected file names: milou.crt and milou.key"
+                    return 1
+                fi
+                
+                SSL_CERT_FILE="$cert_input/milou.crt"
+                SSL_KEY_FILE="$cert_input/milou.key"
+                
+                milou_log "SUCCESS" "✅ Using SSL directory: $SSL_CERT_DIR"
+                milou_log "INFO" "📄 Certificate: $SSL_CERT_FILE"
+                milou_log "INFO" "🔑 Private key: $SSL_KEY_FILE"
+                
+            else
+                milou_log "ERROR" "Path not found: $cert_input"
+                milou_log "INFO" "💡 Please provide either:"
+                milou_log "INFO" "  • Path to certificate file (.crt)"
+                milou_log "INFO" "  • Path to directory containing milou.crt and milou.key"
                 return 1
             fi
             ;;
         3)
             SSL_MODE="none"
-            milou_log "WARN" "⚠️  SSL disabled - HTTP only mode (not recommended for production)"
+            milou_log "WARN" "⚠️  SSL disabled - HTTP only mode"
+            
             if [[ "${DOMAIN}" != "localhost" ]]; then
-                milou_log "WARN" "⚠️  WARNING: Using HTTP-only for domain '${DOMAIN}' - data will be unencrypted!"
+                milou_log "WARN" "🚨 SECURITY WARNING: Using HTTP-only for domain '${DOMAIN}'"
+                milou_log "WARN" "   • All data will be transmitted unencrypted"
+                milou_log "WARN" "   • Passwords and sensitive data will be visible"
+                milou_log "WARN" "   • Not suitable for production use"
+                echo
                 if ! milou_confirm "Continue with HTTP-only mode?" "N"; then
                     milou_log "INFO" "SSL configuration cancelled - please choose a different option"
                     return 1
                 fi
             fi
+            
+            # Clear SSL paths for HTTP-only mode
+            SSL_CERT_PATH=""
+            SSL_KEY_PATH=""
             ;;
         *)
             milou_log "ERROR" "Invalid SSL option: $ssl_choice"
+            milou_log "INFO" "💡 Please enter 1, 2, or 3"
             return 1
             ;;
     esac
     
-    milou_log "DEBUG" "SSL config collected: mode=$SSL_MODE, domain=$DOMAIN"
+    milou_log "DEBUG" "SSL config collected: mode=$SSL_MODE, cert_path=$SSL_CERT_PATH"
     return 0
 }
 
@@ -388,21 +472,168 @@ _save_configuration_to_env() {
     config_dir=$(dirname "$env_file")
     mkdir -p "$config_dir"
     
-    # Generate secure database credentials first
-    local postgres_user="milou_user_$(milou_generate_secure_random 8 "alphanumeric")"
-    local postgres_password="$(milou_generate_secure_random 32 "safe")"
-    local postgres_db="milou_database"
-    local redis_password="$(milou_generate_secure_random 32 "safe")"
-    local rabbitmq_user="milou_rabbit_$(milou_generate_secure_random 6 "alphanumeric")"
-    local rabbitmq_password="$(milou_generate_secure_random 32 "safe")"
-    local session_secret="$(milou_generate_secure_random 64 "safe")"
-    local encryption_key="$(milou_generate_secure_random 64 "hex")"
+    # CRITICAL: Check for existing installation and preserve existing credentials
+    local postgres_user postgres_password postgres_db redis_password rabbitmq_user rabbitmq_password session_secret encryption_key
+    local is_fresh_install=true
+    local preserve_existing_credentials=false
+    
+    # Check if this is an existing installation
+    if [[ -f "$env_file" ]]; then
+        milou_log "INFO" "🔍 Existing configuration detected - analyzing installation state"
+        
+        # Load existing credentials
+        local existing_postgres_user existing_postgres_password existing_postgres_db
+        local existing_redis_password existing_rabbitmq_user existing_rabbitmq_password
+        local existing_session_secret existing_encryption_key
+        
+        # Extract existing credentials from environment file
+        existing_postgres_user=$(grep "^POSTGRES_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_postgres_password=$(grep "^POSTGRES_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_postgres_db=$(grep "^POSTGRES_DB=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_redis_password=$(grep "^REDIS_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_rabbitmq_user=$(grep "^RABBITMQ_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_rabbitmq_password=$(grep "^RABBITMQ_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_session_secret=$(grep "^SESSION_SECRET=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_encryption_key=$(grep "^ENCRYPTION_KEY=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        
+        # Check for existing Docker volumes (indicates data exists)
+        local has_database_volume=false
+        local has_redis_volume=false
+        local has_rabbitmq_volume=false
+        
+        if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_pgdata" >/dev/null 2>&1 || \
+           docker volume inspect "static_pgdata" >/dev/null 2>&1; then
+            has_database_volume=true
+            milou_log "DEBUG" "Found existing database volume"
+        fi
+        
+        if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_redis_data" >/dev/null 2>&1 || \
+           docker volume inspect "static_redis_data" >/dev/null 2>&1; then
+            has_redis_volume=true
+            milou_log "DEBUG" "Found existing Redis volume"
+        fi
+        
+        if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_rabbitmq_data" >/dev/null 2>&1 || \
+           docker volume inspect "static_rabbitmq_data" >/dev/null 2>&1; then
+            has_rabbitmq_volume=true
+            milou_log "DEBUG" "Found existing RabbitMQ volume"
+        fi
+        
+        # Determine if we should preserve credentials
+        if [[ -n "$existing_postgres_user" && -n "$existing_postgres_password" && \
+              ( "$has_database_volume" == "true" || "$has_redis_volume" == "true" || "$has_rabbitmq_volume" == "true" ) ]]; then
+            preserve_existing_credentials=true
+            is_fresh_install=false
+            
+            milou_log "INFO" "🔄 Existing installation detected with data volumes"
+            milou_log "INFO" "   • Database volume: $([ "$has_database_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
+            milou_log "INFO" "   • Redis volume: $([ "$has_redis_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
+            milou_log "INFO" "   • RabbitMQ volume: $([ "$has_rabbitmq_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
+            milou_log "SUCCESS" "🔒 Preserving existing credentials to maintain data integrity"
+            
+            # Use existing credentials
+            postgres_user="$existing_postgres_user"
+            postgres_password="$existing_postgres_password"
+            postgres_db="${existing_postgres_db:-milou_database}"
+            redis_password="$existing_redis_password"
+            rabbitmq_user="$existing_rabbitmq_user"
+            rabbitmq_password="$existing_rabbitmq_password"
+            session_secret="$existing_session_secret"
+            encryption_key="$existing_encryption_key"
+            
+        elif [[ "${FORCE:-false}" == "true" ]]; then
+            milou_log "WARN" "🚨 FORCE mode enabled - generating new credentials despite existing installation"
+            milou_log "WARN" "   ⚠️  This may cause data access issues if volumes contain existing data"
+            milou_log "WARN" "   💡 Consider using '--clean' option for a completely fresh installation"
+            preserve_existing_credentials=false
+            is_fresh_install=false
+        elif [[ "${CLEAN_INSTALL:-false}" == "true" ]]; then
+            milou_log "INFO" "🧹 Clean installation requested via --clean option"
+            if command -v _perform_clean_installation >/dev/null 2>&1; then
+                _perform_clean_installation || return 1
+            else
+                milou_log "ERROR" "Clean installation function not available"
+                return 1
+            fi
+            preserve_existing_credentials=false
+            is_fresh_install=true
+        else
+            # Found env file but no volumes or credentials - treat as partial installation
+            milou_log "INFO" "📋 Found configuration file but no data volumes - treating as partial installation"
+            preserve_existing_credentials=false
+            is_fresh_install=false
+        fi
+        
+        # Offer user choice for credential handling (only in interactive mode)
+        if [[ "${SETUP_MODE:-interactive}" == "interactive" && "$preserve_existing_credentials" == "true" ]]; then
+            echo
+            milou_log "INFO" "🤔 Credential Management Options:"
+            echo "  1. 🔒 Preserve existing credentials (Recommended - maintains data access)"
+            echo "  2. 🔄 Generate new credentials (⚠️  May cause data access issues)"
+            echo "  3. 🗑️  Clean installation (Removes all existing data and starts fresh)"
+            echo
+            
+            local choice
+            milou_prompt_user "Select credential management option [1-3]" "1" "choice" "false" 3
+            
+            case "$choice" in
+                1)
+                    milou_log "INFO" "✅ Keeping existing credentials"
+                    # preserve_existing_credentials already set to true
+                    ;;
+                2)
+                    milou_log "WARN" "⚠️  Generating new credentials - this may break access to existing data"
+                    if milou_confirm "Are you sure? This may make existing data inaccessible." "N"; then
+                        preserve_existing_credentials=false
+                        milou_log "INFO" "🔄 Will generate new credentials"
+                    else
+                        milou_log "INFO" "✅ Keeping existing credentials"
+                    fi
+                    ;;
+                3)
+                    milou_log "WARN" "🗑️  Clean installation requested"
+                    if milou_confirm "This will DELETE all existing data. Are you absolutely sure?" "N"; then
+                        _perform_clean_installation || return 1
+                        preserve_existing_credentials=false
+                        is_fresh_install=true
+                        milou_log "INFO" "🧹 Clean installation completed - will generate fresh credentials"
+                    else
+                        milou_log "INFO" "✅ Keeping existing credentials"
+                    fi
+                    ;;
+                *)
+                    milou_log "ERROR" "Invalid choice: $choice"
+                    return 1
+                    ;;
+            esac
+        fi
+    fi
+    
+    # Generate credentials if needed (fresh install or forced new credentials)
+    if [[ "$preserve_existing_credentials" != "true" ]]; then
+        if [[ "$is_fresh_install" == "true" ]]; then
+            milou_log "INFO" "🆕 Fresh installation - generating new secure credentials"
+        else
+            milou_log "INFO" "🔄 Generating new credentials (existing installation)"
+        fi
+        
+        postgres_user="milou_user_$(milou_generate_secure_random 8 "alphanumeric")"
+        postgres_password="$(milou_generate_secure_random 32 "safe")"
+        postgres_db="milou_database"
+        redis_password="$(milou_generate_secure_random 32 "safe")"
+        rabbitmq_user="milou_rabbit_$(milou_generate_secure_random 6 "alphanumeric")"
+        rabbitmq_password="$(milou_generate_secure_random 32 "safe")"
+        session_secret="$(milou_generate_secure_random 64 "safe")"
+        encryption_key="$(milou_generate_secure_random 64 "hex")"
+    fi
     
     # Generate comprehensive environment file based on centralized validation requirements
     cat > "$env_file" << EOF
 # =============================================================================
 # Milou CLI Configuration - Complete Production Environment
 # Generated on: $(date)
+# Installation Type: $([ "$is_fresh_install" == "true" ] && echo "Fresh Install" || echo "Existing Installation Update")
+# Credentials: $([ "$preserve_existing_credentials" == "true" ] && echo "Preserved" || echo "Newly Generated")
 # =============================================================================
 
 # =============================================================================
@@ -426,8 +657,10 @@ CORS_ORIGIN=https://${DOMAIN}
 # =============================================================================
 SSL_MODE=${SSL_MODE:-generate}
 SSL_PORT=${HTTPS_PORT:-443}
-SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl/milou.crt}
-SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl/milou.key}
+    SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
+    SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl}
+    SSL_CERT_FILE=${SSL_CERT_FILE:-./ssl/milou.crt}
+    SSL_KEY_FILE=${SSL_KEY_FILE:-./ssl/milou.key}
 
 # =============================================================================
 # DATABASE CONFIGURATION (PostgreSQL - Required)
@@ -504,6 +737,131 @@ EOF
     milou_log "INFO" "📍 Configuration file: $env_file"
     milou_log "WARN" "🔒 File permissions set to 600 for security"
     
+    # Log credential management summary
+    if [[ "$preserve_existing_credentials" == "true" ]]; then
+        milou_log "SUCCESS" "🔒 Existing credentials preserved - data integrity maintained"
+    else
+        milou_log "INFO" "🆕 New credentials generated"
+        if [[ "$is_fresh_install" != "true" ]]; then
+            milou_log "WARN" "⚠️  If you have existing data, it may become inaccessible"
+        fi
+    fi
+    
+    return 0
+}
+
+# Perform clean installation (remove all existing data)
+_perform_clean_installation() {
+    milou_log "STEP" "🧹 Performing Clean Installation"
+    
+    # Stop all running containers
+    milou_log "INFO" "🛑 Stopping all Milou containers..."
+    if command -v docker >/dev/null 2>&1; then
+        # Try multiple project naming conventions
+        local project_names=("static" "milou-static" "milou")
+        for project in "${project_names[@]}"; do
+            docker compose -p "$project" down --remove-orphans 2>/dev/null || true
+        done
+        
+        # Force stop any remaining containers
+        docker ps -a --filter "name=milou" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
+        docker ps -a --filter "name=static" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
+    fi
+    
+    # Remove all volumes
+    milou_log "INFO" "🗑️  Removing all data volumes..."
+    local volumes_removed=0
+    
+    # Standard volume names
+    local -a volume_patterns=(
+        "static_pgdata"
+        "static_redis_data" 
+        "static_rabbitmq_data"
+        "static_rabbitmq_logs"
+        "static_backend_logs"
+        "static_engine_logs"
+        "static_engine_cache"
+        "static_engine_models"
+        "static_uploads"
+        "static_nginx_logs"
+        "static_nginx_cache"
+        "static_prometheus_data"
+        "milou-static_pgdata"
+        "milou-static_redis_data"
+        "milou-static_rabbitmq_data"
+        "milou_pgdata"
+        "milou_redis_data"
+        "milou_rabbitmq_data"
+    )
+    
+    for volume in "${volume_patterns[@]}"; do
+        if docker volume inspect "$volume" >/dev/null 2>&1; then
+            if docker volume rm "$volume" 2>/dev/null; then
+                milou_log "DEBUG" "Removed volume: $volume"
+                ((volumes_removed++))
+            else
+                milou_log "WARN" "Failed to remove volume: $volume"
+            fi
+        fi
+    done
+    
+    # Remove any additional volumes with milou/static in the name
+    local additional_volumes
+    additional_volumes=$(docker volume ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null || true)
+    additional_volumes+=" $(docker volume ls --filter "name=static" --format "{{.Name}}" 2>/dev/null || true)"
+    
+    for volume in $additional_volumes; do
+        if [[ -n "$volume" ]] && docker volume inspect "$volume" >/dev/null 2>&1; then
+            if docker volume rm "$volume" 2>/dev/null; then
+                milou_log "DEBUG" "Removed additional volume: $volume"
+                ((volumes_removed++))
+            fi
+        fi
+    done
+    
+    # Remove containers
+    milou_log "INFO" "🗑️  Removing all containers..."
+    local containers_removed=0
+    
+    local containers
+    containers=$(docker ps -a --filter "name=milou" --filter "name=static" --format "{{.Names}}" 2>/dev/null || true)
+    
+    if [[ -n "$containers" ]]; then
+        echo "$containers" | while IFS= read -r container; do
+            if [[ -n "$container" ]]; then
+                if docker rm -f "$container" 2>/dev/null; then
+                    milou_log "DEBUG" "Removed container: $container"
+                    ((containers_removed++))
+                fi
+            fi
+        done
+    fi
+    
+    # Remove networks
+    milou_log "INFO" "🗑️  Removing Milou networks..."
+    local networks
+    networks=$(docker network ls --filter "name=milou" --filter "name=static" --format "{{.Name}}" 2>/dev/null || true)
+    
+    if [[ -n "$networks" ]]; then
+        echo "$networks" | while IFS= read -r network; do
+            if [[ -n "$network" && "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
+                docker network rm "$network" 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    # Remove SSL certificates if requested
+    if [[ -d "./ssl" ]]; then
+        if milou_confirm "Also remove SSL certificates? (You can regenerate them)" "Y"; then
+            rm -rf "./ssl"
+            milou_log "INFO" "🗑️  SSL certificates removed"
+        fi
+    fi
+    
+    milou_log "SUCCESS" "🧹 Clean installation completed"
+    milou_log "INFO" "   • Volumes removed: $volumes_removed"
+    milou_log "INFO" "   • System ready for fresh installation"
+    
     return 0
 }
 
@@ -535,6 +893,52 @@ _create_env_from_environment() {
     
     # Save to file
     _save_configuration_to_env
+}
+
+# Smart configuration with prompts only when needed
+_run_smart_configuration() {
+    milou_log "INFO" "🧠 Running smart configuration (automated with targeted prompts)"
+    echo
+    
+    # Use environment variables if available, otherwise use smart defaults
+    DOMAIN="${DOMAIN:-localhost}"
+    ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}"
+    ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+    
+    # Only prompt for essential missing information
+    local need_prompts=false
+    
+    # Check if we need admin password
+    if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+        ADMIN_PASSWORD=$(milou_generate_secure_random 16)
+        milou_log "INFO" "🔑 Generated secure admin password: $ADMIN_PASSWORD"
+        milou_log "WARN" "⚠️  Save this password securely!"
+        need_prompts=true
+    fi
+    
+    # Generate secure defaults for missing items
+    JWT_SECRET="${JWT_SECRET:-$(milou_generate_secure_random 32)}"
+    DB_PASSWORD="${DB_PASSWORD:-$(milou_generate_secure_random 16)}"
+    SSL_MODE="${SSL_MODE:-generate}"
+    HTTP_PORT="${HTTP_PORT:-80}"
+    HTTPS_PORT="${HTTPS_PORT:-443}"
+    
+    # Validate smart configuration
+    if ! _validate_collected_configuration; then
+        milou_log "ERROR" "Smart configuration validation failed"
+        return 1
+    fi
+    
+    # Save configuration
+    _save_configuration_to_env || return 1
+    
+    if [[ "$need_prompts" == "true" ]]; then
+        milou_log "SUCCESS" "✅ Smart configuration completed (some values auto-generated)"
+    else
+        milou_log "SUCCESS" "✅ Smart configuration completed (using provided values)"
+    fi
+    
+    return 0
 }
 
 # Generate automatic configuration with smart defaults
@@ -573,4 +977,6 @@ export -f _collect_security_configuration
 export -f _validate_collected_configuration
 export -f _save_configuration_to_env
 export -f _create_env_from_environment
-export -f _generate_automatic_configuration 
+export -f _generate_automatic_configuration
+export -f _run_smart_configuration
+export -f _perform_clean_installation 

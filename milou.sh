@@ -59,6 +59,7 @@ readonly DEFAULT_SSL_PATH="./ssl"
 # Global State - Enhanced with better defaults
 declare -g VERBOSE=false
 declare -g FORCE=false
+declare -g CLEAN_INSTALL=false
 declare -g DRY_RUN=false
 declare -g GITHUB_TOKEN=""
 declare -g USE_LATEST_IMAGES=true
@@ -218,6 +219,7 @@ show_help() {
     printf "${bold}OPTIONS:${nc}\n"
     printf "    ${cyan}--verbose${nc}         Enable verbose output\n"
     printf "    ${cyan}--force${nc}           Force operations without confirmation\n"
+    printf "    ${cyan}--clean${nc}           Perform clean installation (removes all existing data)\n"
     printf "    ${cyan}--dry-run${nc}         Show what would be done without executing\n"
     printf "    ${cyan}--token TOKEN${nc}     GitHub personal access token\n"
     printf "    ${cyan}--domain DOMAIN${nc}   Domain name for SSL certificates\n"
@@ -283,6 +285,11 @@ main() {
             --force)
                 FORCE=true
                 export FORCE
+                shift
+                ;;
+            --clean)
+                CLEAN_INSTALL=true
+                export CLEAN_INSTALL
                 shift
                 ;;
             --dry-run)
@@ -414,6 +421,7 @@ main() {
                 case "$1" in
                     --verbose) VERBOSE=true; export VERBOSE; shift ;;
                     --force) FORCE=true; export FORCE; shift ;;
+                    --clean) CLEAN_INSTALL=true; export CLEAN_INSTALL; shift ;;
                     --dry-run) DRY_RUN=true; export DRY_RUN; shift ;;
                     --token) [[ -n "${2:-}" ]] && { GITHUB_TOKEN="$2"; export GITHUB_TOKEN; shift 2; } || shift ;;
                     --domain) [[ -n "${2:-}" ]] && { DOMAIN="$2"; export DOMAIN; shift 2; } || shift ;;

@@ -225,27 +225,28 @@ setup_check_existing_installation() {
         echo
     fi
     
-    # Show options based on what's detected
-    echo "How would you like to proceed?"
-    echo
-    if [[ "$has_running_services" == true ]]; then
-        echo "  1) Stop existing services and reconfigure (recommended)"
-        echo "  2) Update existing configuration only"
-        echo "  3) Force restart all services (may cause data loss)"
-        echo "  4) Cancel setup"
-    else
-        echo "  1) Update existing configuration"
-        echo "  2) Clean install (remove all containers and data)"
-        echo "  3) Cancel setup"
-    fi
-    echo
-    
-    # Get user choice
+    # Check for non-interactive mode early
     local choice
-    if [[ "${NON_INTERACTIVE:-false}" == "true" || "${FORCE:-false}" == "true" ]]; then
+    if [[ "${NON_INTERACTIVE:-false}" == "true" || "${INTERACTIVE:-true}" == "false" || "${FORCE:-false}" == "true" ]]; then
         choice="1"
-        milou_log "INFO" "Non-interactive/force mode - choosing option 1"
+        milou_log "INFO" "🤖 Non-interactive/force mode detected - automatically choosing option 1 (update existing)"
     else
+        # Show options based on what's detected (only in interactive mode)
+        echo "How would you like to proceed?"
+        echo
+        if [[ "$has_running_services" == true ]]; then
+            echo "  1) Stop existing services and reconfigure (recommended)"
+            echo "  2) Update existing configuration only"
+            echo "  3) Force restart all services (may cause data loss)"
+            echo "  4) Cancel setup"
+        else
+            echo "  1) Update existing configuration"
+            echo "  2) Clean install (remove all containers and data)"
+            echo "  3) Cancel setup"
+        fi
+        echo
+        
+        # Get user choice (interactive mode only)
         if command -v milou_prompt_user >/dev/null 2>&1; then
             milou_prompt_user "Choose option" "1" "choice" "false" 3
             choice="${choice:-1}"

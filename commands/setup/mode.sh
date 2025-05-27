@@ -30,8 +30,8 @@ setup_select_mode() {
     milou_log "STEP" "Step 3: Setup Mode Selection"
     echo
     
-    # Default mode based on system state
-    if [[ "${NON_INTERACTIVE:-false}" == "true" ]]; then
+    # Default mode based on system state and command line arguments
+    if [[ "${NON_INTERACTIVE:-false}" == "true" ]] || [[ "${INTERACTIVE:-true}" == "false" ]]; then
         setup_mode_ref="non-interactive"
         milou_log "INFO" "🤖 Non-interactive mode (forced by parameter)"
     elif [[ "$is_fresh_server" == "true" ]] && [[ $EUID -eq 0 ]]; then

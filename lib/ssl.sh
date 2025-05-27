@@ -169,12 +169,23 @@ generate_letsencrypt_certificate() {
         fi
     fi
     
+    # Validate email for Let's Encrypt
+    local le_email="${ADMIN_EMAIL:-}"
+    if [[ -z "$le_email" || "$le_email" == "admin@localhost" || "$le_email" =~ @localhost$ ]]; then
+        ssl_log "ERROR" "Invalid email for Let's Encrypt: ${le_email:-<empty>}"
+        ssl_log "ERROR" "Let's Encrypt requires a valid email address"
+        ssl_log "INFO" "Set ADMIN_EMAIL environment variable or use a valid domain"
+        return 1
+    fi
+    
     # Generate certificate using standalone mode
     ssl_log "INFO" "Generating Let's Encrypt certificate for $domain"
     certbot certonly --standalone --non-interactive --agree-tos \
-        --email "${ADMIN_EMAIL:-admin@$domain}" -d "$domain" || {
+        --email "$le_email" -d "$domain" || {
         ssl_log "ERROR" "Let's Encrypt certificate generation failed"
-        return 1
+        ssl_log "WARN" "Falling back to self-signed certificate"
+        generate_selfsigned_certificate "$domain" "$ssl_path"
+        return $?
     }
     
     # Copy certificates to our SSL path
@@ -276,6 +287,12 @@ check_letsencrypt_prerequisites() {
         issues+=("Root privileges required")
     fi
     
+    # Check email address
+    local le_email="${ADMIN_EMAIL:-}"
+    if [[ -z "$le_email" || "$le_email" == "admin@localhost" || "$le_email" =~ @localhost$ ]]; then
+        issues+=("Valid email address required (ADMIN_EMAIL)")
+    fi
+    
     # Check domain accessibility
     if ! is_domain_publicly_accessible "$domain"; then
         issues+=("Domain not publicly accessible")
@@ -289,10 +306,16 @@ check_letsencrypt_prerequisites() {
     fi
     
     if [[ ${#issues[@]} -gt 0 ]]; then
-        ssl_log "WARN" "Let's Encrypt issues:"
+        ssl_log "WARN" "Let's Encrypt prerequisites not met:"
         for issue in "${issues[@]}"; do
             ssl_log "WARN" "  • $issue"
         done
+        ssl_log "INFO" "For Let's Encrypt certificates, ensure:"
+        ssl_log "INFO" "  1. Valid domain (not localhost)"
+        ssl_log "INFO" "  2. Valid email address in ADMIN_EMAIL"
+        ssl_log "INFO" "  3. Domain points to this server"
+        ssl_log "INFO" "  4. Port 80 is available"
+        ssl_log "INFO" "  5. Running with root privileges"
         return 1
     fi
     

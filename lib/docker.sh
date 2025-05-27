@@ -1255,6 +1255,23 @@ docker_compose_up() {
         return 1
     fi
     
+    # Authenticate with GitHub Container Registry if token is available
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        log "INFO" "Authenticating with GitHub Container Registry..."
+        # For GitHub Container Registry, use the token as password and a placeholder username
+        if ! echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "token" --password-stdin 2>/dev/null; then
+            log "WARN" "Failed to authenticate with GitHub Container Registry - proceeding anyway"
+            log "INFO" "This may cause issues if images are private. Check your GitHub token permissions."
+            log "INFO" "Required token scopes: read:packages (and write:packages for pushing)"
+        else
+            log "SUCCESS" "Successfully authenticated with GitHub Container Registry"
+        fi
+    else
+        log "WARN" "No GitHub token provided - private registry authentication will fail"
+        log "INFO" "If images are private, set GITHUB_TOKEN environment variable"
+        log "INFO" "To get a token: GitHub → Settings → Developer settings → Personal access tokens"
+    fi
+    
     # Use docker compose (new syntax) or docker-compose (legacy)
     local compose_cmd="docker compose"
     if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
@@ -1284,6 +1301,17 @@ docker_compose_up_force_recreate() {
     
     local compose_file="./static/docker-compose.yml"
     local env_file=".env"
+    
+    # Authenticate with GitHub Container Registry if token is available
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        log "INFO" "Authenticating with GitHub Container Registry..."
+        # For GitHub Container Registry, use the token as password and a placeholder username
+        if ! echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "token" --password-stdin 2>/dev/null; then
+            log "WARN" "Failed to authenticate with GitHub Container Registry - proceeding anyway"
+        else
+            log "SUCCESS" "Successfully authenticated with GitHub Container Registry"
+        fi
+    fi
     
     # Use docker compose (new syntax) or docker-compose (legacy)
     local compose_cmd="docker compose"

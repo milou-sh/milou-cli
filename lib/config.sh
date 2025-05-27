@@ -1995,42 +1995,38 @@ milou_setup_completion() {
 clean_system_env_vars() {
     log "DEBUG" "Cleaning potentially conflicting system environment variables"
     
-    # List of variables that might conflict with our .env file
+    # Only clean variables that are clearly from previous runs or system conflicts
+    # Don't clean user-provided variables like GITHUB_TOKEN, DOMAIN, etc.
     local conflicting_vars=(
         "DATABASE_URI"
         "DB_HOST"
         "DB_PORT"
-        "DB_USER"
-        "DB_PASSWORD"
-        "DB_NAME"
         "REDIS_URL"
         "REDIS_HOST"
         "REDIS_PORT"
-        "REDIS_PASSWORD"
         "RABBITMQ_URL"
         "RABBITMQ_HOST"
         "RABBITMQ_PORT"
-        "RABBITMQ_USER"
-        "RABBITMQ_PASSWORD"
-        "ADMIN_EMAIL"
-        "ADMIN_PASSWORD"
-        "DOMAIN"
-        "GITHUB_TOKEN"
     )
     
+    # Only clean if they look like they're from a previous Docker run
     local cleaned_count=0
     for var in "${conflicting_vars[@]}"; do
-        if [[ -n "${!var:-}" ]]; then
-            log "WARN" "Unsetting conflicting system environment variable: $var"
-            unset "$var"
-            ((cleaned_count++))
+        local value="${!var:-}"
+        if [[ -n "$value" ]]; then
+            # Only clean if the value looks like it's from Docker (contains container names)
+            if [[ "$value" =~ (db|redis|rabbitmq|milou-) ]]; then
+                log "DEBUG" "Unsetting Docker-related environment variable: $var"
+                unset "$var"
+                ((cleaned_count++))
+            fi
         fi
     done
     
     if [[ $cleaned_count -gt 0 ]]; then
-        log "INFO" "Cleaned $cleaned_count conflicting environment variables"
+        log "DEBUG" "Cleaned $cleaned_count Docker-related environment variables"
     else
-        log "DEBUG" "No conflicting environment variables found"
+        log "DEBUG" "No conflicting Docker environment variables found"
     fi
 }
 

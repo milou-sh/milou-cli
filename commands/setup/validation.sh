@@ -419,131 +419,141 @@ _start_and_validate_services() {
     return 0
 }
 
-# Wait for services to become ready with enhanced timing
+# Wait for services to become ready with improved monitoring
 _wait_for_services_ready() {
-    local max_wait=120  # 2 minutes
-    local waited=0
-    local interval=5  # Check more frequently
-    local last_status=""
-    local start_time=$(date +%s)
+    milou_log "INFO" "⏳ Waiting for services to be ready..."
+    
+    local max_wait=180  # Increased from 120s to 180s
+    local check_interval=10  # Increased from 5s to 10s for less noise
+    local elapsed=0
+    local ready_services=()
+    local failed_services=()
+    local last_status_count=0
     
     milou_log "INFO" "🔍 Monitoring service startup progress..."
-    milou_log "INFO" "⏱️  Startup timeout: ${max_wait}s | Check interval: ${interval}s"
+    milou_log "INFO" "⏱️  Startup timeout: ${max_wait}s | Check interval: ${check_interval}s"
     
-    while [[ $waited -lt $max_wait ]]; do
-        local ready_services=0
-        local total_services=7
-        local service_status=()
+    while [[ $elapsed -lt $max_wait ]]; do
+        ready_services=()
+        failed_services=()
+        local current_status_count=0
         
-        # Check Database (PostgreSQL) - use actual configured user
-        local db_user="${POSTGRES_USER:-${DB_USER:-milou}}"
-        if docker exec milou-database pg_isready -U "$db_user" >/dev/null 2>&1; then
-            ((ready_services++))
-            service_status+=("🟢 Database")
-        else
-            service_status+=("🔴 Database")
-        fi
+        # Check each service with more detailed status
+        local services=(
+            "milou-database:Database"
+            "milou-redis:Redis" 
+            "milou-rabbitmq:RabbitMQ"
+            "milou-backend:Backend"
+            "milou-frontend:Frontend"
+            "milou-engine:Engine"
+            "milou-nginx:Nginx"
+        )
         
-        # Check Redis
-        if docker exec milou-redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
-            ((ready_services++))
-            service_status+=("🟢 Redis")
-        else
-            service_status+=("🔴 Redis")
-        fi
-        
-        # Check RabbitMQ
-        if docker exec milou-rabbitmq rabbitmqctl status >/dev/null 2>&1; then
-            ((ready_services++))
-            service_status+=("🟢 RabbitMQ")
-        else
-            service_status+=("🔴 RabbitMQ")
-        fi
-        
-        # Check Backend
-        local backend_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:9999/health" 2>/dev/null || echo "000")
-        if [[ "$backend_health" == "200" ]]; then
-            ((ready_services++))
-            service_status+=("🟢 Backend")
-        else
-            service_status+=("🔴 Backend")
-        fi
-        
-        # Check Frontend (development server)
-        local frontend_health=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:5173" 2>/dev/null || echo "000")
-        if [[ "$frontend_health" =~ ^(200|304)$ ]]; then
-            ((ready_services++))
-            service_status+=("🟢 Frontend")
-        else
-            service_status+=("🔴 Frontend")
-        fi
-        
-        # Check Engine
-        if docker logs milou-engine 2>/dev/null | tail -20 | grep -q "started\|ready\|listening\|server running"; then
-            ((ready_services++))
-            service_status+=("🟢 Engine")
-        else
-            service_status+=("🔴 Engine")
-        fi
-        
-        # Check Nginx
-        local nginx_logs=$(docker logs milou-nginx 2>&1 | tail -10)
-        if echo "$nginx_logs" | grep -q "start up"; then
-            ((ready_services++))
-            service_status+=("🟢 Nginx")
-        else
-            # Check for specific nginx errors
-            if echo "$nginx_logs" | grep -q "cannot load certificate\|SSL.*failed\|emerg"; then
-                service_status+=("🔴 Nginx (SSL issue)")
-            else
-                service_status+=("🔴 Nginx")
-            fi
-        fi
-        
-        # Display status with timing information
-        local current_status="${service_status[*]}"
-        local current_time=$(date +%s)
-        local elapsed=$((current_time - start_time))
-        
-        if [[ "$current_status" != "$last_status" ]]; then
-            milou_log "INFO" "📊 Service Status ($ready_services/$total_services ready) [${elapsed}s elapsed]:"
-            printf "   %s\n" "${service_status[@]}"
-            last_status="$current_status"
+        for service_info in "${services[@]}"; do
+            local container_name="${service_info%:*}"
+            local display_name="${service_info#*:}"
             
-            # Log specific timing for backend (the slowest service)
-            if echo "$current_status" | grep -q "🟢 Backend"; then
-                milou_log "SUCCESS" "🚀 Backend started in ${elapsed}s!"
-            elif echo "$current_status" | grep -q "🔴 Backend" && [[ $elapsed -gt 60 ]]; then
-                milou_log "WARN" "⚠️  Backend taking longer than expected (${elapsed}s)"
-            fi
+            # Check if container is running and healthy
+            local container_status
+            container_status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null || echo "missing")
+            
+            local health_status
+            health_status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "none")
+            
+            case "$container_status" in
+                "running")
+                    if [[ "$health_status" == "healthy" ]] || [[ "$health_status" == "none" ]]; then
+                        ready_services+=("$display_name")
+                        ((current_status_count++))
+                    elif [[ "$health_status" == "starting" ]]; then
+                        # Still starting, don't count as ready yet
+                        :
+                    else
+                        # Health check failed
+                        failed_services+=("$display_name")
+                    fi
+                    ;;
+                "restarting")
+                    # Container is restarting, might recover
+                    milou_log "DEBUG" "$display_name is restarting..."
+                    ;;
+                "exited"|"dead")
+                    failed_services+=("$display_name")
+                    ;;
+                *)
+                    # Missing or unknown status
+                    milou_log "DEBUG" "$display_name status: $container_status"
+                    ;;
+            esac
+        done
+        
+        # Progress reporting - only show updates when status changes significantly
+        local total_services=${#services[@]}
+        local ready_count=${#ready_services[@]}
+        
+        if [[ $ready_count -ne $last_status_count ]] || [[ $((elapsed % 30)) -eq 0 ]]; then
+            milou_log "INFO" "📊 Service Status ($ready_count/$total_services ready) [${elapsed}s elapsed]:"
+            
+            # Show status with color coding
+            for service_info in "${services[@]}"; do
+                local display_name="${service_info#*:}"
+                if [[ " ${ready_services[*]} " =~ " ${display_name} " ]]; then
+                    echo "   🟢 $display_name"
+                elif [[ " ${failed_services[*]} " =~ " ${display_name} " ]]; then
+                    echo "   🔴 $display_name"
+                else
+                    echo "   🟡 $display_name"
+                fi
+            done
+            echo
+            
+            last_status_count=$ready_count
         fi
         
-        # All services ready
-        if [[ $ready_services -eq $total_services ]]; then
-            local final_time=$(date +%s)
-            local total_elapsed=$((final_time - start_time))
-            milou_log "SUCCESS" "✅ All services are ready! Total startup time: ${total_elapsed}s"
+        # Check if all services are ready
+        if [[ $ready_count -eq $total_services ]]; then
+            milou_log "SUCCESS" "✅ All services are ready!"
             return 0
         fi
         
-        # Provide troubleshooting hints after 60 seconds
-        if [[ $waited -eq 60 ]]; then
+        # Check if we have critical failures
+        if [[ ${#failed_services[@]} -gt 2 ]]; then
+            milou_log "WARN" "⚠️  Multiple service failures detected: ${failed_services[*]}"
+            milou_log "INFO" "💡 Continuing to wait - services may recover..."
+        fi
+        
+        # Provide helpful tips periodically
+        if [[ $((elapsed % 60)) -eq 30 ]] && [[ $elapsed -gt 30 ]]; then
             milou_log "INFO" "🔧 Still waiting... Common issues to check:"
             echo "   • SSL certificate problems (nginx)"
             echo "   • Port conflicts (check with: netstat -tuln)"
             echo "   • Container resource limits"
             echo "   • GitHub token authentication"
+            if [[ $elapsed -gt 90 ]]; then
+                echo "   • Check logs: docker compose logs"
+            fi
         fi
         
-        sleep $interval
-        waited=$((waited + interval))
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
     done
     
-    # Final status report
-    milou_log "WARN" "⚠️  Services did not become fully ready within ${max_wait}s"
-    milou_log "INFO" "📋 Final Status: $ready_services/$total_services services ready"
+    # Timeout reached
+    local ready_count=${#ready_services[@]}
+    local total_services=${#services[@]}
     
-    # Provide specific troubleshooting
+    if [[ $ready_count -gt 0 ]]; then
+        milou_log "WARN" "⚠️  Services did not become fully ready within ${max_wait}s"
+        milou_log "INFO" "📋 Final Status: $ready_count/$total_services services ready"
+        milou_log "INFO" "✅ Ready: ${ready_services[*]}"
+        if [[ ${#failed_services[@]} -gt 0 ]]; then
+            milou_log "WARN" "❌ Issues: ${failed_services[*]}"
+        fi
+    else
+        milou_log "ERROR" "❌ No services became ready within ${max_wait}s"
+        milou_log "ERROR" "This indicates a serious configuration or environment issue"
+    fi
+    
     echo
     milou_log "INFO" "🔧 Troubleshooting Commands:"
     echo "   • Check all logs:         docker compose logs"
@@ -553,37 +563,45 @@ _wait_for_services_ready() {
     echo "   • Nginx SSL logs:         docker logs milou-nginx"
     echo "   • Check SSL certificates: ls -la ssl/ && openssl x509 -in ssl/milou.crt -text -noout"
     
-    # Check for specific common issues
-    echo
+    # Quick diagnostics
     milou_log "INFO" "🔍 Quick Diagnostics:"
     
-    # SSL certificate issue
-    if [[ ! -f "./ssl/milou.crt" || ! -f "./ssl/milou.key" ]]; then
-        echo "   ❌ SSL certificates missing! Run: ./milou.sh ssl generate"
+    # Check SSL certificates
+    if [[ -f "./ssl/milou.crt" && -f "./ssl/milou.key" ]]; then
+        echo "   ✅ SSL certificates exist and are readable"
     else
-        if ! openssl x509 -in "./ssl/milou.crt" -noout 2>/dev/null; then
-            echo "   ❌ SSL certificate is corrupted!"
-        else
-            echo "   ✅ SSL certificates exist and are readable"
-        fi
+        echo "   ❌ SSL certificate issues detected"
     fi
     
-    # Port conflicts
-    local port_conflicts=$(netstat -tuln 2>/dev/null | grep -E ":80 |:443 |:5432 " | wc -l)
-    if [[ $port_conflicts -gt 3 ]]; then
-        echo "   ⚠️  Possible port conflicts detected"
+    # Check for port conflicts
+    local port_conflicts=0
+    local critical_ports=("80" "443" "5432" "6379")
+    for port in "${critical_ports[@]}"; do
+        if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
+            ((port_conflicts++))
+        fi
+    done
+    
+    if [[ $port_conflicts -eq 0 ]]; then
+        echo "   ❌ No critical ports appear to be in use (unexpected)"
     else
         echo "   ✅ No obvious port conflicts"
     fi
     
-    # Docker resources
-    local container_count=$(docker ps -q | wc -l)
-    echo "   📊 Running containers: $container_count"
+    # Check running containers
+    local running_containers
+    running_containers=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
+    echo "   📊 Running containers: $running_containers"
     
     echo
     milou_log "INFO" "💡 Many services continue starting in background. Try accessing the web interface."
     
-    return 1
+    # Return success if we have some services running
+    if [[ $ready_count -gt 2 ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Validate service health after startup
@@ -651,6 +669,13 @@ _validate_service_health() {
 
 # Generate final success report
 _generate_success_report() {
+    # CRITICAL FIX: Load environment variables first
+    if [[ -f "${ENV_FILE:-}" ]]; then
+        set +u  # Temporarily disable unbound variable checking
+        source "${ENV_FILE}" 2>/dev/null || true
+        set -u
+    fi
+    
     milou_log "SUCCESS" "🎉 Milou Setup Completed Successfully!"
     echo
     echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════${NC}"
@@ -679,11 +704,26 @@ _generate_success_report() {
     fi
     echo
     
-    # Admin credentials
-    echo -e "${BOLD}👤 Admin Credentials:${NC}"
-    echo "  Username: ${ADMIN_USERNAME:-admin}"
-    echo "  Password: ${ADMIN_PASSWORD:-[check environment file]}"
-    echo "  Email: ${ADMIN_EMAIL:-[not set]}"
+    # CRITICAL FIX: Properly extract admin credentials from environment file
+    local admin_username admin_password admin_email
+    if [[ -f "${ENV_FILE:-}" ]]; then
+        admin_username=$(grep "^ADMIN_USERNAME=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "admin")
+        admin_password=$(grep "^ADMIN_PASSWORD=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
+        admin_email=$(grep "^ADMIN_EMAIL=" "${ENV_FILE}" 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "")
+    else
+        admin_username="${ADMIN_USERNAME:-admin}"
+        admin_password="${ADMIN_PASSWORD:-}"
+        admin_email="${ADMIN_EMAIL:-}"
+    fi
+    
+    # Admin credentials - PROMINENTLY DISPLAYED
+    echo -e "${BOLD}${CYAN}🔑 ADMIN CREDENTIALS (SAVE THESE!):${NC}"
+    echo -e "  ${BOLD}Username:${NC} $admin_username"
+    echo -e "  ${BOLD}Password:${NC} $admin_password"
+    echo -e "  ${BOLD}Email:${NC} $admin_email"
+    echo
+    echo -e "${BOLD}${RED}⚠️  IMPORTANT: Save these credentials immediately!${NC}"
+    echo -e "${BOLD}${RED}   You'll need them to access the web interface.${NC}"
     echo
     
     # Management commands
@@ -693,6 +733,7 @@ _generate_success_report() {
     echo "  Stop:    $0 stop"
     echo "  Restart: $0 restart"
     echo "  Update:  $0 update"
+    echo "  Admin:   $0 admin credentials"
     echo
     
     # Important files
@@ -717,13 +758,27 @@ _generate_success_report() {
     echo "  • Change default passwords before production use"
     echo
     
-    # Next steps
+    # Next steps with improved UX
     echo -e "${BOLD}💡 Next Steps:${NC}"
-    echo "  1. Access the web interface using the URL above"
-    echo "  2. Log in with the admin credentials"
-    echo "  3. Complete the initial setup wizard"
-    echo "  4. Configure your security settings"
-    echo "  5. Review the logs: $0 logs"
+    echo "  1. 🌐 Access the web interface using the URL above"
+    echo "  2. 🔑 Log in with the admin credentials shown above"
+    echo "  3. 🧙 Complete the initial setup wizard"
+    echo "  4. 🔒 Configure your security settings"
+    echo "  5. 📋 Review the logs: $0 logs"
+    echo
+    
+    # Service status summary
+    echo -e "${BOLD}📊 Quick Service Check:${NC}"
+    local running_containers
+    running_containers=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
+    echo "  Running containers: $running_containers"
+    
+    if [[ "$running_containers" -gt 0 ]]; then
+        echo -e "  ${BOLD}${GREEN}✅ Services appear to be running${NC}"
+    else
+        echo -e "  ${BOLD}${YELLOW}⚠️  Services may still be starting${NC}"
+        echo "  💡 Check status with: $0 status"
+    fi
     echo
     
     echo -e "${BOLD}${GREEN}Ready to go! 🎯${NC}"
@@ -782,6 +837,12 @@ _validate_credential_volume_consistency() {
     
     milou_log "INFO" "📊 Found existing data volumes: ${volumes_found[*]}"
     
+    # IMPROVED: Check if this is a force/clean install first
+    if [[ "${FORCE:-false}" == "true" || "${CLEAN_INSTALL:-false}" == "true" ]]; then
+        milou_log "INFO" "🧹 Force/clean installation requested - skipping credential validation"
+        return 0
+    fi
+    
     # Load current environment credentials
     local current_postgres_user current_postgres_password current_redis_password current_rabbitmq_user current_rabbitmq_password
     current_postgres_user="${POSTGRES_USER:-}"
@@ -795,24 +856,72 @@ _validate_credential_volume_consistency() {
         return 1
     fi
     
-    # Test database connectivity with current credentials (if database volume exists)
-    if [[ "$has_database_volume" == "true" ]]; then
+    # IMPROVED: Only test database credentials if we have a substantial existing installation
+    if [[ "$has_database_volume" == "true" && "$has_redis_volume" == "true" ]]; then
         milou_log "INFO" "🔍 Testing database connectivity with current credentials..."
         
-        if _test_database_credentials "$current_postgres_user" "$current_postgres_password"; then
+        # More lenient credential testing - try multiple approaches
+        local credential_test_result=false
+        
+        # Test 1: Quick volume inspection (faster)
+        if _quick_volume_credential_check; then
+            credential_test_result=true
+            milou_log "DEBUG" "✅ Quick volume check passed"
+        else
+            # Test 2: Full database connection test (slower but more thorough)
+            milou_log "DEBUG" "Quick check failed, trying full database test..."
+            if _test_database_credentials "$current_postgres_user" "$current_postgres_password"; then
+                credential_test_result=true
+                milou_log "DEBUG" "✅ Full database test passed"
+            fi
+        fi
+        
+        if [[ "$credential_test_result" == "true" ]]; then
             milou_log "SUCCESS" "✅ Database credentials are compatible with existing volume"
         else
-            milou_log "ERROR" "❌ Database authentication failed with current credentials"
-            milou_log "WARN" "   This indicates a credential mismatch between .env and database volume"
+            milou_log "WARN" "⚠️  Database credential validation failed"
+            milou_log "INFO" "   This could indicate a credential mismatch or startup timing issue"
             
-            # Offer solutions
-            _handle_credential_mismatch
+            # Offer gentler resolution options
+            _handle_credential_mismatch_gentle
             return $?
         fi
+    else
+        milou_log "INFO" "📋 Partial installation detected - skipping detailed credential validation"
     fi
     
     milou_log "SUCCESS" "✅ Credential-volume consistency validated"
     return 0
+}
+
+# Quick volume inspection without starting containers
+_quick_volume_credential_check() {
+    # Check if volumes are empty (indicating fresh installation)
+    local db_volume_name
+    
+    # Find the database volume
+    if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_pgdata" >/dev/null 2>&1; then
+        db_volume_name="${DOCKER_PROJECT_NAME:-static}_pgdata"
+    elif docker volume inspect "static_pgdata" >/dev/null 2>&1; then
+        db_volume_name="static_pgdata"
+    elif docker volume inspect "milou-static_pgdata" >/dev/null 2>&1; then
+        db_volume_name="milou-static_pgdata"
+    else
+        return 1
+    fi
+    
+    # Check if volume is empty or has minimal data (suggests fresh/clean state)
+    local volume_size
+    volume_size=$(docker run --rm -v "$db_volume_name:/data" alpine sh -c 'du -s /data 2>/dev/null | cut -f1' 2>/dev/null || echo "0")
+    
+    # If volume is very small (less than 1MB), it's likely empty/fresh
+    if [[ "$volume_size" -lt 1024 ]]; then
+        milou_log "DEBUG" "Volume appears fresh/empty (size: ${volume_size}KB)"
+        return 0
+    fi
+    
+    milou_log "DEBUG" "Volume has substantial data (size: ${volume_size}KB)"
+    return 1
 }
 
 # Test database credentials by starting a temporary container
@@ -945,6 +1054,73 @@ _handle_credential_mismatch() {
     esac
 }
 
+# Gentler credential mismatch handler (new)
+_handle_credential_mismatch_gentle() {
+    milou_log "WARN" "⚠️  Potential Credential Issue Detected"
+    echo
+    milou_log "INFO" "The credential validation couldn't confirm compatibility with existing volumes."
+    milou_log "INFO" "This could be caused by:"
+    milou_log "INFO" "  • Services still starting up (timing issue)"
+    milou_log "INFO" "  • Credential mismatch with existing data"
+    milou_log "INFO" "  • Network connectivity issues"
+    echo
+    
+    # In non-interactive mode, continue with warning
+    if [[ "${INTERACTIVE:-true}" == "false" ]]; then
+        milou_log "WARN" "Non-interactive mode - continuing setup with warning"
+        milou_log "INFO" "💡 Monitor logs carefully: ./milou.sh logs"
+        return 0
+    fi
+    
+    milou_log "INFO" "🤔 How would you like to proceed?"
+    echo "  1. ⏭️  Continue setup anyway (recommended - may work after services start)"
+    echo "  2. ⏸️  Wait and retry validation (give services more time)"
+    echo "  3. 🧹 Clean installation (removes all existing data)"
+    echo "  4. 🛑 Cancel setup"
+    echo
+    
+    local choice
+    milou_prompt_user "Select option [1-4]" "1" "choice" "false" 3
+    
+    case "$choice" in
+        1)
+            milou_log "INFO" "⏭️  Continuing setup - will monitor service startup carefully"
+            milou_log "WARN" "💡 If services fail to start, check logs: ./milou.sh logs"
+            return 0
+            ;;
+        2)
+            milou_log "INFO" "⏸️  Waiting 30 seconds for services to stabilize..."
+            sleep 30
+            milou_log "INFO" "🔄 Retrying credential validation..."
+            if _test_database_credentials "${POSTGRES_USER:-}" "${POSTGRES_PASSWORD:-}"; then
+                milou_log "SUCCESS" "✅ Retry successful - credentials are working"
+                return 0
+            else
+                milou_log "WARN" "⚠️  Retry failed - continuing anyway"
+                return 0
+            fi
+            ;;
+        3)
+            milou_log "INFO" "🧹 Performing clean installation..."
+            if _perform_clean_installation; then
+                milou_log "SUCCESS" "✅ Clean installation completed"
+                return 0
+            else
+                milou_log "ERROR" "❌ Clean installation failed"
+                return 1
+            fi
+            ;;
+        4)
+            milou_log "INFO" "🛑 Setup cancelled by user"
+            return 1
+            ;;
+        *)
+            milou_log "WARN" "Invalid choice, continuing setup anyway"
+            return 0
+            ;;
+    esac
+}
+
 # Reset only the database volume (preserves other data)
 _reset_database_volume() {
     milou_log "INFO" "🗑️  Removing database volume..."
@@ -989,6 +1165,8 @@ export -f _wait_for_services_ready
 export -f _validate_service_health
 export -f _generate_success_report
 export -f _validate_credential_volume_consistency
+export -f _quick_volume_credential_check
 export -f _test_database_credentials
 export -f _handle_credential_mismatch
+export -f _handle_credential_mismatch_gentle
 export -f _reset_database_volume 

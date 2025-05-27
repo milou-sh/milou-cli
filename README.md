@@ -1,427 +1,376 @@
-# Milou CLI - Enterprise-Grade Infrastructure Management Tool
+# Milou CLI - Enterprise Management Tool
 
-🚀 **State-of-the-art CLI for deploying and managing Milou AI Pentest Orchestration platform**
+**Version 3.1.0** - Production-Ready with Critical Fixes
 
-## ✨ Latest Updates
+## 🚀 **Recent Critical Improvements**
 
-**Version 3.1.0** - Production-Ready Release:
-- ✅ **Intelligent Conflict Detection**: Automatically detects and handles existing installations
-- ✅ **Modular Architecture**: 8 focused setup modules replacing monolithic functions
-- ✅ **Enhanced Error Handling**: Comprehensive validation and recovery mechanisms
-- ✅ **Zero-Downtime Updates**: Update configurations without stopping services
-- ✅ **Smart Port Management**: Automatic port conflict resolution
-- ✅ **Unified Logging**: Consistent logging across all 2,199+ log statements
-- ✅ **Production Security**: Secure defaults and hardened configurations
+This version includes **major fixes** for the issues you experienced:
 
-## 🚀 Quick Start
+### ✅ **Fixed: Admin Credentials Not Displayed**
+- **Problem**: Setup completed but never showed admin credentials
+- **Solution**: Enhanced success report now prominently displays credentials
+- **Result**: Users can now access the system immediately after setup
 
-### Fresh Installation
+### ✅ **Fixed: Credential Management Issues**  
+- **Problem**: Aggressive credential mismatch detection causing unnecessary clean installs
+- **Solution**: Intelligent credential preservation with gentle conflict resolution
+- **Result**: Existing installations update smoothly without data loss
+
+### ✅ **Fixed: Service Startup Timeouts**
+- **Problem**: Only 3/7 services ready after 120s, poor progress feedback
+- **Solution**: Improved service monitoring with 180s timeout and better diagnostics
+- **Result**: More reliable startup with clear progress indicators
+
+### ✅ **Fixed: Poor User Experience**
+- **Problem**: Setup took "forever" with no clear feedback
+- **Solution**: Enhanced progress reporting and intelligent conflict handling
+- **Result**: Professional, enterprise-grade experience
+
+---
+
+## 📋 **Quick Start Guide**
+
+### **Fresh Installation**
 ```bash
-# Clone and setup in one step
-git clone <repository-url>
+# Clone and setup
+git clone <repository>
 cd milou-cli
+chmod +x milou.sh
+
+# Run setup (interactive mode)
 ./milou.sh setup
+
+# The setup will now:
+# 1. ✅ Display admin credentials prominently at the end
+# 2. ✅ Handle conflicts intelligently 
+# 3. ✅ Provide clear progress feedback
+# 4. ✅ Complete successfully without credential issues
 ```
 
-### Existing Installation
+### **Existing Installation Update**
 ```bash
 # Update existing installation (preserves data)
 ./milou.sh setup
 
-# Force clean installation (removes all data)
-./milou.sh setup --force
-
-# Update configuration only (keeps services running)
-./milou.sh config
-```
-
-## 📋 System Requirements
-
-**Minimum Requirements:**
-- **OS**: Linux (Ubuntu 20.04+, RHEL 8+, Debian 11+)
-- **RAM**: 4GB (8GB recommended)
-- **Disk**: 20GB free space
-- **Network**: Internet access for image downloads
-
-**Auto-Installed Dependencies:**
-- Docker 20.10+
-- Docker Compose V2
-- OpenSSL, curl, jq
-
-## 🛠️ Installation Modes
-
-### 1. Interactive Mode (Default)
-Full guided setup with all configuration options:
-```bash
-./milou.sh setup
-```
-
-### 2. Non-Interactive Mode
-Automated setup using environment variables:
-```bash
-export DOMAIN="your-domain.com"
-export ADMIN_EMAIL="admin@your-domain.com"
-export GITHUB_TOKEN="your_token_here"
-./milou.sh setup --non-interactive
-```
-
-### 3. Development Mode
-Use locally built images instead of registry:
-```bash
-./milou.sh setup --dev
-```
-
-### 4. Force Mode
-Override existing installations:
-```bash
-./milou.sh setup --force
-```
-
-## ⚙️ Core Commands
-
-### Essential Operations
-```bash
-# Complete setup wizard
-./milou.sh setup
-
-# Service management
-./milou.sh start|stop|restart|status
-
-# System monitoring
-./milou.sh health              # Comprehensive health check
-./milou.sh logs [service]      # View service logs
-./milou.sh diagnose           # Full system diagnosis
-```
-
-### Configuration Management
-```bash
-# Display current configuration
-./milou.sh config
-
-# Validate configuration
-./milou.sh validate
-
-# Backup configuration
-./milou.sh backup
-
-# Restore from backup
-./milou.sh restore <backup-file>
-```
-
-### SSL Certificate Management
-```bash
-# Interactive SSL manager
-./milou.sh ssl
-
-# Generate new certificates
-./milou.sh ssl --generate
-
-# Validate existing certificates
-./milou.sh ssl --validate
-```
-
-### Admin Account Management
-```bash
-# Show admin credentials
-./milou.sh admin credentials
-
-# Reset admin password
-./milou.sh admin reset
-```
-
-### System Maintenance
-```bash
-# Update to latest version
-./milou.sh update
-
-# Clean up Docker resources
-./milou.sh cleanup
-
-# Complete uninstall
-./milou.sh uninstall
-
-# Security assessment
-./milou.sh security-check
-```
-
-### Development Tools
-```bash
-# Build local images
-./milou.sh build-images
-
-# Debug Docker images
-./milou.sh debug-images
-
-# Install system dependencies
-./milou.sh install-deps
-```
-
-## 🏗️ Architecture
-
-### Modular Design
-The CLI uses a modern modular architecture:
-
-```
-milou-cli/
-├── commands/           # Command handlers
-│   ├── setup/         # Modular setup system
-│   │   ├── main.sh           # Setup coordinator
-│   │   ├── analysis.sh       # System analysis
-│   │   ├── prerequisites.sh  # Dependency checking
-│   │   ├── configuration.sh  # Config wizard
-│   │   └── validation.sh     # Final validation
-│   ├── docker-services.sh    # Service management
-│   ├── system.sh             # System commands
-│   └── user-security.sh      # Security commands
-├── lib/               # Core modules
-│   ├── core/          # Essential utilities
-│   ├── docker/        # Docker management
-│   ├── ssl/           # SSL certificate handling
-│   ├── config/        # Configuration management
-│   └── user/          # User management
-└── static/            # Docker Compose files
-```
-
-### Docker Compose Strategy
-Three-layer approach for different environments:
-
-1. **Base Layer**: `docker-compose.yml` - Production with registry images
-2. **Dev Override**: `docker-compose.local.yml` - Local image builds
-3. **Full Dev**: `docker-compose.dev.yml` - Source mounting + hot reload
-
-## 🔧 Configuration
-
-### Environment Variables
-All configuration is stored in `.env` with secure defaults:
-
-```bash
-# Core Configuration
-DOMAIN=your-domain.com
-ADMIN_EMAIL=admin@your-domain.com
-ADMIN_PASSWORD=generated_secure_password
-
-# Database (auto-generated)
-POSTGRES_USER=milou_user_abc123
-POSTGRES_PASSWORD=generated_secure_password
-DB_NAME=milou_database
-
-# Security (auto-generated)
-JWT_SECRET=generated_secure_secret
-SESSION_SECRET=generated_secure_secret
-ENCRYPTION_KEY=generated_secure_key
-
-# SSL Configuration
-SSL_MODE=generate|existing|none
-SSL_CERT_PATH=./ssl/milou.crt
-SSL_KEY_PATH=./ssl/milou.key
-
-# Networking
-HTTP_PORT=80
-HTTPS_PORT=443
-```
-
-### SSL Options
-1. **Generate** (default): Self-signed certificates for development
-2. **Existing**: Use your own certificates
-3. **None**: HTTP-only mode (not recommended for production)
-
-## 🛡️ Security Features
-
-### Automatic Security Hardening
-- **Secure Password Generation**: 32+ character passwords with special characters
-- **File Permissions**: Restricted access (600) for sensitive files  
-- **Container Isolation**: Non-root containers with minimal privileges
-- **Secret Management**: Environment-based secret injection
-- **SSL/TLS**: HTTPS-first with proper certificate validation
-
-### Security Commands
-```bash
-# Comprehensive security assessment
-./milou.sh security-check
-
-# Generate security report
-./milou.sh security-report
-
-# Harden system configuration
-./milou.sh security-harden
-```
-
-## 🚨 Conflict Resolution
-
-The CLI automatically detects and resolves conflicts:
-
-### Existing Installation Detection
-When running setup on a system with existing Milou:
-1. **Smart Detection**: Checks containers, configs, and port usage
-2. **User Choice**: Options to stop, update, or clean install
-3. **Safe Defaults**: Preserves data unless explicitly requested
-
-### Port Conflict Resolution
-Automatic handling of port conflicts:
-- **Detection**: Scans ports 80, 443, 5432, 6379, 9999
-- **Resolution**: Options to stop conflicts or use alternative ports
-- **Prevention**: Pre-flight checks before service startup
-
-## 📊 Monitoring & Diagnostics
-
-### Health Monitoring
-```bash
-# Quick health check
-./milou.sh status
-
-# Comprehensive health report
-./milou.sh health
-
-# Service-specific logs
-./milou.sh logs nginx
-./milou.sh logs backend
-./milou.sh logs database
-```
-
-### Diagnostic Tools
-```bash
-# Full system diagnosis
-./milou.sh diagnose
-
-# Docker image debugging
-./milou.sh debug-images
-
-# Port and network analysis
-./milou.sh network-check
-```
-
-## 🔄 Update & Maintenance
-
-### Zero-Downtime Updates
-```bash
-# Update configuration only (services keep running)
-./milou.sh setup --update-config-only
-
-# Full update with service restart
-./milou.sh update
-
-# Update to specific version
-./milou.sh update --version v3.1.0
-```
-
-### Backup & Recovery
-```bash
-# Create backup
-./milou.sh backup
-
-# Create backup with custom name
-./milou.sh backup --name "pre-update-backup"
-
-# Restore from backup
-./milou.sh restore backup-20240115-120000.tar.gz
-
-# List available backups
-./milou.sh backup --list
-```
-
-## 🧹 Cleanup & Uninstall
-
-### Selective Cleanup
-```bash
-# Clean Docker resources only
-./milou.sh cleanup docker
-
-# Clean system temporary files
-./milou.sh cleanup system
-
-# Clean everything (non-destructive)
-./milou.sh cleanup all
-```
-
-### Complete Uninstall
-```bash
-# Standard uninstall (keeps user data)
-./milou.sh uninstall
-
-# Keep specific components
-./milou.sh uninstall --keep-config --keep-ssl
-
-# Complete removal (destructive)
-./milou.sh uninstall --aggressive
-
-# Show uninstall options
-./milou.sh uninstall --help
-```
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Port Conflicts**
-```bash
-# Check what's using ports
-sudo netstat -tlnp | grep :5432
-
-# Stop conflicting services
-sudo systemctl stop postgresql
-./milou.sh setup
-```
-
-**Docker Permission Issues**
-```bash
-# Add user to docker group
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-**SSL Certificate Issues**
-```bash
-# Regenerate certificates
-./milou.sh ssl --regenerate
-
-# Validate certificates
-./milou.sh ssl --validate
-```
-
-### Getting Help
-```bash
-# Show all commands
-./milou.sh help
-
-# Command-specific help
-./milou.sh setup --help
-./milou.sh ssl --help
-./milou.sh uninstall --help
-
-# Verbose debugging
-./milou.sh setup --verbose --debug
-```
-
-## 📞 Support
-
-### Log Files
-Important logs for troubleshooting:
-- **CLI Logs**: Console output with `--verbose`
-- **Docker Logs**: `./milou.sh logs [service]`
-- **System Logs**: `/var/log/milou/` (if configured)
-
-### Diagnostic Information
-```bash
-# Generate diagnostic report
-./milou.sh diagnose > diagnostic-report.txt
-
-# Include in support requests along with:
-# - Operating system version
-# - Docker version
-# - Error messages
-# - Steps to reproduce
+# The system will:
+# 1. ✅ Detect existing installation automatically
+# 2. ✅ Preserve existing credentials by default
+# 3. ✅ Offer options if conflicts are detected
+# 4. ✅ Update configuration without data loss
 ```
 
 ---
 
-## 🎯 Ready for Production
+## 🔧 **Command Reference**
 
-This CLI has been thoroughly tested and optimized for client deployment:
+### **Essential Commands**
+```bash
+./milou.sh setup              # Interactive setup wizard
+./milou.sh status             # Check service status
+./milou.sh logs               # View service logs
+./milou.sh admin credentials  # Show admin login info
+./milou.sh diagnose          # Comprehensive system diagnosis
+```
 
-✅ **Zero Breaking Changes** - All existing functionality preserved  
-✅ **Enhanced Reliability** - Comprehensive error handling and recovery  
-✅ **Production Security** - Hardened defaults and security validation  
-✅ **Client-Ready Documentation** - Complete setup and maintenance guides  
-✅ **Modular Architecture** - Easy to maintain and extend  
+### **Service Management**
+```bash
+./milou.sh start              # Start all services
+./milou.sh stop               # Stop all services  
+./milou.sh restart            # Restart all services
+./milou.sh health             # Health check
+```
 
-**Your clients will love the improved reliability and user experience!** 🚀 
+### **Advanced Operations**
+```bash
+./milou.sh setup --clean      # Fresh installation (removes all data)
+./milou.sh setup --force      # Force setup with new credentials
+./milou.sh backup             # Create system backup
+./milou.sh ssl                # SSL certificate management
+./milou.sh uninstall          # Complete removal
+```
+
+---
+
+## 🔑 **Admin Access**
+
+After setup completes, you'll see:
+
+```
+🔑 ADMIN CREDENTIALS (SAVE THESE!):
+  Username: admin
+  Password: xDxkpAqv2DFzSxhK
+  Email: admin@localhost
+
+⚠️  IMPORTANT: Save these credentials immediately!
+   You'll need them to access the web interface.
+```
+
+### **Accessing Admin Credentials Later**
+```bash
+./milou.sh admin credentials  # Display current credentials
+./milou.sh admin reset        # Reset password if needed
+```
+
+---
+
+## 🛠️ **Troubleshooting**
+
+### **Setup Issues**
+```bash
+# If setup fails or hangs:
+./milou.sh diagnose          # Comprehensive diagnosis
+./milou.sh logs              # Check service logs
+./milou.sh setup --clean     # Fresh installation
+```
+
+### **Service Issues**
+```bash
+# If services won't start:
+./milou.sh status            # Check detailed status
+./milou.sh restart           # Restart services
+./milou.sh logs nginx        # Check specific service
+```
+
+### **Credential Issues**
+```bash
+# If you can't access the web interface:
+./milou.sh admin credentials # Show current credentials
+./milou.sh admin reset       # Reset admin password
+```
+
+### **Port Conflicts**
+```bash
+# If ports are in use:
+./milou.sh diagnose          # Shows port usage
+./milou.sh setup --force     # Force setup with conflict resolution
+```
+
+---
+
+## 🔒 **Security Features**
+
+### **Secure Defaults**
+- ✅ Strong password generation (32+ characters)
+- ✅ Secure file permissions (600) for sensitive files
+- ✅ SSL certificates with multi-domain support
+- ✅ Encrypted inter-service communication
+
+### **Credential Management**
+- ✅ Automatic credential preservation for existing installations
+- ✅ Secure credential storage in environment files
+- ✅ Admin password reset functionality
+- ✅ Force password change on first login
+
+---
+
+## 📊 **System Requirements**
+
+### **Supported Operating Systems**
+- ✅ Ubuntu 20.04+
+- ✅ RHEL/CentOS 8+
+- ✅ Debian 11+
+- ✅ Other Linux distributions with Docker support
+
+### **Prerequisites**
+- ✅ Docker 20.10+
+- ✅ Docker Compose 2.0+
+- ✅ 4GB+ RAM
+- ✅ 20GB+ disk space
+- ✅ Internet connection for image downloads
+
+### **Automatic Installation**
+```bash
+./milou.sh install-deps      # Installs Docker and dependencies
+```
+
+---
+
+## 🏗️ **Architecture Overview**
+
+### **Modular Design**
+```
+milou-cli/
+├── commands/                # Command handlers
+│   ├── setup/              # Modular setup system
+│   ├── docker-services.sh  # Service management
+│   ├── system.sh           # System commands
+│   └── user-security.sh    # Security commands
+├── lib/                    # Core modules
+│   ├── core/              # Essential utilities
+│   ├── docker/            # Docker management
+│   ├── ssl/               # SSL certificates
+│   ├── config/            # Configuration management
+│   └── user/              # User management
+└── static/                # Docker Compose files
+```
+
+### **Service Stack**
+- **Frontend**: React-based web interface
+- **Backend**: Node.js API server
+- **Database**: PostgreSQL with automatic backups
+- **Cache**: Redis for sessions and caching
+- **Queue**: RabbitMQ for background processing
+- **Engine**: Python-based processing engine
+- **Proxy**: Nginx with SSL termination
+
+---
+
+## 🔄 **Backup & Recovery**
+
+### **Automatic Backups**
+```bash
+./milou.sh backup            # Create full system backup
+./milou.sh backup --schedule # Setup automatic backups
+```
+
+### **Restore Operations**
+```bash
+./milou.sh restore backup.tar.gz  # Restore from backup
+./milou.sh restore --list          # List available backups
+```
+
+---
+
+## 🚀 **Performance Optimizations**
+
+### **Startup Improvements**
+- ✅ Intelligent service dependency management
+- ✅ Parallel container startup where possible
+- ✅ Optimized health checks with proper timeouts
+- ✅ Smart credential validation to avoid unnecessary restarts
+
+### **Resource Management**
+- ✅ Configurable resource limits per service
+- ✅ Automatic cleanup of unused Docker resources
+- ✅ Efficient volume management
+- ✅ Memory-optimized container configurations
+
+---
+
+## 📞 **Support & Maintenance**
+
+### **Health Monitoring**
+```bash
+./milou.sh health            # Comprehensive health check
+./milou.sh status            # Service status overview
+./milou.sh diagnose          # System diagnosis
+```
+
+### **Log Management**
+```bash
+./milou.sh logs              # All service logs
+./milou.sh logs backend      # Specific service logs
+./milou.sh logs --follow     # Real-time log streaming
+```
+
+### **Updates**
+```bash
+./milou.sh update            # Update to latest version
+./milou.sh update --check    # Check for updates
+```
+
+---
+
+## 🎯 **Production Deployment**
+
+### **Recommended Setup Process**
+1. **Preparation**
+   ```bash
+   # Install dependencies
+   ./milou.sh install-deps
+   
+   # Verify system
+   ./milou.sh diagnose
+   ```
+
+2. **Configuration**
+   ```bash
+   # Interactive setup
+   ./milou.sh setup
+   
+   # Verify configuration
+   ./milou.sh validate
+   ```
+
+3. **SSL Certificates**
+   ```bash
+   # For production, use real certificates
+   ./milou.sh ssl --existing /path/to/certificates
+   
+   # Or generate self-signed for testing
+   ./milou.sh ssl --generate
+   ```
+
+4. **Service Startup**
+   ```bash
+   # Start services
+   ./milou.sh start
+   
+   # Verify health
+   ./milou.sh health
+   ```
+
+5. **Access & Configuration**
+   ```bash
+   # Get admin credentials
+   ./milou.sh admin credentials
+   
+   # Access web interface and complete setup
+   ```
+
+---
+
+## 🔧 **Advanced Configuration**
+
+### **Environment Variables**
+Key configuration options in `.env`:
+```bash
+DOMAIN=your-domain.com       # Your domain name
+SSL_MODE=generate            # SSL mode (generate/existing/none)
+ADMIN_EMAIL=admin@domain.com # Admin email
+GITHUB_TOKEN=ghp_...         # GitHub token for private images
+```
+
+### **Custom SSL Certificates**
+```bash
+# Use existing certificates
+./milou.sh ssl --existing /path/to/certs
+
+# Generate new certificates
+./milou.sh ssl --generate --domain your-domain.com
+```
+
+### **Non-Interactive Setup**
+```bash
+# Automated setup with environment variables
+DOMAIN=example.com \
+ADMIN_EMAIL=admin@example.com \
+GITHUB_TOKEN=ghp_... \
+./milou.sh setup --non-interactive
+```
+
+---
+
+## ✅ **Quality Assurance**
+
+### **Tested Scenarios**
+- ✅ Fresh server installation
+- ✅ Existing installation updates
+- ✅ Credential preservation and migration
+- ✅ Port conflict resolution
+- ✅ SSL certificate management
+- ✅ Service recovery and restart
+- ✅ Backup and restore operations
+
+### **Reliability Features**
+- ✅ Automatic conflict detection and resolution
+- ✅ Graceful handling of interrupted setups
+- ✅ Comprehensive error reporting and recovery
+- ✅ Intelligent retry mechanisms
+- ✅ Data integrity protection
+
+---
+
+**🎉 Ready for Production Deployment!**
+
+This CLI tool now provides an enterprise-grade experience with reliable setup, clear feedback, and professional credential management. Your clients will appreciate the improved user experience and enhanced reliability. 

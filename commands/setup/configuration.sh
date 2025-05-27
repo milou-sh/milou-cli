@@ -500,28 +500,53 @@ _save_configuration_to_env() {
         local has_database_volume=false
         local has_redis_volume=false
         local has_rabbitmq_volume=false
+        local has_substantial_data=false
         
+        # Check for volumes with better detection logic
         if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_pgdata" >/dev/null 2>&1 || \
-           docker volume inspect "static_pgdata" >/dev/null 2>&1; then
+           docker volume inspect "static_pgdata" >/dev/null 2>&1 || \
+           docker volume inspect "milou-static_pgdata" >/dev/null 2>&1; then
             has_database_volume=true
             milou_log "DEBUG" "Found existing database volume"
+            
+            # Check if volume has substantial data (not just initialization)
+            local volume_name
+            for vol in "${DOCKER_PROJECT_NAME:-static}_pgdata" "static_pgdata" "milou-static_pgdata"; do
+                if docker volume inspect "$vol" >/dev/null 2>&1; then
+                    volume_name="$vol"
+                    break
+                fi
+            done
+            
+            if [[ -n "$volume_name" ]]; then
+                local volume_size
+                volume_size=$(docker run --rm -v "$volume_name:/data" alpine sh -c 'du -s /data 2>/dev/null | cut -f1' 2>/dev/null || echo "0")
+                if [[ "$volume_size" -gt 10240 ]]; then  # More than 10MB suggests real data
+                    has_substantial_data=true
+                    milou_log "DEBUG" "Database volume contains substantial data (${volume_size}KB)"
+                fi
+            fi
         fi
         
         if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_redis_data" >/dev/null 2>&1 || \
-           docker volume inspect "static_redis_data" >/dev/null 2>&1; then
+           docker volume inspect "static_redis_data" >/dev/null 2>&1 || \
+           docker volume inspect "milou-static_redis_data" >/dev/null 2>&1; then
             has_redis_volume=true
             milou_log "DEBUG" "Found existing Redis volume"
         fi
         
         if docker volume inspect "${DOCKER_PROJECT_NAME:-static}_rabbitmq_data" >/dev/null 2>&1 || \
-           docker volume inspect "static_rabbitmq_data" >/dev/null 2>&1; then
+           docker volume inspect "static_rabbitmq_data" >/dev/null 2>&1 || \
+           docker volume inspect "milou-static_rabbitmq_data" >/dev/null 2>&1; then
             has_rabbitmq_volume=true
             milou_log "DEBUG" "Found existing RabbitMQ volume"
         fi
         
-        # Determine if we should preserve credentials
-        if [[ -n "$existing_postgres_user" && -n "$existing_postgres_password" && \
-              ( "$has_database_volume" == "true" || "$has_redis_volume" == "true" || "$has_rabbitmq_volume" == "true" ) ]]; then
+        # IMPROVED: Determine if we should preserve credentials based on multiple factors
+        local credentials_exist=$([[ -n "$existing_postgres_user" && -n "$existing_postgres_password" ]] && echo "true" || echo "false")
+        local volumes_exist=$([[ "$has_database_volume" == "true" || "$has_redis_volume" == "true" || "$has_rabbitmq_volume" == "true" ]] && echo "true" || echo "false")
+        
+        if [[ "$credentials_exist" == "true" && "$volumes_exist" == "true" ]]; then
             preserve_existing_credentials=true
             is_fresh_install=false
             
@@ -529,17 +554,25 @@ _save_configuration_to_env() {
             milou_log "INFO" "   • Database volume: $([ "$has_database_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
             milou_log "INFO" "   • Redis volume: $([ "$has_redis_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
             milou_log "INFO" "   • RabbitMQ volume: $([ "$has_rabbitmq_volume" == "true" ] && echo "✅ Found" || echo "❌ Missing")"
-            milou_log "SUCCESS" "🔒 Preserving existing credentials to maintain data integrity"
+            milou_log "INFO" "   • Substantial data: $([ "$has_substantial_data" == "true" ] && echo "✅ Yes" || echo "❌ No")"
             
-            # Use existing credentials
-            postgres_user="$existing_postgres_user"
-            postgres_password="$existing_postgres_password"
-            postgres_db="${existing_postgres_db:-milou_database}"
-            redis_password="$existing_redis_password"
-            rabbitmq_user="$existing_rabbitmq_user"
-            rabbitmq_password="$existing_rabbitmq_password"
-            session_secret="$existing_session_secret"
-            encryption_key="$existing_encryption_key"
+            # Default to preserving credentials unless explicitly overridden
+            if [[ "${FORCE:-false}" != "true" && "${CLEAN_INSTALL:-false}" != "true" ]]; then
+                milou_log "SUCCESS" "🔒 Preserving existing credentials to maintain data integrity"
+                
+                # Use existing credentials
+                postgres_user="$existing_postgres_user"
+                postgres_password="$existing_postgres_password"
+                postgres_db="${existing_postgres_db:-milou_database}"
+                redis_password="$existing_redis_password"
+                rabbitmq_user="$existing_rabbitmq_user"
+                rabbitmq_password="$existing_rabbitmq_password"
+                session_secret="$existing_session_secret"
+                encryption_key="$existing_encryption_key"
+            else
+                milou_log "WARN" "🚨 FORCE/CLEAN mode enabled - will generate new credentials"
+                preserve_existing_credentials=false
+            fi
             
         elif [[ "${FORCE:-false}" == "true" ]]; then
             milou_log "WARN" "🚨 FORCE mode enabled - generating new credentials despite existing installation"
@@ -558,14 +591,14 @@ _save_configuration_to_env() {
             preserve_existing_credentials=false
             is_fresh_install=true
         else
-            # Found env file but no volumes or credentials - treat as partial installation
-            milou_log "INFO" "📋 Found configuration file but no data volumes - treating as partial installation"
+            # Found env file but no substantial volumes or credentials - treat as partial installation
+            milou_log "INFO" "📋 Found configuration file but no substantial data volumes - updating configuration"
             preserve_existing_credentials=false
             is_fresh_install=false
         fi
         
-        # Offer user choice for credential handling (only in interactive mode)
-        if [[ "${SETUP_MODE:-interactive}" == "interactive" && "$preserve_existing_credentials" == "true" ]]; then
+        # Offer user choice for credential handling (only in interactive mode and when we have real data)
+        if [[ "${SETUP_MODE:-interactive}" == "interactive" && "$has_substantial_data" == "true" && "$preserve_existing_credentials" == "true" ]]; then
             echo
             milou_log "INFO" "🤔 Credential Management Options:"
             echo "  1. 🔒 Preserve existing credentials (Recommended - maintains data access)"

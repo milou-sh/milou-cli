@@ -405,15 +405,239 @@ handle_debug_images() {
 
 # System diagnosis command handler
 handle_diagnose() {
-    milou_log "INFO" "🩺 Running comprehensive system diagnosis..."
+    milou_log "INFO" "🔍 Running comprehensive system diagnosis..."
+    echo
     
-    if command -v run_system_diagnosis >/dev/null 2>&1; then
-        run_system_diagnosis "$@"
+    # System information
+    echo -e "${BOLD}🖥️  System Information:${NC}"
+    echo "  OS: $(uname -s) $(uname -r)"
+    echo "  User: $(whoami)"
+    echo "  Working Directory: $(pwd)"
+    echo "  Script Directory: $SCRIPT_DIR"
+    echo
+    
+    # Configuration status
+    echo -e "${BOLD}⚙️  Configuration Status:${NC}"
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ -f "$env_file" ]]; then
+        echo "  ✅ Configuration file exists: $env_file"
+        local file_size=$(stat -f%z "$env_file" 2>/dev/null || stat -c%s "$env_file" 2>/dev/null || echo "unknown")
+        echo "  📏 File size: ${file_size} bytes"
+        echo "  🔒 Permissions: $(ls -la "$env_file" | cut -d' ' -f1)"
+        
+        # Extract key configuration without exposing secrets
+        echo
+        echo -e "${BOLD}🔧 Key Configuration (sanitized):${NC}"
+        if grep -q "^DOMAIN=" "$env_file"; then
+            local domain=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- | tr -d '"')
+            echo "  🌐 Domain: $domain"
+        fi
+        if grep -q "^SSL_MODE=" "$env_file"; then
+            local ssl_mode=$(grep "^SSL_MODE=" "$env_file" | cut -d'=' -f2- | tr -d '"')
+            echo "  🔒 SSL Mode: $ssl_mode"
+        fi
+        if grep -q "^ADMIN_EMAIL=" "$env_file"; then
+            local admin_email=$(grep "^ADMIN_EMAIL=" "$env_file" | cut -d'=' -f2- | tr -d '"')
+            echo "  👤 Admin Email: $admin_email"
+        fi
+        
+        # Check for credential fields (without exposing values)
+        local cred_fields=("POSTGRES_PASSWORD" "REDIS_PASSWORD" "JWT_SECRET" "SESSION_SECRET" "ENCRYPTION_KEY")
+        echo "  🔑 Credentials present:"
+        for field in "${cred_fields[@]}"; do
+            if grep -q "^${field}=" "$env_file"; then
+                local value=$(grep "^${field}=" "$env_file" | cut -d'=' -f2- | tr -d '"')
+                local length=${#value}
+                echo "     • $field: ${length} characters"
+            else
+                echo "     • $field: ❌ MISSING"
+            fi
+        done
     else
-        milou_log "ERROR" "System diagnosis function not available"
-        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize diagnostic modules"
-        return 1
+        echo "  ❌ No configuration file found"
+        echo "  💡 Run './milou.sh setup' to create configuration"
     fi
+    echo
+    
+    # Docker status
+    echo -e "${BOLD}🐳 Docker Status:${NC}"
+    if command -v docker >/dev/null 2>&1; then
+        echo "  ✅ Docker CLI available"
+        if docker info >/dev/null 2>&1; then
+            echo "  ✅ Docker daemon accessible"
+            local docker_version=$(docker --version | cut -d' ' -f3 | tr -d ',')
+            echo "  📦 Docker version: $docker_version"
+            
+            # Docker Compose
+            if docker compose version >/dev/null 2>&1; then
+                echo "  ✅ Docker Compose available"
+                local compose_version=$(docker compose version --short 2>/dev/null || echo "unknown")
+                echo "  🔧 Compose version: $compose_version"
+            else
+                echo "  ❌ Docker Compose not available"
+            fi
+        else
+            echo "  ❌ Docker daemon not accessible"
+            echo "     💡 Try: sudo systemctl start docker"
+        fi
+    else
+        echo "  ❌ Docker not installed"
+        echo "     💡 Run installation: ./milou.sh install-deps"
+    fi
+    echo
+    
+    # Container status
+    echo -e "${BOLD}📦 Container Status:${NC}"
+    local containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "")
+    if [[ -n "$containers" ]]; then
+        local running_count=0
+        local total_count=0
+        
+        echo "  Container Details:"
+        while IFS=$'\t' read -r name status ports; do
+            ((total_count++))
+            local status_icon="🔴"
+            if [[ "$status" =~ Up|running ]]; then
+                ((running_count++))
+                status_icon="🟢"
+            elif [[ "$status" =~ Restarting ]]; then
+                status_icon="🟡"
+            fi
+            
+            echo "     $status_icon $name"
+            echo "        Status: $status"
+            if [[ -n "$ports" ]]; then
+                echo "        Ports: $ports"
+            fi
+        done <<< "$containers"
+        
+        echo
+        echo "  📊 Summary: $running_count/$total_count containers running"
+    else
+        echo "  ❌ No Milou containers found"
+        echo "     💡 Run: ./milou.sh setup"
+    fi
+    echo
+    
+    # Volume status
+    echo -e "${BOLD}💾 Volume Status:${NC}"
+    local volumes=$(docker volume ls --filter "name=milou" --filter "name=static" --format "{{.Name}}\t{{.Driver}}" 2>/dev/null || echo "")
+    if [[ -n "$volumes" ]]; then
+        echo "  Data Volumes:"
+        while IFS=$'\t' read -r name driver; do
+            if [[ -n "$name" ]]; then
+                echo "     📁 $name ($driver)"
+                
+                # Get volume size
+                local volume_size
+                volume_size=$(docker run --rm -v "$name:/data" alpine sh -c 'du -sh /data 2>/dev/null | cut -f1' 2>/dev/null || echo "unknown")
+                echo "        Size: $volume_size"
+            fi
+        done <<< "$volumes"
+    else
+        echo "  ❌ No data volumes found"
+    fi
+    echo
+    
+    # Network status
+    echo -e "${BOLD}🌐 Network Status:${NC}"
+    local critical_ports=("80:HTTP" "443:HTTPS" "5432:PostgreSQL" "6379:Redis" "9999:API")
+    local ports_in_use=0
+    
+    echo "  Port Status:"
+    for port_info in "${critical_ports[@]}"; do
+        local port="${port_info%:*}"
+        local service="${port_info#*:}"
+        
+        if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
+            echo "     🟢 Port $port ($service) - In use"
+            ((ports_in_use++))
+        else
+            echo "     🔴 Port $port ($service) - Available"
+        fi
+    done
+    
+    echo "  📊 Ports in use: $ports_in_use/${#critical_ports[@]}"
+    echo
+    
+    # SSL certificate status
+    echo -e "${BOLD}🔒 SSL Certificate Status:${NC}"
+    local ssl_dir="${SCRIPT_DIR}/ssl"
+    if [[ -d "$ssl_dir" ]]; then
+        if [[ -f "$ssl_dir/milou.crt" && -f "$ssl_dir/milou.key" ]]; then
+            echo "  ✅ SSL certificates found"
+            
+            # Check certificate validity
+            if openssl x509 -in "$ssl_dir/milou.crt" -noout >/dev/null 2>&1; then
+                echo "  ✅ Certificate format is valid"
+                
+                # Get certificate details
+                local cert_subject=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -subject 2>/dev/null | sed 's/subject=//')
+                local cert_expiry=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -dates 2>/dev/null | grep "notAfter" | cut -d'=' -f2)
+                
+                echo "     Subject: $cert_subject"
+                echo "     Expires: $cert_expiry"
+            else
+                echo "  ❌ Certificate format is invalid"
+            fi
+        else
+            echo "  ❌ SSL certificates missing"
+            echo "     💡 Generate with: ./milou.sh ssl --generate"
+        fi
+    else
+        echo "  ❌ SSL directory not found: $ssl_dir"
+    fi
+    echo
+    
+    # Quick connectivity test
+    echo -e "${BOLD}🔌 Connectivity Test:${NC}"
+    if [[ $ports_in_use -gt 0 ]]; then
+        # Test HTTP
+        local http_status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost" 2>/dev/null || echo "000")
+        if [[ "$http_status" =~ ^[23] ]]; then
+            echo "  ✅ HTTP (port 80): $http_status"
+        else
+            echo "  ⚠️  HTTP (port 80): $http_status"
+        fi
+        
+        # Test HTTPS (if available)
+        if netstat -tlnp 2>/dev/null | grep -q ":443 "; then
+            local https_status=$(curl -s -k -o /dev/null -w "%{http_code}" "https://localhost" 2>/dev/null || echo "000")
+            if [[ "$https_status" =~ ^[23] ]]; then
+                echo "  ✅ HTTPS (port 443): $https_status"
+            else
+                echo "  ⚠️  HTTPS (port 443): $https_status"
+            fi
+        fi
+    else
+        echo "  ⚠️  No services appear to be running"
+    fi
+    echo
+    
+    # Recommendations
+    echo -e "${BOLD}💡 Recommendations:${NC}"
+    
+    if [[ ! -f "${SCRIPT_DIR}/.env" ]]; then
+        echo "  1. Run initial setup: ./milou.sh setup"
+    elif [[ $running_count -eq 0 ]]; then
+        echo "  1. Start services: ./milou.sh start"
+        echo "  2. Check logs: ./milou.sh logs"
+    elif [[ $running_count -lt $total_count ]]; then
+        echo "  1. Check service logs: ./milou.sh logs"
+        echo "  2. Restart services: ./milou.sh restart"
+    else
+        echo "  1. All services appear to be running ✅"
+        echo "  2. Access web interface using displayed URL"
+    fi
+    
+    if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+        echo "  🚨 Fix Docker daemon access first"
+    fi
+    
+    echo
+    milou_log "SUCCESS" "✅ Diagnosis complete"
+    
+    return 0
 }
 
 # Cleanup test files command handler (DEPRECATED - use uninstall instead)

@@ -248,7 +248,7 @@ setup_check_existing_installation() {
     else
         if command -v milou_prompt_user >/dev/null 2>&1; then
             milou_prompt_user "Choose option" "1" "choice" "false" 3
-            choice="${REPLY:-1}"
+            choice="${choice:-1}"
         else
             # Fallback prompt method
             echo -n "Choose option (default: 1): "

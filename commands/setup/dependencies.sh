@@ -18,6 +18,15 @@ if ! command -v milou_log >/dev/null 2>&1; then
     fi
 fi
 
+# Ensure prerequisites module is available
+if ! command -v milou_prereq_install_docker >/dev/null 2>&1; then
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/prerequisites.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/prerequisites.sh" 2>/dev/null || {
+            milou_log "WARN" "Cannot load prerequisites module"
+        }
+    fi
+fi
+
 # =============================================================================
 # Dependencies Installation Functions
 # =============================================================================
@@ -162,57 +171,116 @@ _install_dependencies_smart() {
 
 # Install Docker
 _install_docker() {
-    # Load system prerequisites module if available
-    if command -v milou_install_docker_automated >/dev/null 2>&1; then
-        milou_install_docker_automated
+    # Use proper prerequisites module function if available
+    if command -v milou_prereq_install_docker >/dev/null 2>&1; then
+        milou_prereq_install_docker "true"
         return $?
     fi
     
-    # Fallback basic Docker installation
-    milou_log "INFO" "Installing Docker using distribution package manager..."
+    # Fallback to official Docker installation script
+    milou_log "INFO" "Installing Docker using official installation script..."
     
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update && apt-get install -y docker.io docker-compose-plugin
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y docker docker-compose-plugin
-    elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y docker docker-compose-plugin
+    # Download and run the official Docker installation script
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL https://get.docker.com -o get-docker.sh; then
+            chmod +x get-docker.sh
+            if sh get-docker.sh; then
+                rm -f get-docker.sh
+                
+                # Add current user to docker group if not root
+                if [[ $EUID -ne 0 && -n "${USER:-}" ]]; then
+                    milou_log "INFO" "Adding user $USER to docker group..."
+                    usermod -aG docker "$USER" || true
+                    milou_log "WARN" "Please log out and back in for Docker group changes to take effect"
+                fi
+                
+                # Start and enable Docker service
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl start docker && systemctl enable docker
+                fi
+                
+                milou_log "SUCCESS" "Docker installed successfully"
+                return 0
+            else
+                rm -f get-docker.sh
+                milou_log "ERROR" "Docker installation script failed"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "Failed to download Docker installation script"
+            return 1
+        fi
     else
-        milou_log "ERROR" "Unsupported package manager for Docker installation"
+        milou_log "ERROR" "curl is required for Docker installation"
         return 1
     fi
-    
-    # Start and enable Docker service
-    systemctl start docker && systemctl enable docker
-    
-    return $?
 }
 
 # Install Docker Compose
 _install_docker_compose() {
-    # Modern Docker installs include Compose as a plugin
+    # Check if Docker Compose plugin is already available
     if docker compose version >/dev/null 2>&1; then
         milou_log "SUCCESS" "Docker Compose plugin already available"
         return 0
     fi
     
-    # Install standalone Docker Compose if needed
-    milou_log "INFO" "Installing standalone Docker Compose..."
+    # Try to install Docker Compose plugin via package manager first
+    milou_log "INFO" "Installing Docker Compose plugin..."
+    
+    local pkg_manager
+    if command -v apt-get >/dev/null 2>&1; then
+        pkg_manager="apt"
+    elif command -v yum >/dev/null 2>&1; then
+        pkg_manager="yum"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_manager="dnf"
+    fi
+    
+    # Try package manager installation
+    if [[ -n "$pkg_manager" ]]; then
+        case "$pkg_manager" in
+            "apt")
+                if apt-get update && apt-get install -y docker-compose-plugin; then
+                    milou_log "SUCCESS" "Docker Compose plugin installed via apt"
+                    return 0
+                fi
+                ;;
+            "yum")
+                if yum install -y docker-compose-plugin; then
+                    milou_log "SUCCESS" "Docker Compose plugin installed via yum"
+                    return 0
+                fi
+                ;;
+            "dnf")
+                if dnf install -y docker-compose-plugin; then
+                    milou_log "SUCCESS" "Docker Compose plugin installed via dnf"
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+    
+    # If package manager installation failed, try standalone installation
+    milou_log "INFO" "Package manager installation failed, installing standalone Docker Compose..."
     
     local compose_url="https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"
     
     if command -v curl >/dev/null 2>&1; then
-        curl -L "$compose_url" -o /usr/local/bin/docker-compose
+        if curl -L "$compose_url" -o /usr/local/bin/docker-compose; then
+            chmod +x /usr/local/bin/docker-compose
+            milou_log "SUCCESS" "Standalone Docker Compose installed"
+            return 0
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget "$compose_url" -O /usr/local/bin/docker-compose
-    else
-        milou_log "ERROR" "No curl or wget available for downloading Docker Compose"
-        return 1
+        if wget "$compose_url" -O /usr/local/bin/docker-compose; then
+            chmod +x /usr/local/bin/docker-compose
+            milou_log "SUCCESS" "Standalone Docker Compose installed"
+            return 0
+        fi
     fi
     
-    chmod +x /usr/local/bin/docker-compose
-    
-    return $?
+    milou_log "ERROR" "Failed to install Docker Compose"
+    return 1
 }
 
 # Install system tools

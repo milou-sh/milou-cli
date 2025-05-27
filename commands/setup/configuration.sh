@@ -148,14 +148,16 @@ _collect_basic_configuration() {
     
     # Domain configuration
     if [[ -z "${DOMAIN:-}" ]]; then
+        local domain
         milou_prompt_user "Enter domain name" "${DOMAIN:-localhost}" "domain" "false" 3
-        DOMAIN="$REPLY"
+        DOMAIN="$domain"
     fi
     
     # Admin email configuration
     if [[ -z "${ADMIN_EMAIL:-}" ]]; then
+        local email
         milou_prompt_user "Enter admin email" "${ADMIN_EMAIL:-admin@localhost}" "email" "false" 3
-        ADMIN_EMAIL="$REPLY"
+        ADMIN_EMAIL="$email"
     fi
     
     milou_log "DEBUG" "Basic config collected: domain=$DOMAIN, email=$ADMIN_EMAIL"
@@ -174,13 +176,15 @@ _collect_domain_configuration() {
     
     # Port configuration
     if [[ -z "${HTTP_PORT:-}" ]]; then
+        local port
         milou_prompt_user "HTTP port" "80" "port" "false" 3
-        HTTP_PORT="$REPLY"
+        HTTP_PORT="$port"
     fi
     
     if [[ -z "${HTTPS_PORT:-}" ]]; then
+        local port
         milou_prompt_user "HTTPS port" "443" "port" "false" 3
-        HTTPS_PORT="$REPLY"
+        HTTPS_PORT="$port"
     fi
     
     # Check port availability
@@ -212,8 +216,9 @@ _collect_ssl_configuration() {
     echo "  3. Skip SSL setup (HTTP only - not recommended)"
     echo
     
+    local choice
     milou_prompt_user "Select SSL option [1-3]" "1" "choice" "false" 3
-    local ssl_choice="$REPLY"
+    local ssl_choice="$choice"
     
     case "$ssl_choice" in
         1)
@@ -224,10 +229,11 @@ _collect_ssl_configuration() {
         2)
             SSL_MODE="existing"
             milou_log "INFO" "📁 Using existing SSL certificates"
+            local path
             milou_prompt_user "Path to certificate file (.crt)" "" "path" "false" 3
-            SSL_CERT_PATH="$REPLY"
+            SSL_CERT_PATH="$path"
             milou_prompt_user "Path to private key file (.key)" "" "path" "false" 3
-            SSL_KEY_PATH="$REPLY"
+            SSL_KEY_PATH="$path"
             
             # Validate paths
             if [[ ! -f "$SSL_CERT_PATH" ]]; then
@@ -266,16 +272,18 @@ _collect_admin_configuration() {
     
     # Admin username
     if [[ -z "${ADMIN_USERNAME:-}" ]]; then
+        local username
         milou_prompt_user "Admin username" "admin" "username" "false" 3
-        ADMIN_USERNAME="$REPLY"
+        ADMIN_USERNAME="$username"
     fi
     
     # Admin password
     if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
         milou_log "INFO" "💡 Leave empty to generate a secure password"
+        local password
         milou_prompt_user "Admin password" "" "password" "true" 3
-        if [[ -n "$REPLY" ]]; then
-            ADMIN_PASSWORD="$REPLY"
+        if [[ -n "$password" ]]; then
+            ADMIN_PASSWORD="$password"
         else
             ADMIN_PASSWORD=$(milou_generate_secure_random 16)
             milou_log "INFO" "Generated secure password: $ADMIN_PASSWORD"
@@ -294,8 +302,9 @@ _collect_security_configuration() {
     # GitHub token for private registries
     if [[ -z "${GITHUB_TOKEN:-}" ]]; then
         milou_log "INFO" "GitHub token is required for accessing private container images"
+        local token
         milou_prompt_user "GitHub Personal Access Token" "" "token" "false" 3
-        GITHUB_TOKEN="$REPLY"
+        GITHUB_TOKEN="$token"
         
         # Validate GitHub token
         if ! milou_validate_github_token "$GITHUB_TOKEN"; then
@@ -332,8 +341,8 @@ _validate_collected_configuration() {
         ((validation_errors++))
     fi
     
-    # Validate email
-    if [[ ! "$ADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    # Validate email (allow localhost for development)
+    if [[ ! "$ADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,}|localhost)$ ]]; then
         milou_log "ERROR" "Invalid email format: $ADMIN_EMAIL"
         ((validation_errors++))
     fi

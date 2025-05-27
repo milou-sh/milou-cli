@@ -69,7 +69,7 @@ _prompt_mode_selection() {
     local choice
     if command -v milou_prompt_user >/dev/null 2>&1; then
         milou_prompt_user "Select setup mode (1-3)" "1" "choice" "false" 3
-        choice="$REPLY"
+        choice="$choice"
     else
         echo -n "Select setup mode (1-3) [1]: "
         read -r choice

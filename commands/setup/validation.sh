@@ -116,12 +116,22 @@ _validate_system_readiness() {
         done
     fi
     
-    # Check GitHub token if present
+    # Check GitHub token if present and authenticate with Docker registry
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         if ! milou_validate_github_token "$GITHUB_TOKEN" "false"; then
             milou_log "WARN" "⚠️  GitHub token validation failed (continuing without registry auth)"
         else
             milou_log "DEBUG" "✅ GitHub token validated"
+            
+            # Authenticate with GitHub Container Registry
+            milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
+            if echo "$GITHUB_TOKEN" | docker login ghcr.io -u token --password-stdin >/dev/null 2>&1; then
+                milou_log "SUCCESS" "✅ Docker registry authentication successful"
+            else
+                milou_log "WARN" "⚠️  Docker registry authentication failed"
+                milou_log "INFO" "💡 Ensure your token has 'read:packages' scope"
+                # Don't fail setup, but warn user
+            fi
         fi
     fi
     

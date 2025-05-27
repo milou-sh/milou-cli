@@ -287,8 +287,8 @@ cmd_setup() {
                 fi
             else
                 log "ERROR" "❌ Failed to install dependencies"
-                return 1
-            fi
+            return 1
+        fi
         # In interactive mode, ask user with clear explanation
         else
             echo -e "${BOLD}${GREEN}🔧 Automatic Installation Available!${NC}"
@@ -1066,7 +1066,25 @@ main() {
     
     # Initialize modules
     users_init
-    docker_init
+    
+    # Only initialize Docker for commands that need it
+    case "$command" in
+        "start"|"stop"|"restart"|"status"|"logs"|"health"|"shell"|"cleanup"|"build-images"|"seed")
+            # These commands require Docker to be available
+            if ! docker_init; then
+                log "ERROR" "Docker is required for this command"
+                log "INFO" "Install Docker first with: ${CYAN}./milou.sh install-deps${NC}"
+                exit 1
+            fi
+            ;;
+        "setup")
+            # Setup command handles Docker installation, so don't fail if Docker is missing
+            docker_init 2>/dev/null || true
+            ;;
+        *)
+            # Other commands don't require Docker
+            ;;
+    esac
     
     log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
     
@@ -1094,6 +1112,26 @@ main() {
             cmd_status "${args[@]}"
             ;;
         "logs")
+            if [[ ${#args[@]} -eq 0 ]]; then
+                echo -e "${BOLD}${BLUE}📋 Service Logs${NC}"
+                echo
+                echo -e "${BOLD}Usage:${NC} ${CYAN}milou.sh logs${NC} ${YELLOW}[service-name]${NC} ${DIM}[options]${NC}"
+                echo
+                echo -e "${BOLD}Available services:${NC}"
+                if command -v docker >/dev/null 2>&1 && docker ps --format "{{.Names}}" | grep -q "milou-"; then
+                    docker ps --filter "name=milou-" --format "  {{.Names}} ({{.Status}})"
+                else
+                    echo -e "  ${DIM}No running services found${NC}"
+                    echo -e "  ${DIM}Start services first with: ${CYAN}milou.sh start${NC}"
+                fi
+                echo
+                echo -e "${BOLD}Examples:${NC}"
+                echo -e "  ${CYAN}milou.sh logs${NC}           ${DIM}# Show all service logs${NC}"
+                echo -e "  ${CYAN}milou.sh logs engine${NC}    ${DIM}# Show engine logs only${NC}"
+                echo -e "  ${CYAN}milou.sh logs db${NC}        ${DIM}# Show database logs${NC}"
+                echo -e "  ${CYAN}milou.sh logs --follow${NC}  ${DIM}# Follow logs in real-time${NC}"
+                exit 1
+            fi
             cmd_logs "${args[@]}"
             ;;
         "health")
@@ -1109,6 +1147,23 @@ main() {
             cmd_backup "${args[@]}"
             ;;
         "restore")
+            if [[ ${#args[@]} -eq 0 ]]; then
+                echo -e "${BOLD}${BLUE}📥 Restore from Backup${NC}"
+                echo
+                echo -e "${BOLD}Usage:${NC} ${CYAN}milou.sh restore${NC} ${YELLOW}<backup-file>${NC}"
+                echo
+                echo -e "${BOLD}Examples:${NC}"
+                echo -e "  ${CYAN}milou.sh restore${NC} ${DIM}./backups/milou-backup-20240101-120000.tar.gz${NC}"
+                echo -e "  ${CYAN}milou.sh restore${NC} ${DIM}/path/to/backup.tar.gz${NC}"
+                echo
+                echo -e "${BOLD}Available backups:${NC}"
+                if [[ -d "./backups" ]]; then
+                    find ./backups -name "*.tar.gz" -type f -printf "  %f\n" 2>/dev/null | head -5 || echo "  No backups found"
+                else
+                    echo "  No backup directory found"
+                fi
+                exit 1
+            fi
             cmd_restore "${args[@]}"
             ;;
         "update")
@@ -1121,12 +1176,52 @@ main() {
             cmd_credentials "${args[@]}"
             ;;
         "ssl")
+            if [[ ${#args[@]} -eq 0 ]]; then
+                echo -e "${BOLD}${BLUE}🔒 SSL Certificate Management${NC}"
+                echo
+                echo -e "${BOLD}Usage:${NC} ${CYAN}milou.sh ssl${NC} ${YELLOW}<command>${NC}"
+                echo
+                echo -e "${BOLD}Available commands:${NC}"
+                echo -e "  ${CYAN}status${NC}       Show certificate status"
+                echo -e "  ${CYAN}generate${NC}     Generate new SSL certificate"
+                echo -e "  ${CYAN}validate${NC}     Validate existing certificate"
+                echo -e "  ${CYAN}setup${NC}        Interactive SSL setup"
+                echo -e "  ${CYAN}renew${NC}        Auto-renew certificate if needed"
+                echo -e "  ${CYAN}check-expiry${NC} Check certificate expiration"
+                echo -e "  ${CYAN}auto-setup${NC}   Setup automatic renewal (cron)"
+                echo -e "  ${CYAN}force-renew${NC}  Force certificate renewal"
+                echo
+                echo -e "${BOLD}Examples:${NC}"
+                echo -e "  ${CYAN}milou.sh ssl status${NC}"
+                echo -e "  ${CYAN}milou.sh ssl setup${NC}"
+                echo -e "  ${CYAN}milou.sh ssl generate --domain example.com${NC}"
+                exit 1
+            fi
             cmd_ssl "${args[@]}"
             ;;
         "cleanup")
             cmd_cleanup "${args[@]}"
             ;;
         "shell")
+            if [[ ${#args[@]} -eq 0 ]]; then
+                echo -e "${BOLD}${BLUE}🐚 Container Shell Access${NC}"
+                echo
+                echo -e "${BOLD}Usage:${NC} ${CYAN}milou.sh shell${NC} ${YELLOW}[service-name]${NC}"
+                echo
+                echo -e "${BOLD}Available services:${NC}"
+                if command -v docker >/dev/null 2>&1 && docker ps --format "{{.Names}}" | grep -q "milou-"; then
+                    docker ps --filter "name=milou-" --format "  {{.Names}} ({{.Status}})"
+                else
+                    echo -e "  ${DIM}No running services found${NC}"
+                    echo -e "  ${DIM}Start services first with: ${CYAN}milou.sh start${NC}"
+                fi
+                echo
+                echo -e "${BOLD}Examples:${NC}"
+                echo -e "  ${CYAN}milou.sh shell${NC}         ${DIM}# Access main app container${NC}"
+                echo -e "  ${CYAN}milou.sh shell engine${NC}  ${DIM}# Access engine container${NC}"
+                echo -e "  ${CYAN}milou.sh shell db${NC}      ${DIM}# Access database container${NC}"
+                exit 1
+            fi
             cmd_shell "${args[@]}"
             ;;
         "user-status")
@@ -1151,8 +1246,33 @@ main() {
             show_help
             ;;
         *)
-            log "ERROR" "Unknown command: $command"
-            log "INFO" "Use 'milou help' to see available commands"
+            echo -e "${BOLD}${RED}❌ Unknown command: ${command}${NC}"
+            echo
+            echo -e "${BOLD}${BLUE}💡 Did you mean one of these?${NC}"
+            
+            # Suggest similar commands
+            case "$command" in
+                "stat"|"st")
+                    echo -e "  ${CYAN}milou.sh status${NC}     ${DIM}# Show service status${NC}"
+                    ;;
+                "log"|"lg")
+                    echo -e "  ${CYAN}milou.sh logs${NC}       ${DIM}# View service logs${NC}"
+                    ;;
+                "install"|"deps")
+                    echo -e "  ${CYAN}milou.sh install-deps${NC} ${DIM}# Install dependencies${NC}"
+                    ;;
+                "config"|"cfg")
+                    echo -e "  ${CYAN}milou.sh config${NC}     ${DIM}# View configuration${NC}"
+                    ;;
+                *)
+                    echo -e "  ${CYAN}milou.sh setup${NC}      ${DIM}# Interactive setup${NC}"
+                    echo -e "  ${CYAN}milou.sh start${NC}      ${DIM}# Start services${NC}"
+                    echo -e "  ${CYAN}milou.sh status${NC}     ${DIM}# Show status${NC}"
+                    echo -e "  ${CYAN}milou.sh help${NC}       ${DIM}# Show all commands${NC}"
+                    ;;
+            esac
+            echo
+            echo -e "${BOLD}${BLUE}📚 For complete help:${NC} ${CYAN}milou.sh help${NC}"
             exit 1
             ;;
     esac

@@ -19,14 +19,8 @@ GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
 # GitHub Authentication Functions
 # =============================================================================
 
-# Validate GitHub token format
-validate_github_token() {
-    local token="$1"
-    if [[ ! "$token" =~ ^gh[pousr]_[A-Za-z0-9_]{36,251}$ ]]; then
-        return 1
-    fi
-    return 0
-}
+# REMOVED: validate_github_token() - now consolidated in lib/core/validation.sh
+# Use milou_validate_github_token() instead
 
 # Test GitHub token authentication
 test_github_authentication() {
@@ -35,8 +29,8 @@ test_github_authentication() {
     log "STEP" "Testing GitHub authentication..."
     log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
     
-    # Validate token format first
-    if ! validate_input "$token" "github_token"; then
+    # Validate token format first (using consolidated function)
+    if ! milou_validate_github_token "$token" "true"; then
         log "DEBUG" "Token format validation failed"
         return 1
     fi
@@ -209,6 +203,6 @@ get_available_image_tags() {
 # Export Functions
 # =============================================================================
 
-export -f validate_github_token
+# validate_github_token removed - use milou_validate_github_token from core/validation.sh
 export -f test_github_authentication
 export -f get_available_image_tags 

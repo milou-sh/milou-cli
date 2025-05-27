@@ -44,27 +44,78 @@ milou_validate_github_token() {
     return 0
 }
 
-# Test GitHub authentication (consolidates multiple implementations)
+# Test GitHub authentication (ENHANCED - consolidates multiple implementations)
 milou_test_github_authentication() {
     local token="$1"
     local quiet="${2:-false}"
+    local test_registry="${3:-true}"
     
     if ! milou_validate_github_token "$token"; then
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Testing GitHub authentication..."
+    [[ "$quiet" != "true" ]] && milou_log "STEP" "Testing GitHub authentication..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
     
-    # Test authentication by trying to login
-    if echo "$token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "GitHub authentication successful"
-        docker logout ghcr.io >/dev/null 2>&1
-        return 0
+    # Test authentication with GitHub API first
+    local api_base="${GITHUB_API_BASE:-https://api.github.com}"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing API call to: $api_base/user"
+    
+    local response
+    local curl_error
+    curl_error=$(mktemp)
+    
+    # Disable errexit temporarily to capture curl errors properly
+    set +e
+    response=$(curl -s -H "Authorization: Bearer $token" \
+               -H "Accept: application/vnd.github.v3+json" \
+               "$api_base/user" 2>"$curl_error")
+    local curl_exit_code=$?
+    set -e
+    
+    if [[ $curl_exit_code -ne 0 ]]; then
+        milou_log "ERROR" "Failed to connect to GitHub API"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "curl command failed with exit code: $curl_exit_code"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "curl stderr: $(cat "$curl_error" 2>/dev/null || echo 'no error output')"
+        rm -f "$curl_error"
+        return 1
+    fi
+    
+    rm -f "$curl_error"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "API call succeeded, response length: ${#response}"
+    
+    # Check if authentication was successful
+    local username=""
+    if echo "$response" | grep -q '"login"'; then
+        username=$(echo "$response" | grep -o '"login": *"[^"]*"' | cut -d'"' -f4)
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "GitHub API authentication successful (user: $username)"
+        
+        # Test Docker registry authentication if requested
+        if [[ "$test_registry" == "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing Docker registry authentication..."
+            if echo "$token" | docker login ghcr.io -u "${username:-token}" --password-stdin >/dev/null 2>&1; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker registry authentication successful"
+                docker logout ghcr.io >/dev/null 2>&1
+                return 0
+            else
+                milou_log "ERROR" "Docker registry authentication failed"
+                milou_log "INFO" "💡 Ensure your token has 'read:packages' and 'write:packages' scopes"
+                return 1
+            fi
+        else
+            return 0
+        fi
     else
-        milou_log "ERROR" "GitHub authentication failed"
-        milou_log "INFO" "💡 Please check your token permissions"
-        milou_log "INFO" "💡 Required scopes: read:packages, write:packages"
-        milou_log "INFO" "💡 Create token at: https://github.com/settings/tokens"
+        milou_log "ERROR" "GitHub API authentication failed"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "API Response: $response"
+        
+        # Check for specific error messages
+        if echo "$response" | grep -q "Bad credentials"; then
+            milou_log "INFO" "💡 The provided token is invalid or expired"
+        elif echo "$response" | grep -q "rate limit"; then
+            milou_log "INFO" "💡 GitHub API rate limit exceeded, try again later"
+        fi
+        
         return 1
     fi
 }
@@ -149,26 +200,63 @@ milou_check_connectivity() {
 # Docker Validation (consolidates 5+ implementations)
 # =============================================================================
 
-# Check Docker installation and accessibility
+# Check Docker installation and accessibility (ENHANCED - consolidates 6+ implementations)
 milou_check_docker_access() {
-    local quiet="${1:-false}"
+    local check_daemon="${1:-true}"
+    local check_permissions="${2:-true}"
+    local check_compose="${3:-true}"
+    local quiet="${4:-false}"
+    
+    local errors=0
     
     # Check if Docker command exists
     if ! command -v docker >/dev/null 2>&1; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker is not installed"
-        return 1
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
+        ((errors++))
     fi
     
-    # Check if Docker daemon is accessible
-    if ! docker info >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot access Docker daemon"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo systemctl start docker"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo usermod -aG docker \$USER && newgrp docker"
-        return 1
+    # Check daemon access
+    if [[ "$check_daemon" == "true" ]]; then
+        if ! docker info >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot access Docker daemon"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo systemctl start docker"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo usermod -aG docker \$USER && newgrp docker"
+            ((errors++))
+        else
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker daemon accessible"
+        fi
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker access validation passed"
-    return 0
+    # Check user permissions
+    if [[ "$check_permissions" == "true" ]]; then
+        if [[ $EUID -ne 0 ]] && ! groups | grep -q docker; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "User not in docker group"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Add user to docker group: sudo usermod -aG docker \$USER"
+            ((errors++))
+        else
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker permissions OK"
+        fi
+    fi
+    
+    # Check Docker Compose
+    if [[ "$check_compose" == "true" ]]; then
+        if ! docker compose version >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose not available"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Update Docker to get the compose plugin"
+            ((errors++))
+        else
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Compose available"
+        fi
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker access validation passed"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker validation failed with $errors error(s)"
+        return 1
+    fi
 }
 
 # Check Docker Compose availability
@@ -183,6 +271,102 @@ milou_check_docker_compose() {
     
     [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Compose validation passed"
     return 0
+}
+
+# Check Docker resource usage and system health (consolidates resource checking)
+milou_check_docker_resources() {
+    local check_disk="${1:-true}"
+    local check_memory="${2:-true}"
+    local check_connectivity="${3:-true}"
+    local quiet="${4:-false}"
+    
+    local warnings=0
+    
+    if ! docker info >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker daemon not accessible for resource checking"
+        return 1
+    fi
+    
+    # Check disk usage
+    if [[ "$check_disk" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking Docker disk usage..."
+        if docker system df >/dev/null 2>&1; then
+            local disk_usage
+            disk_usage=$(docker system df 2>/dev/null)
+            
+            # Extract total size and check if cleanup is needed
+            local total_size
+            total_size=$(echo "$disk_usage" | grep "Total" | awk '{print $3}' | sed 's/[^0-9.]//g' 2>/dev/null || echo "0")
+            if [[ -n "$total_size" ]] && command -v bc >/dev/null 2>&1; then
+                if (( $(echo "$total_size > 10" | bc -l 2>/dev/null || echo "0") )); then
+                    [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker using significant disk space (${total_size}GB)"
+                    [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Consider running: docker system prune -f"
+                    ((warnings++))
+                fi
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Cannot check Docker disk usage"
+            ((warnings++))
+        fi
+    fi
+    
+    # Check memory usage of running containers
+    if [[ "$check_memory" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking container memory usage..."
+        local container_count
+        container_count=$(docker ps --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
+        
+        if [[ "$container_count" -gt 0 ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found $container_count running containers"
+            
+            # Check for containers using excessive memory (basic check)
+            if docker stats --no-stream --format "{{.MemUsage}}" >/dev/null 2>&1; then
+                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Container memory stats accessible"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Cannot access container memory stats"
+                ((warnings++))
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "No running containers found"
+        fi
+    fi
+    
+    # Check network connectivity to registries
+    if [[ "$check_connectivity" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking registry connectivity..."
+        if command -v curl >/dev/null 2>&1; then
+            # Test GitHub Container Registry
+            local ghcr_response
+            ghcr_response=$(curl -s -o /dev/null -w "%{http_code}" "https://ghcr.io/v2/" 2>/dev/null || echo "000")
+            if [[ "$ghcr_response" == "200" || "$ghcr_response" == "401" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "TRACE" "GitHub Container Registry accessible"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub Container Registry not accessible (HTTP: $ghcr_response)"
+                ((warnings++))
+            fi
+            
+            # Test Docker Hub connectivity
+            local dockerhub_response
+            dockerhub_response=$(curl -s -o /dev/null -w "%{http_code}" "https://registry-1.docker.io/v2/" 2>/dev/null || echo "000")
+            if [[ "$dockerhub_response" == "200" || "$dockerhub_response" == "401" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Hub accessible"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker Hub not accessible (HTTP: $dockerhub_response)"
+                ((warnings++))
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "curl not available for connectivity testing"
+            ((warnings++))
+        fi
+    fi
+    
+    if [[ $warnings -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker resource check passed"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker resource check completed with $warnings warning(s)"
+        return 0  # Return 0 for warnings, 1 only for critical errors
+    fi
 }
 
 # Validate Docker Compose configuration
@@ -468,7 +652,7 @@ validate_ssl_certificates() { milou_validate_ssl_certificates "$@"; }
 # Export all functions
 export -f milou_validate_github_token milou_test_github_authentication
 export -f milou_validate_domain milou_check_connectivity
-export -f milou_check_docker_access milou_check_docker_compose milou_validate_docker_compose_config
+export -f milou_check_docker_access milou_check_docker_resources milou_check_docker_compose milou_validate_docker_compose_config
 export -f milou_command_exists milou_version_compare milou_check_port_availability
 export -f milou_validate_ssl_certificates milou_is_running_as_root milou_user_exists
 export -f milou_validate_docker_permissions milou_validate_path

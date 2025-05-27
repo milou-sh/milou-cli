@@ -95,10 +95,10 @@ setup_docker_registry_interactive() {
         fi
     fi
     
-    # Validate token format
-    if ! validate_github_token "$token"; then
+    # Validate token format (using consolidated function)
+    if ! milou_validate_github_token "$token"; then
         milou_log "ERROR" "Invalid GitHub token format"
-        milou_log "INFO" "Expected format: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        milou_log "INFO" "Expected format: ghp_[40_character_token]"
         return 1
     fi
     

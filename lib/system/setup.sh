@@ -69,7 +69,7 @@ validate_input() {
                 echo -e "${RED}Error: GitHub token is required${NC_PROMPT}"
                 return 1
             fi
-            if ! validate_github_token "$input"; then
+            if ! milou_validate_github_token "$input"; then
                 echo -e "${RED}Error: Invalid GitHub token format${NC_PROMPT}"
                 echo "Token should start with 'ghp_', 'gho_', 'ghu_', 'ghs_', or 'ghr_'"
                 return 1
@@ -107,22 +107,12 @@ validate_input() {
     return 0
 }
 
-# Test GitHub token authentication
+# Test GitHub token authentication (CONSOLIDATED - uses enhanced core function)
 test_github_auth() {
     local token="$1"
     
-    echo -e "${BLUE}[INFO]${NC_PROMPT} Testing GitHub authentication..."
-    
-    # Test authentication by trying to login
-    if echo "$token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
-        echo -e "${GREEN}[SUCCESS]${NC_PROMPT} GitHub authentication successful"
-        docker logout ghcr.io >/dev/null 2>&1
-        return 0
-    else
-        echo -e "${RED}[ERROR]${NC_PROMPT} GitHub authentication failed"
-        echo "Please check your token permissions and try again"
-        return 1
-    fi
+    # Use the enhanced consolidated function from core/validation.sh
+    milou_test_github_authentication "$token" "false" "true"
 }
 
 # SSL setup is now handled by the dedicated SSL module
@@ -365,7 +355,7 @@ interactive_setup_wizard() {
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
         echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
         log "INFO" "🚀 Development mode: Skipping GitHub authentication (using local images)"
-        local github_token="dev_mode_dummy_token"
+        local github_token="DEV_MODE_PLACEHOLDER"
         echo
     else
         echo -e "${BOLD}Step 2: GitHub Authentication${NC}"

@@ -134,17 +134,11 @@ stop_conflicting_services() {
     esac
 }
 
-# Check if Docker daemon is accessible
+# REMOVED: check_docker_access() - now consolidated in lib/core/validation.sh
+# Use milou_check_docker_access() instead
 check_docker_access() {
-    if ! docker info >/dev/null 2>&1; then
-        log "ERROR" "Cannot access Docker daemon"
-        log "INFO" "Please ensure:"
-        log "INFO" "  1. Docker is installed and running"
-        log "INFO" "  2. Current user has Docker permissions"
-        log "INFO" "  3. Try: sudo usermod -aG docker \$USER && newgrp docker"
-        return 1
-    fi
-    return 0
+    # Backward compatibility wrapper
+    milou_check_docker_access "true" "true" "false" "false"
 }
 
 # Create Docker networks if they don't exist

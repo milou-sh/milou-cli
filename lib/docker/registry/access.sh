@@ -244,49 +244,23 @@ debug_docker_images() {
     return 0
 }
 
-# Check Docker resource usage and limits
+# REMOVED: check_docker_resources() - now consolidated in lib/core/validation.sh
+# Use milou_check_docker_resources() instead
 check_docker_resources() {
     milou_log "STEP" "Checking Docker resource usage..."
     
-    if ! docker info >/dev/null 2>&1; then
-        milou_log "ERROR" "Docker daemon not accessible"
-        return 1
-    fi
+    # Use the enhanced consolidated function
+    milou_check_docker_resources "true" "true" "true" "false"
+    local result=$?
     
-    # Check disk usage
-    milou_log "INFO" "💾 Docker Disk Usage:"
-    if docker system df >/dev/null 2>&1; then
-        local disk_usage
-        disk_usage=$(docker system df 2>/dev/null)
-        echo "$disk_usage" | while IFS= read -r line; do
-            milou_log "INFO" "  $line"
-        done
-        
-        # Check if cleanup is needed
-        local total_size
-        total_size=$(echo "$disk_usage" | grep "Total" | awk '{print $3}' | sed 's/[^0-9.]//g' || echo "0")
-        if [[ -n "$total_size" ]] && (( $(echo "$total_size > 10" | bc -l 2>/dev/null || echo "0") )); then
-            milou_log "WARN" "⚠️  Docker is using significant disk space (${total_size}GB)"
-            milou_log "INFO" "💡 Consider running: docker system prune -f"
-        fi
+    # Show detailed output for this specific context
+    if [[ $result -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ Docker resource check completed"
     else
-        milou_log "WARN" "Cannot check Docker disk usage"
+        milou_log "ERROR" "❌ Docker resource check failed"
     fi
     
-    # Check memory usage of running containers
-    milou_log "INFO" "🧠 Container Memory Usage:"
-    local container_stats
-    container_stats=$(docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}" 2>/dev/null || echo "")
-    
-    if [[ -n "$container_stats" ]]; then
-        echo "$container_stats" | while IFS= read -r line; do
-            milou_log "INFO" "  $line"
-        done
-    else
-        milou_log "INFO" "  No running containers"
-    fi
-    
-    return 0
+    return $result
 }
 
 # Clean up Docker resources

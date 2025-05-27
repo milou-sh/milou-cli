@@ -106,66 +106,115 @@ resume_after_user_switch() {
 # =============================================================================
 
 show_help() {
-    log "INFO" "${BOLD}${PURPLE}Milou Management CLI v${SCRIPT_VERSION}${NC}"
+    # Use direct echo with color codes instead of log function to avoid emoji prefixes
+    echo
+    echo -e "${BOLD}${PURPLE}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${PURPLE}║                    🚀 Milou Management CLI v${SCRIPT_VERSION}                     ║${NC}"
+    echo -e "${BOLD}${PURPLE}║              Production-Ready Container Management Platform              ║${NC}"
+    echo -e "${BOLD}${PURPLE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
     
-    log "INFO" "${BOLD}USAGE:${NC}"
-    echo "    milou.sh [COMMAND] [OPTIONS]"
+    echo -e "${BOLD}${BLUE}📋 USAGE:${NC}"
+    echo -e "    ${WHITE}milou.sh${NC} ${CYAN}[COMMAND]${NC} ${YELLOW}[OPTIONS]${NC}"
     echo
     
-    log "INFO" "${BOLD}COMMANDS:${NC}"
-    echo "    ${CYAN}setup${NC}             Interactive setup wizard (installs dependencies & configures Milou)"
-    echo "    ${CYAN}start${NC}             Start all services"
-    echo "    ${CYAN}stop${NC}              Stop all services"
-    echo "    ${CYAN}restart${NC}           Restart all services"
-    echo "    ${CYAN}status${NC}            Show detailed status of all services"
-    echo "    ${CYAN}logs${NC} [SERVICE]    View logs for all or specific service"
-    echo "    ${CYAN}health${NC}            Run comprehensive health checks"
-    echo "    ${CYAN}config${NC}            View current configuration"
-    echo "    ${CYAN}validate${NC}          Validate configuration and environment"
-    echo "    ${CYAN}backup${NC}            Create system backup"
-    echo "    ${CYAN}restore${NC} [FILE]    Restore from backup file"
-    echo "    ${CYAN}update${NC}            Update to latest version"
-    echo "    ${CYAN}seed${NC}              Run database seeder to populate sample data"
-    echo "    ${CYAN}credentials${NC}       Display current login credentials and access URLs"
-    echo "    ${CYAN}ssl${NC}               Manage SSL certificates"
-    echo "    ${CYAN}cleanup${NC}           Clean up Docker resources"
-    echo "    ${CYAN}shell${NC} [SERVICE]   Get shell access to a running container"
-    echo "    ${CYAN}user-status${NC}       Show current user and permission status"
-    echo "    ${CYAN}create-user${NC}       Create dedicated milou user (requires sudo)"
-    echo "    ${CYAN}security-check${NC}    Run comprehensive security assessment"
-    echo "    ${CYAN}install-deps${NC}      Install system dependencies"
-    echo "    ${CYAN}build-images${NC}      Build Docker images locally for development"
-    echo "    ${CYAN}help${NC}              Show this help message"
+    echo -e "${BOLD}${BLUE}🎯 MAIN COMMANDS:${NC}"
+    echo -e "    ${CYAN}setup${NC}                 🚀 Interactive setup wizard (installs dependencies & configures Milou)"
+    echo -e "    ${CYAN}start${NC}                 ▶️  Start all services"
+    echo -e "    ${CYAN}stop${NC}                  ⏹️  Stop all services"
+    echo -e "    ${CYAN}restart${NC}               🔄 Restart all services"
+    echo -e "    ${CYAN}status${NC}                📊 Show detailed status of all services"
+    echo -e "    ${CYAN}health${NC}                🏥 Run comprehensive health checks"
     echo
     
-    log "INFO" "${BOLD}OPTIONS:${NC}"
-    echo "    ${CYAN}--verbose${NC}         Enable verbose output"
-    echo "    ${CYAN}--force${NC}           Force operations without confirmation"
-    echo "    ${CYAN}--dry-run${NC}         Show what would be done without executing"
-    echo "    ${CYAN}--token TOKEN${NC}     GitHub personal access token"
-    echo "    ${CYAN}--domain DOMAIN${NC}   Domain name for SSL certificates"
-    echo "    ${CYAN}--ssl-path PATH${NC}   Path to SSL certificates"
-    echo "    ${CYAN}--email EMAIL${NC}     Admin email address"
-    echo "    ${CYAN}--latest${NC}          Use latest Docker images (default)"
-    echo "    ${CYAN}--fixed-version${NC}   Use fixed/pinned Docker image versions"
-    echo "    ${CYAN}--non-interactive${NC} Run in non-interactive mode"
-    echo "    ${CYAN}--auto-create-user${NC} Automatically create milou user if needed"
-    echo "    ${CYAN}--skip-user-check${NC}  Skip user permission validation"
-    echo "    ${CYAN}--auto-install-deps${NC} Automatically install missing dependencies"
-    echo "    ${CYAN}--fresh-install${NC}   Optimize for fresh server installation"
-    echo "    ${CYAN}--dev${NC}             Enable development mode (use local Docker images)"
-    echo "    ${CYAN}--help, -h${NC}        Show this help message"
+    echo -e "${BOLD}${BLUE}🔧 MANAGEMENT COMMANDS:${NC}"
+    echo -e "    ${CYAN}logs${NC} ${DIM}[SERVICE]${NC}       📋 View logs for all or specific service"
+    echo -e "    ${CYAN}config${NC}                ⚙️  View current configuration"
+    echo -e "    ${CYAN}validate${NC}              ✅ Validate configuration and environment"
+    echo -e "    ${CYAN}credentials${NC}           🔐 Display current login credentials and access URLs"
+    echo -e "    ${CYAN}seed${NC}                  🌱 Run database seeder to populate sample data"
+    echo -e "    ${CYAN}shell${NC} ${DIM}[SERVICE]${NC}       🐚 Get shell access to a running container"
     echo
     
-    log "INFO" "${BOLD}EXAMPLES:${NC}"
-    echo "    milou.sh setup                    # Interactive setup (recommended for first-time users)"
-    echo "    milou.sh setup --fresh-install    # Optimized for fresh server installation"
-    echo "    milou.sh setup --token ghp_xxxx --domain example.com --non-interactive"
-    echo "    milou.sh install-deps             # Install Docker and prerequisites manually"
-    echo "    milou.sh start --verbose"
-    echo "    milou.sh backup"
-    echo "    milou.sh security-check --verbose"
+    echo -e "${BOLD}${BLUE}💾 BACKUP & MAINTENANCE:${NC}"
+    echo -e "    ${CYAN}backup${NC}                💾 Create system backup"
+    echo -e "    ${CYAN}restore${NC} ${DIM}[FILE]${NC}       📥 Restore from backup file"
+    echo -e "    ${CYAN}update${NC}                🔄 Update to latest version"
+    echo -e "    ${CYAN}cleanup${NC}               🧹 Clean up Docker resources"
+    echo
+    
+    echo -e "${BOLD}${BLUE}🔒 SECURITY & SSL:${NC}"
+    echo -e "    ${CYAN}ssl${NC}                   🔒 Manage SSL certificates"
+    echo -e "    ${CYAN}security-check${NC}        🛡️  Run comprehensive security assessment"
+    echo
+    
+    echo -e "${BOLD}${BLUE}👤 USER & SYSTEM:${NC}"
+    echo -e "    ${CYAN}user-status${NC}           👤 Show current user and permission status"
+    echo -e "    ${CYAN}create-user${NC}           👥 Create dedicated milou user (requires sudo)"
+    echo -e "    ${CYAN}install-deps${NC}          📦 Install system dependencies (Docker, etc.)"
+    echo -e "    ${CYAN}build-images${NC}          🔨 Build Docker images locally for development"
+    echo
+    
+    echo -e "${BOLD}${BLUE}❓ HELP:${NC}"
+    echo -e "    ${CYAN}help${NC}                  ❓ Show this help message"
+    echo
+    
+    echo -e "${BOLD}${YELLOW}⚙️  COMMON OPTIONS:${NC}"
+    echo -e "    ${GREEN}--verbose${NC}             📝 Enable verbose output"
+    echo -e "    ${GREEN}--force${NC}               💪 Force operations without confirmation"
+    echo -e "    ${GREEN}--dry-run${NC}             👁️  Show what would be done without executing"
+    echo -e "    ${GREEN}--non-interactive${NC}     🤖 Run in non-interactive mode"
+    echo -e "    ${GREEN}--help, -h${NC}            ❓ Show this help message"
+    echo
+    
+    echo -e "${BOLD}${YELLOW}🔧 SETUP OPTIONS:${NC}"
+    echo -e "    ${GREEN}--token${NC} ${DIM}TOKEN${NC}         🔑 GitHub personal access token"
+    echo -e "    ${GREEN}--domain${NC} ${DIM}DOMAIN${NC}       🌐 Domain name for SSL certificates"
+    echo -e "    ${GREEN}--email${NC} ${DIM}EMAIL${NC}         📧 Admin email address"
+    echo -e "    ${GREEN}--ssl-path${NC} ${DIM}PATH${NC}       📁 Path to SSL certificates"
+    echo -e "    ${GREEN}--auto-install-deps${NC}   📦 Automatically install missing dependencies"
+    echo -e "    ${GREEN}--fresh-install${NC}       🆕 Optimize for fresh server installation"
+    echo -e "    ${GREEN}--auto-create-user${NC}    👥 Automatically create milou user if needed"
+    echo -e "    ${GREEN}--skip-user-check${NC}     ⏭️  Skip user permission validation"
+    echo
+    
+    echo -e "${BOLD}${YELLOW}🐳 DOCKER OPTIONS:${NC}"
+    echo -e "    ${GREEN}--latest${NC}              🔄 Use latest Docker images (default)"
+    echo -e "    ${GREEN}--fixed-version${NC}       📌 Use fixed/pinned Docker image versions"
+    echo -e "    ${GREEN}--dev${NC}                 🛠️  Enable development mode (use local Docker images)"
+    echo
+    
+    echo -e "${BOLD}${GREEN}💡 QUICK START EXAMPLES:${NC}"
+    echo -e "    ${WHITE}# First-time setup (recommended)${NC}"
+    echo -e "    ${CYAN}milou.sh setup${NC}"
+    echo
+    echo -e "    ${WHITE}# Fresh server installation${NC}"
+    echo -e "    ${CYAN}milou.sh setup --fresh-install${NC}"
+    echo
+    echo -e "    ${WHITE}# Automated setup with custom domain${NC}"
+    echo -e "    ${CYAN}milou.sh setup --token ghp_xxxx --domain example.com --non-interactive${NC}"
+    echo
+    echo -e "    ${WHITE}# Install dependencies only${NC}"
+    echo -e "    ${CYAN}milou.sh install-deps${NC}"
+    echo
+    echo -e "    ${WHITE}# Start services with verbose logging${NC}"
+    echo -e "    ${CYAN}milou.sh start --verbose${NC}"
+    echo
+    echo -e "    ${WHITE}# Create backup${NC}"
+    echo -e "    ${CYAN}milou.sh backup${NC}"
+    echo
+    echo -e "    ${WHITE}# Security assessment${NC}"
+    echo -e "    ${CYAN}milou.sh security-check --verbose${NC}"
+    echo
+    
+    echo -e "${BOLD}${BLUE}📚 GETTING STARTED:${NC}"
+    echo -e "    ${WHITE}1.${NC} Run ${CYAN}milou.sh setup${NC} for interactive installation"
+    echo -e "    ${WHITE}2.${NC} Use ${CYAN}milou.sh start${NC} to launch services"
+    echo -e "    ${WHITE}3.${NC} Check ${CYAN}milou.sh status${NC} to verify everything is running"
+    echo -e "    ${WHITE}4.${NC} View ${CYAN}milou.sh credentials${NC} for login information"
+    echo
+    
+    echo -e "${DIM}For more information, visit: https://github.com/your-org/milou-cli${NC}"
     echo
 }
 
@@ -179,31 +228,38 @@ cmd_setup() {
     # Welcome message for interactive setup
     if [[ "${INTERACTIVE:-true}" == "true" ]]; then
         echo
-        log "INFO" "${BOLD}${PURPLE}Welcome to Milou CLI Setup!${NC}"
-        log "INFO" "This wizard will guide you through setting up Milou on your system."
+        echo -e "${BOLD}${PURPLE}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${PURPLE}║                        🚀 Welcome to Milou CLI Setup!                       ║${NC}"
+        echo -e "${BOLD}${PURPLE}║                                                                              ║${NC}"
+        echo -e "${BOLD}${PURPLE}║    This wizard will guide you through setting up Milou on your system      ║${NC}"
+        echo -e "${BOLD}${PURPLE}║                                                                              ║${NC}"
+        echo -e "${BOLD}${PURPLE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
         echo
     fi
     
     # Check prerequisites first
     if ! milou_check_prerequisites; then
         echo
-        log "WARN" "⚠️  Missing system dependencies detected!"
+        echo -e "${BOLD}${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${YELLOW}║                    ⚠️  Missing System Dependencies Detected!                ║${NC}"
+        echo -e "${BOLD}${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo
         
         # Show what's missing in a user-friendly way
+        echo -e "${BOLD}${BLUE}📋 The following components need to be installed:${NC}"
         echo
-        log "INFO" "The following components need to be installed:"
         
         # Check specific missing components
         if ! command -v docker >/dev/null 2>&1; then
-            echo "  ❌ Docker Engine - Container platform"
+            echo -e "  ${RED}❌ Docker Engine${NC} - Container platform for running Milou services"
         fi
         
         if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
-            echo "  ❌ Docker Compose - Multi-container orchestration"
+            echo -e "  ${RED}❌ Docker Compose${NC} - Multi-container orchestration tool"
         fi
         
         if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-            echo "  ❌ curl or wget - Download utilities"
+            echo -e "  ${RED}❌ curl or wget${NC} - Download utilities for fetching resources"
         fi
         
         local missing_basic=()
@@ -214,7 +270,7 @@ cmd_setup() {
         done
         
         if [[ ${#missing_basic[@]} -gt 0 ]]; then
-            echo "  ❌ Basic tools: ${missing_basic[*]}"
+            echo -e "  ${RED}❌ Basic tools${NC}: ${missing_basic[*]} - Archive and compression utilities"
         fi
         
         echo
@@ -235,15 +291,19 @@ cmd_setup() {
             fi
         # In interactive mode, ask user with clear explanation
         else
-            log "INFO" "Milou can automatically install these dependencies for you."
-            log "INFO" "This will:"
-            echo "  • Install Docker Engine and Docker Compose"
-            echo "  • Install basic system tools (curl, wget, tar, gzip)"
-            echo "  • Configure Docker to start automatically"
-            echo "  • Add your user to the docker group (if not root)"
+            echo -e "${BOLD}${GREEN}🔧 Automatic Installation Available!${NC}"
+            echo
+            echo -e "${BOLD}${BLUE}Milou can automatically install these dependencies for you.${NC}"
+            echo
+            echo -e "${BOLD}${CYAN}📦 This installation will:${NC}"
+            echo -e "  ${GREEN}✅${NC} Install Docker Engine and Docker Compose"
+            echo -e "  ${GREEN}✅${NC} Install basic system tools (curl, wget, tar, gzip)"
+            echo -e "  ${GREEN}✅${NC} Configure Docker to start automatically"
+            echo -e "  ${GREEN}✅${NC} Add your user to the docker group (if not root)"
+            echo -e "  ${GREEN}✅${NC} Set up proper permissions and security"
             echo
             
-            if ask_yes_no "Would you like Milou to install these dependencies automatically?" "y"; then
+            if ask_yes_no "🚀 Would you like Milou to install these dependencies automatically?" "y"; then
                 echo
                 log "INFO" "🔧 Installing dependencies... This may take a few minutes."
                 

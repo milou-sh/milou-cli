@@ -36,20 +36,6 @@ readonly MILOU_SSL_VALIDATION_LOADED="true"
 # Certificate Validation Functions
 # =============================================================================
 
-# REMOVED: validate_ssl_certificates() - now consolidated in lib/core/validation.sh
-# Use milou_validate_ssl_certificates() instead
-validate_ssl_certificates() {
-    local cert_file="$1"
-    local key_file="$2"
-    local domain="${3:-}"
-    
-    # Convert to directory path for consolidated function
-    local ssl_path
-    ssl_path=$(dirname "$cert_file")
-    
-    # Use the enhanced consolidated function
-    milou_validate_ssl_certificates "$ssl_path" "$domain" "true" "false"
-}
 
 # REMOVED: check_ssl_expiration() - now consolidated in lib/core/validation.sh
 # Use milou_check_ssl_expiration() instead
@@ -548,3 +534,264 @@ validate_docker_ssl_access() {
 }
 
 milou_log "DEBUG" "SSL validation and management module loaded successfully" 
+# =============================================================================  
+# SSL Validation Functions - Moved from core/validation.sh
+# =============================================================================  
+
+[0;34m[DEBUG][0m Extracting function: milou_validate_ssl_certificates
+milou_validate_ssl_certificates() {
+    local ssl_path="$1"
+    local domain="${2:-}"
+    local check_expiration="${3:-true}"
+    local quiet="${4:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Starting comprehensive SSL certificate validation"
+    
+    # Handle both directory path and direct file paths
+    local cert_file key_file
+    if [[ -d "$ssl_path" ]]; then
+        cert_file="$ssl_path/milou.crt"
+        key_file="$ssl_path/milou.key"
+    elif [[ -f "$ssl_path" ]]; then
+        # Direct certificate file path provided
+        cert_file="$ssl_path"
+        key_file="${ssl_path%.*}.key"  # Assume .key extension
+        ssl_path=$(dirname "$ssl_path")
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "SSL path does not exist: $ssl_path"
+        return 1
+    fi
+    
+    # Check if files exist
+    if [[ ! -f "$cert_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "SSL certificate not found: $cert_file"
+        return 1
+    fi
+    
+    if [[ ! -f "$key_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "SSL private key not found: $key_file"
+        return 1
+    fi
+    
+    # Check OpenSSL availability
+    if ! command -v openssl >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "OpenSSL not available for certificate validation"
+        return 0  # Don't fail if OpenSSL is not available
+    fi
+    
+    # Check file permissions and fix if needed
+    local cert_perms key_perms
+    cert_perms=$(stat -c "%a" "$cert_file" 2>/dev/null || stat -f "%Lp" "$cert_file" 2>/dev/null || echo "unknown")
+    key_perms=$(stat -c "%a" "$key_file" 2>/dev/null || stat -f "%Lp" "$key_file" 2>/dev/null || echo "unknown")
+    
+    if [[ "$key_perms" != "600" && "$key_perms" != "unknown" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Private key permissions are not secure: $key_perms (should be 600)"
+        if chmod 600 "$key_file" 2>/dev/null; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "✅ Fixed private key permissions"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Could not fix private key permissions"
+        fi
+    fi
+    
+    # Validate certificate format
+    if ! openssl x509 -in "$cert_file" -noout -text >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid SSL certificate format: $cert_file"
+        return 1
+    fi
+    
+    # Validate private key format (try both RSA and other formats)
+    local key_valid=false
+    if openssl rsa -in "$key_file" -check -noout >/dev/null 2>&1; then
+        key_valid=true
+    elif openssl ec -in "$key_file" -check -noout >/dev/null 2>&1; then
+        key_valid=true
+    elif openssl pkey -in "$key_file" -check -noout >/dev/null 2>&1; then
+        key_valid=true
+    fi
+    
+    if [[ "$key_valid" != "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid SSL private key format: $key_file"
+        return 1
+    fi
+    
+    # Check if certificate and private key match
+    local cert_modulus key_modulus
+    cert_modulus=$(openssl x509 -noout -modulus -in "$cert_file" 2>/dev/null | openssl md5 2>/dev/null)
+    
+    # Try different key formats for modulus extraction
+    if openssl rsa -noout -modulus -in "$key_file" >/dev/null 2>&1; then
+        key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | openssl md5 2>/dev/null)
+    elif openssl ec -noout -text -in "$key_file" >/dev/null 2>&1; then
+        # For EC keys, use public key comparison
+        local cert_pubkey key_pubkey
+        cert_pubkey=$(openssl x509 -noout -pubkey -in "$cert_file" 2>/dev/null | openssl md5 2>/dev/null)
+        key_pubkey=$(openssl pkey -in "$key_file" -pubout 2>/dev/null | openssl md5 2>/dev/null)
+        cert_modulus="$cert_pubkey"
+        key_modulus="$key_pubkey"
+    else
+        # Generic approach for other key types
+        local cert_pubkey key_pubkey
+        cert_pubkey=$(openssl x509 -noout -pubkey -in "$cert_file" 2>/dev/null | openssl md5 2>/dev/null)
+        key_pubkey=$(openssl pkey -in "$key_file" -pubout 2>/dev/null | openssl md5 2>/dev/null)
+        cert_modulus="$cert_pubkey"
+        key_modulus="$key_pubkey"
+    fi
+    
+    if [[ -z "$cert_modulus" || -z "$key_modulus" || "$cert_modulus" != "$key_modulus" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate and private key do not match"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Cert modulus: ${cert_modulus:-empty}, Key modulus: ${key_modulus:-empty}"
+        return 1
+    fi
+    
+    # Check certificate expiration if requested
+    if [[ "$check_expiration" == "true" ]]; then
+        if ! milou_check_ssl_expiration "$cert_file" "30" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Certificate expiration check failed"
+            # Don't return error for expiration warnings - just log
+        fi
+    fi
+    
+    # Validate domain if provided
+    if [[ -n "$domain" && "$domain" != "localhost" ]]; then
+        if ! milou_validate_certificate_domain "$cert_file" "$domain" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Certificate domain validation failed for: $domain"
+            # Don't fail for domain mismatch in validation - just warn
+        fi
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ SSL certificates validation passed"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Certificate: $cert_file, Key: $key_file"
+    return 0
+}
+
+[0;34m[DEBUG][0m Extracting function: milou_check_ssl_expiration
+milou_check_ssl_expiration() {
+    local cert_file="$1"
+    local warning_days="${2:-30}"
+    local quiet="${3:-false}"
+    
+    if [[ ! -f "$cert_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate file not found: $cert_file"
+        return 1
+    fi
+    
+    if ! command -v openssl >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "OpenSSL not available for expiration check"
+        return 0
+    fi
+    
+    # Get certificate expiration date
+    local exp_date
+    exp_date=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2)
+    
+    if [[ -z "$exp_date" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Could not read certificate expiration date"
+        return 1
+    fi
+    
+    # Convert to epoch time (handle different date command formats)
+    local exp_epoch current_epoch
+    if date --version >/dev/null 2>&1; then
+        # GNU date
+        exp_epoch=$(date -d "$exp_date" +%s 2>/dev/null)
+    else
+        # BSD date (macOS)
+        exp_epoch=$(date -j -f "%b %d %H:%M:%S %Y %Z" "$exp_date" +%s 2>/dev/null)
+    fi
+    current_epoch=$(date +%s)
+    
+    if [[ -z "$exp_epoch" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Could not parse certificate expiration date: $exp_date"
+        return 1
+    fi
+    
+    # Calculate days until expiration
+    local days_until_exp=$(( (exp_epoch - current_epoch) / 86400 ))
+    
+    if [[ $days_until_exp -lt 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Certificate has expired ${days_until_exp#-} days ago"
+        return 1
+    elif [[ $days_until_exp -le $warning_days ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Certificate expires in $days_until_exp days"
+        return 1
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Certificate valid for $days_until_exp more days"
+        return 0
+    fi
+}
+
+[0;34m[DEBUG][0m Extracting function: milou_validate_certificate_domain
+milou_validate_certificate_domain() {
+    local cert_file="$1"
+    local domain="$2"
+    local quiet="${3:-false}"
+    
+    if [[ ! -f "$cert_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate file not found: $cert_file"
+        return 1
+    fi
+    
+    if ! command -v openssl >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "OpenSSL not available for domain validation"
+        return 0
+    fi
+    
+    # Get certificate subject CN
+    local cert_cn
+    cert_cn=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed -n 's/.*CN=\([^,]*\).*/\1/p' | xargs)
+    
+    # Check if domain matches CN
+    if [[ "$cert_cn" == "$domain" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Domain matches certificate CN: $domain"
+        return 0
+    fi
+    
+    # Get Subject Alternative Names (SAN)
+    local cert_san
+    cert_san=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1)
+    
+    if [[ -n "$cert_san" ]]; then
+        # Parse SAN entries
+        while IFS=',' read -ra SAN_ENTRIES; do
+            for entry in "${SAN_ENTRIES[@]}"; do
+                entry=$(echo "$entry" | xargs | sed 's/DNS://')  # Remove DNS: prefix and trim
+                
+                if [[ "$entry" == "$domain" ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Domain matches certificate SAN: $domain"
+                    return 0
+                fi
+                
+                # Check wildcard match
+                if [[ "$entry" == "*."* ]]; then
+                    local wildcard_domain="${entry#*.}"
+                    if [[ "$domain" == *".$wildcard_domain" ]]; then
+                        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Domain matches wildcard SAN: $domain -> $entry"
+                        return 0
+                    fi
+                fi
+            done
+        done <<< "$cert_san"
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Domain '$domain' does not match certificate (CN: ${cert_cn:-none})"
+    return 1
+}
+
+[0;34m[DEBUG][0m Extracting function: milou_ssl_validate_cert_key_pair
+milou_ssl_validate_cert_key_pair() {
+    local cert_file="$1"
+    local key_file="$2"
+    local quiet="${3:-false}"
+    
+    # Use the comprehensive validation function
+    local ssl_path
+    ssl_path=$(dirname "$cert_file")
+    milou_validate_ssl_certificates "$ssl_path" "" "false" "$quiet"
+}
+
+
+# Export moved SSL functions
+export -f milou_validate_ssl_certificates
+export -f milou_check_ssl_expiration
+export -f milou_validate_certificate_domain
+export -f milou_ssl_validate_cert_key_pair

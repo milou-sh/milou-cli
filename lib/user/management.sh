@@ -66,7 +66,7 @@ user_management_main() {
             show_user_management_help
             ;;
         *)
-            log "ERROR" "Unknown user management command: $command"
+    milou_log "ERROR" "Unknown user management command: $command"
             show_user_management_help
             return 1
             ;;
@@ -117,7 +117,7 @@ show_user_management_help() {
 
 # Clean up user management resources
 cleanup_user_management() {
-    log "DEBUG" "Cleaning up user management resources..."
+    milou_log "DEBUG" "Cleaning up user management resources..."
     
     # Clean up temporary files
     local -a temp_patterns=(

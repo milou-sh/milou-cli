@@ -20,6 +20,7 @@ readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
 # Enhanced log function that uses milou_log if available
+# Enhanced log function that uses milou_log if available
 log() {
     if command -v milou_log >/dev/null 2>&1; then
         milou_log "$@"
@@ -75,7 +76,7 @@ parse_args() {
                 exit 0
                 ;;
             *)
-                log "ERROR" "Unknown option: $1"
+    milou_log "ERROR" "Unknown option: $1"
                 show_help
                 exit 1
                 ;;
@@ -96,15 +97,15 @@ check_directory_structure() {
     
     for path in "${required_paths[@]}"; do
         if [[ ! -d "$path" ]]; then
-            log "ERROR" "Required directory not found: $path"
-            log "ERROR" "Please ensure milou_fresh is a sibling directory to milou-cli"
+    milou_log "ERROR" "Required directory not found: $path"
+    milou_log "ERROR" "Please ensure milou_fresh is a sibling directory to milou-cli"
             exit 1
         fi
     done
     
     # Change to milou_fresh directory for building
     cd "${project_root}/../milou_fresh"
-    log "INFO" "Building from: $(pwd)"
+    milou_log "INFO" "Building from: $(pwd)"
 }
 
 # Check if image exists and is recent
@@ -115,13 +116,13 @@ image_needs_rebuild() {
     
     # If force build is enabled, always rebuild
     if [[ "$FORCE_BUILD" == "true" ]]; then
-        log "DEBUG" "Force build enabled, rebuilding $image_name"
+    milou_log "DEBUG" "Force build enabled, rebuilding $image_name"
         return 0  # needs rebuild
     fi
     
     # Check if image exists
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
-        log "DEBUG" "Image $image_name doesn't exist, needs build"
+    milou_log "DEBUG" "Image $image_name doesn't exist, needs build"
         return 0  # needs rebuild
     fi
     
@@ -129,7 +130,7 @@ image_needs_rebuild() {
     local image_created
     image_created=$(docker image inspect "$image_name" --format '{{.Created}}' 2>/dev/null)
     if [[ -z "$image_created" ]]; then
-        log "DEBUG" "Cannot get image creation time for $image_name, rebuilding"
+    milou_log "DEBUG" "Cannot get image creation time for $image_name, rebuilding"
         return 0  # needs rebuild
     fi
     
@@ -141,7 +142,7 @@ image_needs_rebuild() {
     local one_hour_ago
     one_hour_ago=$(date -d "1 hour ago" +%s)
     if [[ $image_timestamp -lt $one_hour_ago ]]; then
-        log "DEBUG" "Image $image_name is older than 1 hour, needs rebuild"
+    milou_log "DEBUG" "Image $image_name is older than 1 hour, needs rebuild"
         return 0  # needs rebuild
     fi
     
@@ -151,7 +152,7 @@ image_needs_rebuild() {
         # Find the newest file in the context directory
         newest_source_file=$(find "$context_path" -type f -newer <(date -d "$image_created" '+%Y-%m-%d %H:%M:%S') 2>/dev/null | head -1)
         if [[ -n "$newest_source_file" ]]; then
-            log "DEBUG" "Source files newer than image $image_name found: $newest_source_file"
+    milou_log "DEBUG" "Source files newer than image $image_name found: $newest_source_file"
             return 0  # needs rebuild
         fi
     fi
@@ -161,12 +162,12 @@ image_needs_rebuild() {
         local dockerfile_timestamp
         dockerfile_timestamp=$(date -r "$dockerfile_path" +%s 2>/dev/null || echo "0")
         if [[ $dockerfile_timestamp -gt $image_timestamp ]]; then
-            log "DEBUG" "Dockerfile $dockerfile_path is newer than image $image_name"
+    milou_log "DEBUG" "Dockerfile $dockerfile_path is newer than image $image_name"
             return 0  # needs rebuild
         fi
     fi
     
-    log "DEBUG" "Image $image_name is up to date, skipping build"
+    milou_log "DEBUG" "Image $image_name is up to date, skipping build"
     return 1  # doesn't need rebuild
 }
 
@@ -178,18 +179,18 @@ build_image() {
     
     # Check if we need to rebuild this image
     if ! image_needs_rebuild "$image_name" "$context" "$dockerfile"; then
-        log "INFO" "⏭️  Skipping $image_name (up to date)"
+    milou_log "INFO" "⏭️  Skipping $image_name (up to date)"
         return 0
     fi
     
-    log "INFO" "🔨 Building $image_name..."
-    log "DEBUG" "Dockerfile: $dockerfile, Context: $context"
+    milou_log "INFO" "🔨 Building $image_name..."
+    milou_log "DEBUG" "Dockerfile: $dockerfile, Context: $context"
     
     if docker build -t "$image_name" -f "$dockerfile" "$context"; then
-        log "INFO" "✅ Successfully built $image_name"
+    milou_log "INFO" "✅ Successfully built $image_name"
         return 0
     else
-        log "ERROR" "❌ Failed to build $image_name"
+    milou_log "ERROR" "❌ Failed to build $image_name"
         return 1
     fi
 }
@@ -200,9 +201,9 @@ main() {
     
     # Show build mode
     if [[ "$FORCE_BUILD" == "true" ]]; then
-        log "INFO" "🚀 Force building all Milou Docker images"
+    milou_log "INFO" "🚀 Force building all Milou Docker images"
     else
-        log "INFO" "🚀 Smart building Milou Docker images (skipping up-to-date images)"
+    milou_log "INFO" "🚀 Smart building Milou Docker images (skipping up-to-date images)"
     fi
     
     # Check directory structure and change to build directory
@@ -230,7 +231,7 @@ main() {
         dockerfile=$(echo "$image_spec" | cut -d'|' -f3)
         context=$(echo "$image_spec" | cut -d'|' -f4)
         
-        log "INFO" "📦 Processing $service_name image..."
+    milou_log "INFO" "📦 Processing $service_name image..."
         
         # Track whether the build was actually attempted
         local build_attempted=false
@@ -252,33 +253,33 @@ main() {
     echo
     
     # Summary
-    log "INFO" "📊 Build Summary:"
+    milou_log "INFO" "📊 Build Summary:"
     if [[ ${#successful_builds[@]} -gt 0 ]]; then
-        log "INFO" "   ✅ Built: ${successful_builds[*]}"
+    milou_log "INFO" "   ✅ Built: ${successful_builds[*]}"
     fi
     if [[ ${#skipped_builds[@]} -gt 0 ]]; then
-        log "INFO" "   ⏭️  Skipped: ${skipped_builds[*]} (up to date)"
+    milou_log "INFO" "   ⏭️  Skipped: ${skipped_builds[*]} (up to date)"
     fi
     if [[ ${#failed_builds[@]} -gt 0 ]]; then
-        log "ERROR" "   ❌ Failed: ${failed_builds[*]}"
+    milou_log "ERROR" "   ❌ Failed: ${failed_builds[*]}"
     fi
     
     if [[ ${#failed_builds[@]} -eq 0 ]]; then
-        log "INFO" "🎉 Image processing completed successfully!"
+    milou_log "INFO" "🎉 Image processing completed successfully!"
         if [[ ${#successful_builds[@]} -gt 0 ]]; then
-            log "INFO" "You can now run: ../../milou.sh setup --dev --fresh-install"
+    milou_log "INFO" "You can now run: ../../milou.sh setup --dev --fresh-install"
         else
-            log "INFO" "All images were up to date. Use --force to rebuild anyway."
+    milou_log "INFO" "All images were up to date. Use --force to rebuild anyway."
         fi
     else
-        log "ERROR" "❌ Some images failed to build: ${failed_builds[*]}"
-        log "ERROR" "Please check the error messages above and fix any issues"
+    milou_log "ERROR" "❌ Some images failed to build: ${failed_builds[*]}"
+    milou_log "ERROR" "Please check the error messages above and fix any issues"
         exit 1
     fi
     
     # Show all available images
     echo
-    log "INFO" "📋 Available Milou images:"
+    milou_log "INFO" "📋 Available Milou images:"
     docker images | grep "ghcr.io/milou-sh/milou" | grep latest
 }
 

@@ -42,3 +42,6 @@ ssl/*.pem
 ~/.milou/
 .milou/
 milou.log 
+# Backup files
+*.backup*
+*.backup.*

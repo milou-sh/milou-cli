@@ -19,14 +19,14 @@ setup_milou_user_environment() {
     
     if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
         if [[ -z "$milou_home" ]]; then
-            log "WARN" "Milou user home directory not found, using /home/$MILOU_USER"
+    milou_log "WARN" "Milou user home directory not found, using /home/$MILOU_USER"
             milou_home="/home/$MILOU_USER"
         fi
         mkdir -p "$milou_home"
         chown "$MILOU_USER:$MILOU_GROUP" "$milou_home"
     fi
     
-    log "DEBUG" "Setting up environment for $MILOU_USER in $milou_home"
+    milou_log "DEBUG" "Setting up environment for $MILOU_USER in $milou_home"
     
     # Create necessary directories with proper structure
     create_milou_directories "$milou_home"
@@ -47,9 +47,9 @@ setup_milou_user_environment() {
     # Secure sensitive directories
     chmod 700 "$milou_home/.milou"
     
-    log "SUCCESS" "Environment setup completed for $MILOU_USER"
-    log "INFO" "Configuration directory: $milou_home/.milou"
-    log "INFO" "CLI location will be auto-detected on login"
+    milou_log "SUCCESS" "Environment setup completed for $MILOU_USER"
+    milou_log "INFO" "Configuration directory: $milou_home/.milou"
+    milou_log "INFO" "CLI location will be auto-detected on login"
 }
 
 # Create necessary directories for milou user
@@ -71,7 +71,7 @@ create_milou_directories() {
             mkdir -p "$dir"
             chown "$MILOU_USER:$MILOU_GROUP" "$dir"
             chmod 750 "$dir"
-            log "DEBUG" "Created directory: $dir"
+    milou_log "DEBUG" "Created directory: $dir"
         fi
     done
 }
@@ -81,7 +81,7 @@ setup_milou_bashrc() {
     local milou_home="$1"
     local bashrc_file="$milou_home/.bashrc"
     
-    log "DEBUG" "Setting up bashrc: $bashrc_file"
+    milou_log "DEBUG" "Setting up bashrc: $bashrc_file"
     
     # Backup existing bashrc
     if [[ -f "$bashrc_file" ]]; then
@@ -321,10 +321,10 @@ setup_milou_symlinks() {
 
 # Validate milou user environment and CLI accessibility
 validate_milou_user_environment() {
-    log "DEBUG" "Validating milou user environment..."
+    milou_log "DEBUG" "Validating milou user environment..."
     
     if ! milou_user_exists; then
-        log "ERROR" "Milou user does not exist"
+    milou_log "ERROR" "Milou user does not exist"
         return 1
     fi
     
@@ -333,11 +333,11 @@ validate_milou_user_environment() {
     
     if [[ -z "$milou_home" || ! -d "$milou_home" ]]; then
         if [[ -z "$milou_home" ]]; then
-            log "ERROR" "Milou user has no home directory configured"
-            log "INFO" "💡 Try: sudo usermod -d /home/$MILOU_USER $MILOU_USER"
+    milou_log "ERROR" "Milou user has no home directory configured"
+    milou_log "INFO" "💡 Try: sudo usermod -d /home/$MILOU_USER $MILOU_USER"
         else
-            log "ERROR" "Milou user home directory not found: $milou_home"
-            log "INFO" "💡 Try: sudo mkdir -p $milou_home && sudo chown $MILOU_USER:$MILOU_GROUP $milou_home"
+    milou_log "ERROR" "Milou user home directory not found: $milou_home"
+    milou_log "INFO" "💡 Try: sudo mkdir -p $milou_home && sudo chown $MILOU_USER:$MILOU_GROUP $milou_home"
         fi
         ((issues++))
         # Set a fallback home directory for subsequent checks
@@ -355,31 +355,31 @@ validate_milou_user_environment() {
     local cli_found=false
     for cli_path in "${cli_locations[@]}"; do
         if [[ -f "$cli_path" && -x "$cli_path" ]]; then
-            log "SUCCESS" "Milou CLI found at: $cli_path"
+    milou_log "SUCCESS" "Milou CLI found at: $cli_path"
             cli_found=true
             break
         fi
     done
     
     if [[ "$cli_found" != true ]]; then
-        log "ERROR" "Milou CLI not found in expected locations"
-        log "INFO" "💡 Checked: ${cli_locations[*]}"
+    milou_log "ERROR" "Milou CLI not found in expected locations"
+    milou_log "INFO" "💡 Checked: ${cli_locations[*]}"
         ((issues++))
     fi
     
     # Check configuration directory
     local config_dir="$milou_home/.milou"
     if [[ ! -d "$config_dir" ]]; then
-        log "WARN" "Configuration directory missing: $config_dir"
+    milou_log "WARN" "Configuration directory missing: $config_dir"
         ((issues++))
     else
-        log "SUCCESS" "Configuration directory exists: $config_dir"
+    milou_log "SUCCESS" "Configuration directory exists: $config_dir"
         
         # Check subdirectories
         local -a required_dirs=("backups" "cache" "logs" "ssl" "config")
         for dir in "${required_dirs[@]}"; do
             if [[ ! -d "$config_dir/$dir" ]]; then
-                log "WARN" "Missing configuration subdirectory: $config_dir/$dir"
+    milou_log "WARN" "Missing configuration subdirectory: $config_dir/$dir"
             fi
         done
     fi
@@ -389,30 +389,30 @@ validate_milou_user_environment() {
     for env_file in "${env_files[@]}"; do
         if [[ -f "$env_file" ]]; then
             if grep -q "MILOU_" "$env_file"; then
-                log "SUCCESS" "Milou environment configured in: $(basename "$env_file")"
+    milou_log "SUCCESS" "Milou environment configured in: $(basename "$env_file")"
             else
-                log "WARN" "Milou environment not found in: $(basename "$env_file")"
+    milou_log "WARN" "Milou environment not found in: $(basename "$env_file")"
             fi
         else
-            log "WARN" "Environment file missing: $(basename "$env_file")"
+    milou_log "WARN" "Environment file missing: $(basename "$env_file")"
         fi
     done
     
     if [[ $issues -eq 0 ]]; then
-        log "SUCCESS" "Milou user environment validation passed"
+    milou_log "SUCCESS" "Milou user environment validation passed"
         return 0
     else
-        log "WARN" "Milou user environment validation found $issues issues"
+    milou_log "WARN" "Milou user environment validation found $issues issues"
         return 1
     fi
 }
 
 # Test milou user CLI functionality
 test_milou_user_cli() {
-    log "INFO" "Testing Milou CLI functionality as $MILOU_USER user..."
+    milou_log "INFO" "Testing Milou CLI functionality as $MILOU_USER user..."
     
     if ! milou_user_exists; then
-        log "ERROR" "Milou user does not exist"
+    milou_log "ERROR" "Milou user does not exist"
         return 1
     fi
     
@@ -436,28 +436,28 @@ test_milou_user_cli() {
     done
     
     if [[ -z "$cli_script" ]]; then
-        log "ERROR" "Cannot find executable Milou CLI script"
+    milou_log "ERROR" "Cannot find executable Milou CLI script"
         return 1
     fi
     
-    log "DEBUG" "Testing CLI at: $cli_script"
+    milou_log "DEBUG" "Testing CLI at: $cli_script"
     
     # Test basic help command
     if sudo -u "$MILOU_USER" -H bash -c "cd '$milou_home' && '$cli_script' --help" >/dev/null 2>&1; then
-        log "SUCCESS" "Milou CLI help command works"
+    milou_log "SUCCESS" "Milou CLI help command works"
     else
-        log "ERROR" "Milou CLI help command failed"
+    milou_log "ERROR" "Milou CLI help command failed"
         return 1
     fi
     
     # Test user status command
     if sudo -u "$MILOU_USER" -H bash -c "cd '$milou_home' && '$cli_script' user-status" >/dev/null 2>&1; then
-        log "SUCCESS" "Milou CLI user-status command works"
+    milou_log "SUCCESS" "Milou CLI user-status command works"
     else
-        log "WARN" "Milou CLI user-status command failed"
+    milou_log "WARN" "Milou CLI user-status command failed"
     fi
     
-    log "SUCCESS" "Milou CLI functionality test completed"
+    milou_log "SUCCESS" "Milou CLI functionality test completed"
     return 0
 }
 

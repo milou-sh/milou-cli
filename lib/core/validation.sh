@@ -493,16 +493,47 @@ milou_check_port_availability() {
 }
 
 # =============================================================================
-# SSL Validation (ENHANCED - consolidates 8+ implementations)
+# SSL Validation (CONSOLIDATED - use functions from lib/ssl/core.sh)
 # =============================================================================
 
-# Validate SSL certificates comprehensively (consolidates all SSL validation functions)
+# SSL validation function wrapper (forwards to ssl/core.sh implementation)
+milou_validate_ssl_certificates() {
+    # This function is deprecated - use milou_ssl_validate_certificates from ssl/core.sh
+    if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
+        milou_ssl_validate_certificates "$@"
+    else
+        milou_log "ERROR" "SSL validation module not loaded"
+        return 1
+    fi
+}
 
-# Check SSL certificate expiration (enhanced)
+# SSL helper functions (forward to ssl/core.sh implementations)
+milou_check_ssl_expiration() {
+    if command -v milou_ssl_check_expiration >/dev/null 2>&1; then
+        milou_ssl_check_expiration "$@"
+    else
+        milou_log "ERROR" "SSL expiration check function not available"
+        return 1
+    fi
+}
 
-# Validate certificate domain (enhanced with SAN support)
+milou_validate_certificate_domain() {
+    if command -v milou_ssl_validate_certificate_domain >/dev/null 2>&1; then
+        milou_ssl_validate_certificate_domain "$@"
+    else
+        milou_log "ERROR" "SSL domain validation function not available"
+        return 1
+    fi
+}
 
-# Validate certificate and key pair (simplified version for backward compatibility)
+milou_ssl_validate_cert_key_pair() {
+    if command -v milou_ssl_validate_cert_key_pair >/dev/null 2>&1; then
+        milou_ssl_validate_cert_key_pair "$@"
+    else
+        milou_log "ERROR" "SSL certificate pair validation function not available"
+        return 1
+    fi
+}
 
 # =============================================================================
 # User and Permission Validation
@@ -590,48 +621,26 @@ milou_validate_path() {
 }
 
 # =============================================================================
-# Backward Compatibility Aliases
+# Module Exports
 # =============================================================================
 
-# Maintain backward compatibility
-validate_github_token() { milou_validate_github_token "$@"; }
-test_github_authentication() { milou_test_github_authentication "$@"; }
-validate_domain() { milou_validate_domain "$@"; }
-check_connectivity() { milou_check_connectivity "$@"; }
-command_exists() { milou_command_exists "$@"; }
-version_compare() { milou_version_compare "$@"; }
-check_docker_access() { milou_check_docker_access "$@"; }
-
-# Export all functions
-export -f milou_validate_github_token milou_test_github_authentication
-export -f milou_validate_domain milou_check_connectivity
-export -f milou_check_docker_access milou_check_docker_resources milou_check_docker_compose milou_validate_docker_compose_config
-export -f milou_command_exists milou_version_compare milou_check_port_availability
-export -f milou_validate_docker_permissions milou_validate_path
-export -f validate_github_token test_github_authentication validate_domain check_connectivity
-export -f command_exists version_compare check_docker_access validate_ssl_certificates check_ssl_expiration validate_certificate_domain ssl_validate_cert_key_pair 
-# =============================================================================
-# SSL Function Wrappers - Delegate to system/ssl module
-# =============================================================================
-
-# Wrapper for SSL certificate validation
-validate_ssl_certificates() {
-    # Ensure SSL system module is loaded
-    if ! command -v milou_validate_ssl_certificates >/dev/null 2>&1; then
-        if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/system/ssl.sh" ]]; then
-            source "${SCRIPT_DIR}/lib/system/ssl.sh" 2>/dev/null || {
-                milou_log "ERROR" "Cannot load SSL system module"
-                return 1
-            }
-        else
-            milou_log "ERROR" "SSL validation requires system/ssl module"
-            return 1
-        fi
-    fi
-    
-    # Delegate to system module
-    milou_validate_ssl_certificates "$@"
-}
-
-# Export wrapper functions
-export -f validate_ssl_certificates
+# Export all functions - Core milou functions
+export -f milou_validate_github_token
+export -f milou_test_github_authentication
+export -f milou_validate_domain
+export -f milou_check_connectivity
+export -f milou_check_docker_access
+export -f milou_check_docker_resources
+export -f milou_check_docker_compose
+export -f milou_validate_docker_compose_config
+export -f milou_command_exists
+export -f milou_version_compare
+export -f milou_check_port_availability
+export -f milou_validate_ssl_certificates
+export -f milou_check_ssl_expiration
+export -f milou_validate_certificate_domain
+export -f milou_ssl_validate_cert_key_pair
+export -f milou_is_running_as_root
+export -f milou_user_exists
+export -f milou_validate_docker_permissions
+export -f milou_validate_path

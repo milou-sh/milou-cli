@@ -32,7 +32,7 @@ log() {
 
 # Simple error_exit function
 error_exit() {
-    log "ERROR" "$1"
+    milou_log "ERROR" "$1"
     exit "${2:-1}"
 }
 
@@ -83,7 +83,7 @@ if [[ -f "${SCRIPT_DIR}/lib/core/module-loader.sh" ]]; then
     
     # Load essential modules with error handling
     if ! milou_load_essentials; then
-        log "WARN" "Some essential modules failed to load, continuing with reduced functionality"
+        milou_log "WARN" "Some essential modules failed to load, continuing with reduced functionality"
     fi
     
     # Initialize logging with the correct config directory
@@ -391,17 +391,17 @@ main() {
     done
     
     # Log script start with enhanced information
-    log "DEBUG" "Milou CLI v$SCRIPT_VERSION started"
-    log "DEBUG" "Command: $command, User: $(whoami), PID: $$"
-    log "DEBUG" "Working directory: $(pwd)"
+    milou_log "DEBUG" "Milou CLI v$SCRIPT_VERSION started"
+    milou_log "DEBUG" "Command: $command, User: $(whoami), PID: $$"
+    milou_log "DEBUG" "Working directory: $(pwd)"
     
     # Check if we're resuming after user switch
     if check_user_switch_resume; then
-        log "DEBUG" "Resuming operation after user switch"
+        milou_log "DEBUG" "Resuming operation after user switch"
         
         # Re-parse the original arguments completely
         if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
-            log "DEBUG" "Re-parsing original arguments: $ORIGINAL_ARGUMENTS_STR"
+            milou_log "DEBUG" "Re-parsing original arguments: $ORIGINAL_ARGUMENTS_STR"
             
             # Reset everything and re-parse from the original arguments
             eval "set -- $ORIGINAL_ARGUMENTS_STR"
@@ -432,7 +432,7 @@ main() {
                 esac
             done
             
-            log "DEBUG" "Resumed with command: $command, verbose: $VERBOSE, remaining args: ${#remaining_args[@]}"
+            milou_log "DEBUG" "Resumed with command: $command, verbose: $VERBOSE, remaining args: ${#remaining_args[@]}"
         else
             # Fallback to ORIGINAL_COMMAND only
             command="$ORIGINAL_COMMAND"
@@ -441,7 +441,7 @@ main() {
     fi
     
     # Enhanced command routing with modular system
-    log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
+    milou_log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
     
 # Load command on-demand and execute
 milou_load_and_execute_command() {
@@ -474,7 +474,7 @@ milou_load_and_execute_command() {
             handler_file="user-security.sh"
             ;;
         *)
-            log "ERROR" "Unknown command: $cmd"
+            milou_log "ERROR" "Unknown command: $cmd"
             return 1
             ;;
     esac
@@ -482,9 +482,9 @@ milou_load_and_execute_command() {
     # Load handler file if it exists
     if [[ -n "$handler_file" && -f "${commands_dir}/${handler_file}" ]]; then
         if source "${commands_dir}/${handler_file}" 2>/dev/null; then
-            log "DEBUG" "Loaded handler file: $handler_file"
+            milou_log "DEBUG" "Loaded handler file: $handler_file"
         else
-            log "WARN" "Failed to load handler file: $handler_file"
+            milou_log "WARN" "Failed to load handler file: $handler_file"
         fi
     fi
     
@@ -492,14 +492,14 @@ milou_load_and_execute_command() {
     if command -v "$handler_function" >/dev/null 2>&1; then
         "$handler_function" "${args[@]}"
     else
-        log "ERROR" "Command handler not available: $handler_function"
-        log "INFO" "Falling back to legacy system..."
+        milou_log "ERROR" "Command handler not available: $handler_function"
+        milou_log "INFO" "Falling back to legacy system..."
         
         # Fallback to original monolithic handlers if they exist
         if command -v handle_"$cmd" >/dev/null 2>&1; then
             handle_"$cmd" "${args[@]}"
         else
-            log "ERROR" "No handler available for command: $cmd"
+            milou_log "ERROR" "No handler available for command: $cmd"
             exit 1
         fi
     fi
@@ -522,7 +522,7 @@ milou_load_and_execute_command() {
 # Enhanced cleanup on exit
 cleanup_on_exit() {
     local exit_code=$?
-    log "DEBUG" "Script execution completed with exit code: $exit_code"
+    milou_log "DEBUG" "Script execution completed with exit code: $exit_code"
     
     # Clean up temporary files
     cleanup_user_management 2>/dev/null || true

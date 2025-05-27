@@ -71,7 +71,7 @@ _validate_system_readiness() {
     fi
     
     # Check Docker Compose file
-    local compose_file="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+    local compose_file="${DOCKER_COMPOSE_FILE:-${SCRIPT_DIR}/static/docker-compose.yml}"
     if [[ ! -f "$compose_file" ]]; then
         milou_log "ERROR" "Docker Compose file not found: $compose_file"
         ((validation_errors++))
@@ -87,14 +87,34 @@ _validate_system_readiness() {
         }
     fi
     
-    # Validate essential environment variables
-    local required_vars=("DOMAIN" "ADMIN_EMAIL" "ADMIN_PASSWORD" "DB_PASSWORD")
-    for var in "${required_vars[@]}"; do
-        if [[ -z "${!var:-}" ]]; then
-            milou_log "ERROR" "Required environment variable not set: $var"
-            ((validation_errors++))
+    # Use centralized validation for comprehensive checks
+    if command -v milou_config_validate_environment_production >/dev/null 2>&1; then
+        milou_log "DEBUG" "Using centralized environment validation"
+        if ! milou_config_validate_environment_production "${ENV_FILE}" >/dev/null 2>&1; then
+            milou_log "WARN" "Centralized validation found issues, checking essential variables manually"
+            
+            # Fallback to basic essential checks
+            local required_vars=("DOMAIN" "ADMIN_EMAIL" "ADMIN_PASSWORD" "POSTGRES_PASSWORD")
+            for var in "${required_vars[@]}"; do
+                if [[ -z "${!var:-}" ]]; then
+                    milou_log "ERROR" "Required environment variable not set: $var"
+                    ((validation_errors++))
+                fi
+            done
+        else
+            milou_log "DEBUG" "✅ Centralized environment validation passed"
         fi
-    done
+    else
+        # Fallback to basic validation if centralized system not available
+        milou_log "DEBUG" "Centralized validation not available, using basic checks"
+        local required_vars=("DOMAIN" "ADMIN_EMAIL" "ADMIN_PASSWORD" "POSTGRES_PASSWORD")
+        for var in "${required_vars[@]}"; do
+            if [[ -z "${!var:-}" ]]; then
+                milou_log "ERROR" "Required environment variable not set: $var"
+                ((validation_errors++))
+            fi
+        done
+    fi
     
     # Check GitHub token if present
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -143,6 +163,32 @@ _setup_ssl_certificates() {
     return 0
 }
 
+# Validate existing SSL certificates
+_validate_existing_ssl_certificates() {
+    local cert_path="${SSL_CERT_PATH:-}"
+    local key_path="${SSL_KEY_PATH:-}"
+    local domain="${DOMAIN:-localhost}"
+    
+    if [[ -z "$cert_path" || -z "$key_path" ]]; then
+        milou_log "ERROR" "SSL_CERT_PATH and SSL_KEY_PATH must be set for existing certificates"
+        return 1
+    fi
+    
+    # Use the consolidated SSL validation function from ssl/core.sh
+    if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
+        if milou_ssl_validate_certificates "$cert_path" "$domain" "false" "true"; then
+            milou_log "SUCCESS" "✅ Existing SSL certificates validated"
+            return 0
+        else
+            milou_log "ERROR" "Existing SSL certificates validation failed"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "SSL validation function not available"
+        return 1
+    fi
+}
+
 # Generate self-signed SSL certificates
 _generate_ssl_certificates() {
     local ssl_dir="${SSL_DIR:-./ssl}"
@@ -154,16 +200,24 @@ _generate_ssl_certificates() {
     # Check if certificates already exist
     if [[ -f "$ssl_dir/milou.crt" && -f "$ssl_dir/milou.key" ]]; then
         milou_log "INFO" "SSL certificates already exist - validating..."
-        if milou_validate_ssl_certificates "$ssl_dir" "$domain" "false" "true"; then
-            milou_log "INFO" "✅ Existing certificates are valid"
-            return 0
+        # Use the unified SSL validation function
+        if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
+            if milou_ssl_validate_certificates "$ssl_dir" "$domain" "false" "true"; then
+                milou_log "INFO" "✅ Existing certificates are valid"
+                return 0
+            else
+                milou_log "WARN" "⚠️  Existing certificates are invalid - regenerating..."
+            fi
         else
-            milou_log "WARN" "⚠️  Existing certificates are invalid - regenerating..."
+            milou_log "WARN" "SSL validation function not available - regenerating certificates"
         fi
     fi
     
     # Generate new certificates
-    if command -v milou_generate_ssl_certificates >/dev/null 2>&1; then
+    if command -v milou_ssl_generate_certificates >/dev/null 2>&1; then
+        milou_log "DEBUG" "Using milou_ssl_generate_certificates function"
+        milou_ssl_generate_certificates "$ssl_dir" "$domain" || return 1
+    elif command -v milou_generate_ssl_certificates >/dev/null 2>&1; then
         milou_log "DEBUG" "Using milou_generate_ssl_certificates function"
         milou_generate_ssl_certificates "$ssl_dir" "$domain" || return 1
     else
@@ -171,13 +225,30 @@ _generate_ssl_certificates() {
         _generate_ssl_with_openssl "$ssl_dir" "$domain" || return 1
     fi
     
-    # Validate generated certificates
-    if milou_validate_ssl_certificates "$ssl_dir" "$domain" "false" "true"; then
-        milou_log "SUCCESS" "✅ SSL certificates generated and validated"
-        return 0
+    # Validate generated certificates using the unified function
+    if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
+        if milou_ssl_validate_certificates "$ssl_dir" "$domain" "false" "true"; then
+            milou_log "SUCCESS" "✅ SSL certificates generated and validated"
+            return 0
+        else
+            milou_log "ERROR" "Generated SSL certificates failed validation"
+            return 1
+        fi
     else
-        milou_log "ERROR" "Generated SSL certificates failed validation"
-        return 1
+        # Fallback validation - just check if files exist and are readable
+        if [[ -f "$ssl_dir/milou.crt" && -f "$ssl_dir/milou.key" ]]; then
+            if openssl x509 -in "$ssl_dir/milou.crt" -noout -text >/dev/null 2>&1 && \
+               openssl rsa -in "$ssl_dir/milou.key" -check -noout >/dev/null 2>&1; then
+                milou_log "SUCCESS" "✅ SSL certificates generated (basic validation passed)"
+                return 0
+            else
+                milou_log "ERROR" "Generated SSL certificates have format issues"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "SSL certificate files were not created"
+            return 1
+        fi
     fi
 }
 
@@ -191,46 +262,67 @@ _generate_ssl_with_openssl() {
         return 1
     fi
     
+    milou_log "INFO" "🔧 Generating SSL certificate for domain: $domain"
+    
+    # Create SSL config file with SAN (Subject Alternative Names)
+    local ssl_config="$ssl_dir/openssl.conf"
+    cat > "$ssl_config" << EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C=US
+ST=State
+L=City
+O=Milou
+OU=IT Department
+CN=$domain
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $domain
+DNS.2 = localhost
+DNS.3 = *.localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+    
+    # Add the domain to alt names if it's not localhost
+    if [[ "$domain" != "localhost" ]]; then
+        echo "DNS.4 = *.$domain" >> "$ssl_config"
+    fi
+    
     # Generate private key
     openssl genrsa -out "$ssl_dir/milou.key" 2048 2>/dev/null || {
         milou_log "ERROR" "Failed to generate SSL private key"
+        rm -f "$ssl_config"
         return 1
     }
     
-    # Generate certificate
+    # Generate certificate with SAN
     openssl req -new -x509 -key "$ssl_dir/milou.key" -out "$ssl_dir/milou.crt" -days 365 \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain" 2>/dev/null || {
+        -config "$ssl_config" -extensions v3_req 2>/dev/null || {
         milou_log "ERROR" "Failed to generate SSL certificate"
+        rm -f "$ssl_config"
         return 1
     }
+    
+    # Clean up config file
+    rm -f "$ssl_config"
     
     # Set secure permissions
     chmod 600 "$ssl_dir/milou.key"
     chmod 644 "$ssl_dir/milou.crt"
     
-    milou_log "DEBUG" "SSL certificates generated with OpenSSL"
+    milou_log "SUCCESS" "✅ SSL certificates generated with multi-domain support"
+    milou_log "INFO" "   Valid for: $domain, localhost, 127.0.0.1"
     return 0
-}
-
-# Validate existing SSL certificates
-_validate_existing_ssl_certificates() {
-    local cert_path="${SSL_CERT_PATH:-}"
-    local key_path="${SSL_KEY_PATH:-}"
-    local domain="${DOMAIN:-localhost}"
-    
-    if [[ -z "$cert_path" || -z "$key_path" ]]; then
-        milou_log "ERROR" "SSL_CERT_PATH and SSL_KEY_PATH must be set for existing certificates"
-        return 1
-    fi
-    
-    # Validate the certificates
-    if milou_validate_ssl_certificates "$cert_path" "$domain" "true" "false"; then
-        milou_log "SUCCESS" "✅ Existing SSL certificates validated"
-        return 0
-    else
-        milou_log "ERROR" "Existing SSL certificates validation failed"
-        return 1
-    fi
 }
 
 # Prepare Docker environment
@@ -253,7 +345,7 @@ _prepare_docker_environment() {
     fi
     
     # Validate Docker Compose configuration
-    local compose_file="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+    local compose_file="${DOCKER_COMPOSE_FILE:-${SCRIPT_DIR}/static/docker-compose.yml}"
     if command -v milou_validate_docker_compose_config >/dev/null 2>&1; then
         if milou_validate_docker_compose_config "${ENV_FILE}" "$compose_file" "true"; then
             milou_log "DEBUG" "✅ Docker Compose configuration validated"
@@ -268,9 +360,34 @@ _prepare_docker_environment() {
 
 # Start and validate services
 _start_and_validate_services() {
+    # Check if service startup should be skipped
+    if [[ "${SKIP_SERVICE_START:-false}" == "true" ]]; then
+        milou_log "INFO" "⏭️ Skipping service startup (existing services kept running)"
+        return 0
+    fi
+    
     milou_log "INFO" "🚀 Starting Milou Services"
     
-    local compose_file="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+    local compose_file="${DOCKER_COMPOSE_FILE:-${SCRIPT_DIR}/static/docker-compose.yml}"
+    
+    # Check for port conflicts one more time before starting
+    local critical_ports=("5432" "6379" "443" "80" "9999")
+    local conflicts=()
+    
+    for port in "${critical_ports[@]}"; do
+        if ! milou_check_port_availability "$port" "localhost" "true"; then
+            conflicts+=("$port")
+        fi
+    done
+    
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        milou_log "ERROR" "❌ Cannot start services - ports still in use: ${conflicts[*]}"
+        milou_log "INFO" "💡 Try stopping conflicting services first:"
+        milou_log "INFO" "   • ./milou.sh stop (to stop Milou services)"
+        milou_log "INFO" "   • sudo systemctl stop postgresql (to stop system PostgreSQL)"
+        milou_log "INFO" "   • Or use: ./milou.sh setup --force"
+        return 1
+    fi
     
     # Start services with Docker Compose
     milou_log "INFO" "Starting Docker Compose services..."

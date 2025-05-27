@@ -2,7 +2,7 @@
 
 # =============================================================================
 # Setup Command Handler for Milou CLI
-# FIXED: Now properly integrates with working modular setup system
+# Extracted from milou.sh to improve maintainability
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly
@@ -11,47 +11,34 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# =============================================================================
-# FIXED: Setup command handler using working modular system
-# =============================================================================
-
+# Setup command handler - Now uses modular approach
 handle_setup() {
-    # Modules are loaded centrally by milou_load_command_modules() in main script
-    
-    # Load the working modular setup system
+    # Load modular setup functionality
     local setup_main_file="${SCRIPT_DIR}/commands/setup/main.sh"
     
-    if [[ ! -f "$setup_main_file" ]]; then
-        log "ERROR" "Modular setup system not found: $setup_main_file"
-        log "ERROR" "The setup system appears to be incomplete"
-        return 1
-    fi
-    
-    # Source the modular setup system
-    if ! source "$setup_main_file"; then
-        log "ERROR" "Failed to load modular setup system"
-        return 1
-    fi
-    
-    # Verify the modular function is available
-    if ! command -v handle_setup_modular >/dev/null 2>&1; then
-        log "ERROR" "Modular setup function not available after loading"
-        return 1
-    fi
-    
-    # Call the working modular setup system
-    log "INFO" "🔧 Using modular setup system..."
-    handle_setup_modular "$@"
-    local exit_code=$?
-    
-    if [[ $exit_code -eq 0 ]]; then
-        log "SUCCESS" "✅ Setup completed successfully using modular system"
+    if [[ -f "$setup_main_file" ]]; then
+        source "$setup_main_file" || {
+            if command -v milou_log >/dev/null 2>&1; then
+                milou_log "ERROR" "Failed to load modular setup system"
+            else
+                echo "ERROR: Failed to load modular setup system" >&2
+            fi
+            return 1
+        }
+        
+        # Use the modular setup function
+        handle_setup_modular "$@"
     else
-        log "ERROR" "❌ Setup failed with exit code: $exit_code"
+        if command -v milou_log >/dev/null 2>&1; then
+            milou_log "ERROR" "Modular setup system not found: $setup_main_file"
+            milou_log "INFO" "💡 Please ensure all setup modules are properly installed"
+        else
+            echo "ERROR: Modular setup system not found: $setup_main_file" >&2
+            echo "INFO: Please ensure all setup modules are properly installed" >&2
+        fi
+        return 1
     fi
-    
-    return $exit_code
 }
 
 # Export the function for use in the main script
-export -f handle_setup 
+export -f handle_setup

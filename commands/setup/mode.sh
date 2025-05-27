@@ -45,7 +45,7 @@ setup_select_mode() {
             setup_mode_ref="interactive"
         fi
     else
-        setup_mode_ref="smart"
+        setup_mode_ref="auto"
         milou_log "INFO" "🧠 Smart mode (automated with prompts when needed)"
     fi
     

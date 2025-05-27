@@ -43,14 +43,14 @@ interactive_user_setup() {
                     break
                     ;;
                 2)
-                    log "WARN" "Continuing as root - this is not recommended for production"
+    milou_log "WARN" "Continuing as root - this is not recommended for production"
                     if ! confirm "Are you sure you want to continue as root?" "N"; then
                         exit 1
                     fi
                     break
                     ;;
                 3)
-                    log "INFO" "Please create a non-root user and run the script again"
+    milou_log "INFO" "Please create a non-root user and run the script again"
                     exit 0
                     ;;
                 *)
@@ -72,13 +72,13 @@ interactive_user_setup() {
                 read -p "Choose option (1-3): " choice
                 case $choice in
                     1)
-                        log "INFO" "Adding $current_user to docker group..."
+    milou_log "INFO" "Adding $current_user to docker group..."
                         if sudo usermod -aG docker "$current_user"; then
-                            log "SUCCESS" "User added to docker group"
-                            log "INFO" "Please log out and log back in for changes to take effect"
-                            log "INFO" "Or run: newgrp docker"
+    milou_log "SUCCESS" "User added to docker group"
+    milou_log "INFO" "Please log out and log back in for changes to take effect"
+    milou_log "INFO" "Or run: newgrp docker"
                         else
-                            log "ERROR" "Failed to add user to docker group"
+    milou_log "ERROR" "Failed to add user to docker group"
                         fi
                         break
                         ;;
@@ -92,7 +92,7 @@ interactive_user_setup() {
                         break
                         ;;
                     3)
-                        log "WARN" "Continuing without Docker permissions - this will likely fail"
+    milou_log "WARN" "Continuing without Docker permissions - this will likely fail"
                         break
                         ;;
                     *)
@@ -101,7 +101,7 @@ interactive_user_setup() {
                 esac
             done
         else
-            log "SUCCESS" "User $current_user has proper Docker permissions"
+    milou_log "SUCCESS" "User $current_user has proper Docker permissions"
         fi
     fi
 }
@@ -327,7 +327,7 @@ create_user_command() {
     echo
     
     if milou_user_exists; then
-        log "INFO" "User $MILOU_USER already exists"
+    milou_log "INFO" "User $MILOU_USER already exists"
         if confirm "Do you want to recreate the user environment?" "N"; then
             setup_milou_user_environment
         fi
@@ -335,15 +335,15 @@ create_user_command() {
     fi
     
     if ! is_running_as_root; then
-        log "ERROR" "Root privileges required to create user"
-        log "INFO" "💡 Run: sudo $0 create-user"
+    milou_log "ERROR" "Root privileges required to create user"
+    milou_log "INFO" "💡 Run: sudo $0 create-user"
         return 1
     fi
     
     create_milou_user
     
     echo
-    log "SUCCESS" "User $MILOU_USER created successfully!"
+    milou_log "SUCCESS" "User $MILOU_USER created successfully!"
     echo
     echo "Next steps:"
     echo "  • Switch to milou user: sudo -u milou $0 [command]"
@@ -357,38 +357,38 @@ test_user_command() {
     echo
     
     if ! milou_user_exists; then
-        log "ERROR" "Milou user does not exist"
-        log "INFO" "💡 Create user first: sudo $0 create-user"
+    milou_log "ERROR" "Milou user does not exist"
+    milou_log "INFO" "💡 Create user first: sudo $0 create-user"
         return 1
     fi
     
     # Test environment
-    log "INFO" "Testing milou user environment..."
+    milou_log "INFO" "Testing milou user environment..."
     if validate_milou_user_environment; then
-        log "SUCCESS" "Environment validation passed"
+    milou_log "SUCCESS" "Environment validation passed"
     else
-        log "WARN" "Environment validation found issues"
+    milou_log "WARN" "Environment validation found issues"
     fi
     
     # Test CLI functionality
-    log "INFO" "Testing CLI functionality..."
+    milou_log "INFO" "Testing CLI functionality..."
     if test_milou_user_cli; then
-        log "SUCCESS" "CLI functionality test passed"
+    milou_log "SUCCESS" "CLI functionality test passed"
     else
-        log "WARN" "CLI functionality test failed"
+    milou_log "WARN" "CLI functionality test failed"
     fi
     
     # Test Docker access
-    log "INFO" "Testing Docker access..."
+    milou_log "INFO" "Testing Docker access..."
     if sudo -u "$MILOU_USER" docker info >/dev/null 2>&1; then
-        log "SUCCESS" "Docker access test passed"
+    milou_log "SUCCESS" "Docker access test passed"
     else
-        log "WARN" "Docker access test failed"
-        log "INFO" "💡 Run Docker diagnostic: $0 diagnose-docker milou"
+    milou_log "WARN" "Docker access test failed"
+    milou_log "INFO" "💡 Run Docker diagnostic: $0 diagnose-docker milou"
     fi
     
     echo
-    log "SUCCESS" "User testing completed"
+    milou_log "SUCCESS" "User testing completed"
 }
 
 # Migrate user command interface
@@ -397,15 +397,15 @@ migrate_user_command() {
     echo
     
     if ! is_running_as_root; then
-        log "ERROR" "Root privileges required for migration"
-        log "INFO" "💡 Run: sudo $0 migrate-user"
+    milou_log "ERROR" "Root privileges required for migration"
+    milou_log "INFO" "💡 Run: sudo $0 migrate-user"
         return 1
     fi
     
     migrate_to_milou_user
     
     echo
-    log "SUCCESS" "Migration completed successfully!"
+    milou_log "SUCCESS" "Migration completed successfully!"
     echo
     echo "Next steps:"
     echo "  • Switch to milou user: sudo -u milou $0 [command]"

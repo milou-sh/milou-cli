@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Default IP if none provided
-DEFAULT_IP="142.93.229.75"
+DEFAULT_IP="167.99.44.233"
 REMOTE_IP=${1:-$DEFAULT_IP}
 SSH_KEY="$HOME/.ssh/digitalocean"
 LOCAL_DIR="$HOME/milou-cli"

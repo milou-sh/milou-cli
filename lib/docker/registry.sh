@@ -299,21 +299,6 @@ batch_image_operations() {
 }
 
 # =============================================================================
-# Backward Compatibility Functions
-# =============================================================================
-
-# Legacy function names for backward compatibility
-docker_registry_setup() {
-    milou_log "WARN" "docker_registry_setup is deprecated - use setup_docker_registry"
-    setup_docker_registry "$@"
-}
-
-github_registry_auth() {
-    milou_log "WARN" "github_registry_auth is deprecated - use test_github_authentication"
-    test_github_authentication "$@"
-}
-
-# =============================================================================
 # Registry Module Complete
 # =============================================================================
 # All registry functions are now available through the loaded sub-modules:

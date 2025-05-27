@@ -17,7 +17,7 @@ fi
 
 # Single source of truth for ALL required environment variables
 # This is the ONLY place where required variables should be defined
-get_required_environment_variables() {
+milou_config_get_required_environment_variables() {
     local context="${1:-all}"  # all, minimal, production
     local -a required_vars=()
     
@@ -111,7 +111,7 @@ get_required_environment_variables() {
 }
 
 # Get optional environment variables (for documentation/validation)
-get_optional_environment_variables() {
+milou_config_get_optional_environment_variables() {
     local -a optional_vars=(
         # Extended Database Configuration
         "DB_CHARSET"
@@ -186,38 +186,38 @@ get_optional_environment_variables() {
 # =============================================================================
 
 # Validate environment file against requirements
-validate_environment_comprehensive() {
+milou_config_validate_environment_comprehensive() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
     local context="${2:-production}"  # minimal, production, all
     local strict="${3:-true}"         # true = fail on missing, false = warn only
     
     if [[ ! -f "$env_file" ]]; then
-        log "ERROR" "Environment file not found: $env_file"
+    milou_log "ERROR" "Environment file not found: $env_file"
         return 1
     fi
     
     if [[ ! -r "$env_file" ]]; then
-        log "ERROR" "Environment file not readable: $env_file"
+    milou_log "ERROR" "Environment file not readable: $env_file"
         return 1
     fi
     
     if [[ ! -s "$env_file" ]]; then
-        log "ERROR" "Environment file is empty: $env_file"
+    milou_log "ERROR" "Environment file is empty: $env_file"
         return 1
     fi
     
-    log "STEP" "Validating environment file for $context deployment"
-    log "DEBUG" "Environment file: $env_file"
-    log "DEBUG" "Validation mode: ${strict:-false}"
+    milou_log "STEP" "Validating environment file for $context deployment"
+    milou_log "DEBUG" "Environment file: $env_file"
+    milou_log "DEBUG" "Validation mode: ${strict:-false}"
     
     local errors=0
     local warnings=0
     
     # Get required variables for the specified context
     local -a required_vars
-    readarray -t required_vars < <(get_required_environment_variables "$context")
+    readarray -t required_vars < <(milou_config_get_required_environment_variables "$context")
     
-    log "DEBUG" "Checking ${#required_vars[@]} required variables for $context context"
+    milou_log "DEBUG" "Checking ${#required_vars[@]} required variables for $context context"
     
     # Check for missing required variables
     local missing_vars=()
@@ -226,96 +226,96 @@ validate_environment_comprehensive() {
     for var in "${required_vars[@]}"; do
         if grep -q "^${var}=" "$env_file" 2>/dev/null; then
             present_vars+=("$var")
-            log "TRACE" "✓ Found: $var"
+    milou_log "TRACE" "✓ Found: $var"
         else
             missing_vars+=("$var")
-            log "TRACE" "✗ Missing: $var"
+    milou_log "TRACE" "✗ Missing: $var"
         fi
     done
     
     # Report results
     if [[ ${#missing_vars[@]} -gt 0 ]]; then
         if [[ "$strict" == "true" ]]; then
-            log "ERROR" "Missing required environment variables for $context deployment:"
+    milou_log "ERROR" "Missing required environment variables for $context deployment:"
             printf '  %s\n' "${missing_vars[@]}"
             ((errors++))
         else
-            log "WARN" "Missing recommended environment variables for $context deployment:"
+    milou_log "WARN" "Missing recommended environment variables for $context deployment:"
             printf '  %s\n' "${missing_vars[@]}"
             ((warnings++))
         fi
     else
-        log "SUCCESS" "All required environment variables are present for $context deployment"
+    milou_log "SUCCESS" "All required environment variables are present for $context deployment"
     fi
     
-    log "INFO" "Environment validation summary:"
-    log "INFO" "  ✅ Present: ${#present_vars[@]}/${#required_vars[@]} required variables"
-    log "INFO" "  ❌ Missing: ${#missing_vars[@]} variables"
-    log "INFO" "  🚨 Errors: $errors"
-    log "INFO" "  ⚠️ Warnings: $warnings"
+    milou_log "INFO" "Environment validation summary:"
+    milou_log "INFO" "  ✅ Present: ${#present_vars[@]}/${#required_vars[@]} required variables"
+    milou_log "INFO" "  ❌ Missing: ${#missing_vars[@]} variables"
+    milou_log "INFO" "  🚨 Errors: $errors"
+    milou_log "INFO" "  ⚠️ Warnings: $warnings"
     
     # Check file permissions
     local file_perms
     file_perms=$(stat -c "%a" "$env_file" 2>/dev/null || stat -f "%A" "$env_file" 2>/dev/null || echo "unknown")
     
     if [[ "$file_perms" != "600" ]]; then
-        log "WARN" "Environment file has insecure permissions: $file_perms"
-        log "INFO" "Setting secure permissions..."
+    milou_log "WARN" "Environment file has insecure permissions: $file_perms"
+    milou_log "INFO" "Setting secure permissions..."
         if chmod 600 "$env_file"; then
-            log "SUCCESS" "Fixed file permissions to 600"
+    milou_log "SUCCESS" "Fixed file permissions to 600"
         else
-            log "ERROR" "Failed to set secure permissions"
+    milou_log "ERROR" "Failed to set secure permissions"
             ((errors++))
         fi
     else
-        log "SUCCESS" "Environment file has secure permissions (600)"
+    milou_log "SUCCESS" "Environment file has secure permissions (600)"
     fi
     
     # Validate syntax
     if ! env -i bash -n "$env_file" 2>/dev/null; then
-        log "ERROR" "Environment file has syntax errors"
+    milou_log "ERROR" "Environment file has syntax errors"
         ((errors++))
     else
-        log "SUCCESS" "Environment file syntax is valid"
+    milou_log "SUCCESS" "Environment file syntax is valid"
     fi
     
     # Return appropriate exit code
     if [[ $errors -gt 0 ]]; then
-        log "ERROR" "Environment validation failed ($errors errors, $warnings warnings)"
+    milou_log "ERROR" "Environment validation failed ($errors errors, $warnings warnings)"
         return 1
     elif [[ $warnings -gt 0 ]]; then
-        log "WARN" "Environment validation completed with warnings ($warnings warnings)"
+    milou_log "WARN" "Environment validation completed with warnings ($warnings warnings)"
         return 0
     else
-        log "SUCCESS" "Environment validation passed successfully"
+    milou_log "SUCCESS" "Environment validation passed successfully"
         return 0
     fi
 }
 
 # Quick validation for essential variables only
-validate_environment_essential() {
+milou_config_validate_environment_essential() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
-    validate_environment_comprehensive "$env_file" "minimal" "true"
+    milou_config_validate_environment_comprehensive "$env_file" "minimal" "true"
 }
 
 # Production validation with all requirements
-validate_environment_production() {
+milou_config_validate_environment_production() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
-    validate_environment_comprehensive "$env_file" "production" "true"
+    milou_config_validate_environment_comprehensive "$env_file" "production" "true"
 }
 
 # Check if specific variable exists and is not empty
-check_environment_variable() {
+milou_config_check_environment_variable() {
     local var_name="$1"
     local env_file="${2:-${SCRIPT_DIR}/.env}"
     
     if [[ -z "$var_name" ]]; then
-        log "ERROR" "Variable name is required"
+    milou_log "ERROR" "Variable name is required"
         return 1
     fi
     
     if [[ ! -f "$env_file" ]]; then
-        log "DEBUG" "Environment file not found: $env_file"
+    milou_log "DEBUG" "Environment file not found: $env_file"
         return 1
     fi
     
@@ -324,26 +324,26 @@ check_environment_variable() {
     value=$(grep "^${var_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2-)
     
     if [[ -n "$value" ]]; then
-        log "DEBUG" "Variable $var_name is set"
+    milou_log "DEBUG" "Variable $var_name is set"
         return 0
     else
-        log "DEBUG" "Variable $var_name is missing or empty"
+    milou_log "DEBUG" "Variable $var_name is missing or empty"
         return 1
     fi
 }
 
 # List missing variables for a specific context
-list_missing_variables() {
+milou_config_list_missing_variables() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
     local context="${2:-production}"
     
     if [[ ! -f "$env_file" ]]; then
-        log "ERROR" "Environment file not found: $env_file"
+    milou_log "ERROR" "Environment file not found: $env_file"
         return 1
     fi
     
     local -a required_vars missing_vars
-    readarray -t required_vars < <(get_required_environment_variables "$context")
+    readarray -t required_vars < <(milou_config_get_required_environment_variables "$context")
     
     for var in "${required_vars[@]}"; do
         if ! grep -q "^${var}=" "$env_file" 2>/dev/null; then
@@ -360,33 +360,14 @@ list_missing_variables() {
 }
 
 # =============================================================================
-# BACKWARD COMPATIBILITY FUNCTIONS
-# =============================================================================
-
-# Legacy function names for backward compatibility
-validate_config() {
-    validate_environment_production "$@"
-}
-
-validate_configuration() {
-    validate_environment_production "$@"
-}
-
-validate_environment_file() {
-    validate_environment_essential "$@"
-}
-
-# =============================================================================
 # Export Functions
 # =============================================================================
 
-export -f get_required_environment_variables
-export -f get_optional_environment_variables
-export -f validate_environment_comprehensive
-export -f validate_environment_essential
-export -f validate_environment_production
-export -f check_environment_variable
-export -f list_missing_variables
-export -f validate_config
-export -f validate_configuration
-export -f validate_environment_file 
+# Main functions with milou_config_ prefix
+export -f milou_config_get_required_environment_variables
+export -f milou_config_get_optional_environment_variables
+export -f milou_config_validate_environment_comprehensive
+export -f milou_config_validate_environment_essential
+export -f milou_config_validate_environment_production
+export -f milou_config_check_environment_variable
+export -f milou_config_list_missing_variables

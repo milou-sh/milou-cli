@@ -20,6 +20,7 @@ readonly BLUE='\033[0;34m'
 readonly NC='\033[0m'
 
 # Enhanced log function that uses milou_log if available
+# Enhanced log function that uses milou_log if available
 log() {
     if command -v milou_log >/dev/null 2>&1; then
         milou_log "$@"
@@ -41,7 +42,7 @@ log() {
 
 # Setup test environment
 setup_test_environment() {
-    log "INFO" "🧪 Setting up test environment for Milou CLI"
+    milou_log "INFO" "🧪 Setting up test environment for Milou CLI"
     
     # Change to project root
     cd "$PROJECT_ROOT"
@@ -51,29 +52,29 @@ setup_test_environment() {
     
     # Copy environment template if needed
     if [[ ! -f .env && -f .env.example ]]; then
-        log "INFO" "📋 Copying .env.example to .env"
+    milou_log "INFO" "📋 Copying .env.example to .env"
         cp .env.example .env
     fi
     
     # Setup SSL directory structure
     if [[ ! -d static/ssl ]]; then
         mkdir -p static/ssl/backups
-        log "INFO" "📁 Created SSL directory structure"
+    milou_log "INFO" "📁 Created SSL directory structure"
     fi
     
-    log "INFO" "✅ Test environment setup complete"
+    milou_log "INFO" "✅ Test environment setup complete"
 }
 
 # Main function
 main() {
-    log "INFO" "🚀 Milou CLI Test Setup"
+    milou_log "INFO" "🚀 Milou CLI Test Setup"
     echo "Project Root: $PROJECT_ROOT"
     echo
     
     setup_test_environment
     
-    log "INFO" "🎉 Setup completed successfully!"
-    log "INFO" "You can now run development commands from: $PROJECT_ROOT"
+    milou_log "INFO" "🎉 Setup completed successfully!"
+    milou_log "INFO" "You can now run development commands from: $PROJECT_ROOT"
 }
 
 # Show help if requested

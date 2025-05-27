@@ -49,12 +49,12 @@ setup_assess_prerequisites() {
 _check_critical_dependencies() {
     local -n missing_ref="$1"
     local -n warnings_ref="$2"
-    local -n needs_deps_ref="$3"
+    local -n deps_ref="$3"
     
     # Check Docker
     if ! command -v docker >/dev/null 2>&1; then
         missing_ref+=("Docker")
-        needs_deps_ref=true
+        deps_ref=true
     elif ! docker info >/dev/null 2>&1; then
         warnings_ref+=("Docker daemon not accessible")
     fi
@@ -62,20 +62,39 @@ _check_critical_dependencies() {
     # Check Docker Compose
     if ! docker compose version >/dev/null 2>&1; then
         missing_ref+=("Docker Compose")
-        needs_deps_ref=true
+        deps_ref=true
     fi
 }
 
-# Check system tools
+# Check system tools (optional)
 _check_system_tools() {
     local -n missing_ref="$1"
     
-    local -a tools=("curl" "wget" "jq" "openssl")
-    for tool in "${tools[@]}"; do
+    # Essential tools (will be reported as missing)
+    local -a essential_tools=("openssl")
+    # Optional tools (will be reported as recommendations)
+    local -a optional_tools=("curl" "wget" "jq")
+    
+    # Check essential tools
+    for tool in "${essential_tools[@]}"; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             missing_ref+=("$tool")
         fi
     done
+    
+    # Check optional tools (report separately)
+    local missing_optional=()
+    for tool in "${optional_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_optional+=("$tool")
+        fi
+    done
+    
+    # Report optional tools separately
+    if [[ ${#missing_optional[@]} -gt 0 ]]; then
+        milou_log "INFO" "💡 Optional tools not installed (can install later): ${missing_optional[*]}"
+        milou_log "DEBUG" "Optional tools improve functionality but are not required"
+    fi
 }
 
 # Report prerequisites status

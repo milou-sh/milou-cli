@@ -26,30 +26,30 @@ GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
 test_github_authentication() {
     local token="$1"
     
-    log "STEP" "Testing GitHub authentication..."
-    log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
+    milou_log "STEP" "Testing GitHub authentication..."
+    milou_log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
     
     # Validate token format first (using consolidated function)
     if ! milou_validate_github_token "$token" "true"; then
-        log "DEBUG" "Token format validation failed"
+    milou_log "DEBUG" "Token format validation failed"
         return 1
     fi
     
-    log "DEBUG" "Token format validation passed"
+    milou_log "DEBUG" "Token format validation passed"
     
     # Test authentication with GitHub API
-    log "DEBUG" "Testing API call to: $GITHUB_API_BASE/user"
-    log "DEBUG" "Current user: $(whoami)"
-    log "DEBUG" "Current working directory: $(pwd)"
-    log "DEBUG" "PATH: $PATH"
-    log "DEBUG" "curl version: $(curl --version 2>/dev/null | head -1 || echo 'curl not found')"
+    milou_log "DEBUG" "Testing API call to: $GITHUB_API_BASE/user"
+    milou_log "DEBUG" "Current user: $(whoami)"
+    milou_log "DEBUG" "Current working directory: $(pwd)"
+    milou_log "DEBUG" "PATH: $PATH"
+    milou_log "DEBUG" "curl version: $(curl --version 2>/dev/null | head -1 || echo 'curl not found')"
     
     # Test basic curl functionality first
-    log "DEBUG" "Testing basic curl to httpbin.org..."
+    milou_log "DEBUG" "Testing basic curl to httpbin.org..."
     local test_response
     test_response=$(curl -s --connect-timeout 5 --max-time 10 "https://httpbin.org/get" 2>/dev/null)
     local test_exit_code=$?
-    log "DEBUG" "Basic curl test - exit code: $test_exit_code, response length: ${#test_response}"
+    milou_log "DEBUG" "Basic curl test - exit code: $test_exit_code, response length: ${#test_response}"
     
     local response
     local curl_error
@@ -64,42 +64,42 @@ test_github_authentication() {
     set -e
     
     if [[ $curl_exit_code -ne 0 ]]; then
-        log "ERROR" "Failed to connect to GitHub API"
-        log "DEBUG" "curl command failed with exit code: $curl_exit_code"
-        log "DEBUG" "curl stderr: $(cat "$curl_error" 2>/dev/null || echo 'no error output')"
+    milou_log "ERROR" "Failed to connect to GitHub API"
+    milou_log "DEBUG" "curl command failed with exit code: $curl_exit_code"
+    milou_log "DEBUG" "curl stderr: $(cat "$curl_error" 2>/dev/null || echo 'no error output')"
         rm -f "$curl_error"
         return 1
     fi
     
     rm -f "$curl_error"
     
-    log "DEBUG" "API call succeeded, response length: ${#response}"
+    milou_log "DEBUG" "API call succeeded, response length: ${#response}"
     
     # Check if authentication was successful
     if echo "$response" | grep -q '"login"'; then
         local username
         username=$(echo "$response" | grep -o '"login": *"[^"]*"' | cut -d'"' -f4)
-        log "SUCCESS" "GitHub authentication successful (user: $username)"
+    milou_log "SUCCESS" "GitHub authentication successful (user: $username)"
         
         # Test Docker registry authentication
-        log "DEBUG" "Testing Docker registry authentication..."
+    milou_log "DEBUG" "Testing Docker registry authentication..."
         if echo "$token" | docker login ghcr.io -u "$username" --password-stdin >/dev/null 2>&1; then
-            log "SUCCESS" "Docker registry authentication successful"
+    milou_log "SUCCESS" "Docker registry authentication successful"
             return 0
         else
-            log "ERROR" "Docker registry authentication failed"
-            log "INFO" "💡 Ensure your token has 'read:packages' and 'write:packages' scopes"
+    milou_log "ERROR" "Docker registry authentication failed"
+    milou_log "INFO" "💡 Ensure your token has 'read:packages' and 'write:packages' scopes"
             return 1
         fi
     else
-        log "ERROR" "GitHub authentication failed"
-        log "DEBUG" "API Response: $response"
+    milou_log "ERROR" "GitHub authentication failed"
+    milou_log "DEBUG" "API Response: $response"
         
         # Check for specific error messages
         if echo "$response" | grep -q "Bad credentials"; then
-            log "INFO" "💡 The provided token is invalid or expired"
+    milou_log "INFO" "💡 The provided token is invalid or expired"
         elif echo "$response" | grep -q "rate limit"; then
-            log "INFO" "💡 GitHub API rate limit exceeded, try again later"
+    milou_log "INFO" "💡 GitHub API rate limit exceeded, try again later"
         fi
         
         return 1
@@ -115,7 +115,7 @@ get_available_image_tags() {
     local image_name="$1"
     local token="$2"
     
-    log "DEBUG" "Fetching available tags for $image_name..."
+    milou_log "DEBUG" "Fetching available tags for $image_name..."
     
     # Use the GitHub Packages API to get package versions
     local -a api_patterns=(
@@ -132,7 +132,7 @@ get_available_image_tags() {
     for api_base in "${api_base_urls[@]}"; do
         for pattern in "${api_patterns[@]}"; do
             local api_url="${api_base}/${pattern}/versions"
-            log "DEBUG" "Trying API endpoint: $api_url"
+    milou_log "DEBUG" "Trying API endpoint: $api_url"
             
             local response
             if response=$(curl -s -w "\n%{http_code}" \
@@ -144,10 +144,10 @@ get_available_image_tags() {
                 local http_code=$(echo "$response" | tail -n1)
                 local body=$(echo "$response" | head -n -1)
                 
-                log "DEBUG" "HTTP response code: $http_code for pattern: $pattern"
+    milou_log "DEBUG" "HTTP response code: $http_code for pattern: $pattern"
                 
                 if [[ "$http_code" == "200" ]]; then
-                    log "DEBUG" "Successfully fetched package data from: $api_url"
+    milou_log "DEBUG" "Successfully fetched package data from: $api_url"
                     
                     # Try different ways to extract tags from the response
                     local tags=""
@@ -173,29 +173,29 @@ get_available_image_tags() {
                     fi
                     
                     if [[ -n "$tags" ]]; then
-                        log "DEBUG" "Found tags via API: $(echo "$tags" | head -10 | tr '\n' ' ')$([ $(echo "$tags" | wc -l) -gt 10 ] && echo "...")"
+    milou_log "DEBUG" "Found tags via API: $(echo "$tags" | head -10 | tr '\n' ' ')$([ $(echo "$tags" | wc -l) -gt 10 ] && echo "...")"
                         echo "$tags"
                         return 0
                     else
-                        log "DEBUG" "API returned data but no tags were extracted"
-                        log "DEBUG" "Response sample: $(echo "$body" | head -c 200)..."
+    milou_log "DEBUG" "API returned data but no tags were extracted"
+    milou_log "DEBUG" "Response sample: $(echo "$body" | head -c 200)..."
                     fi
                 elif [[ "$http_code" == "401" ]]; then
-                    log "DEBUG" "Authentication failed for: $api_url"
+    milou_log "DEBUG" "Authentication failed for: $api_url"
                 elif [[ "$http_code" == "403" ]]; then
-                    log "DEBUG" "Access forbidden for: $api_url (token may lack permissions)"
+    milou_log "DEBUG" "Access forbidden for: $api_url (token may lack permissions)"
                 elif [[ "$http_code" == "404" ]]; then
-                    log "DEBUG" "Package not found at: $api_url (pattern: $pattern)"
+    milou_log "DEBUG" "Package not found at: $api_url (pattern: $pattern)"
                 else
-                    log "DEBUG" "Unexpected response ($http_code) from: $api_url"
+    milou_log "DEBUG" "Unexpected response ($http_code) from: $api_url"
                 fi
             else
-                log "DEBUG" "Failed to fetch from: $api_url"
+    milou_log "DEBUG" "Failed to fetch from: $api_url"
             fi
         done
     done
     
-    log "DEBUG" "No tags found for $image_name from any GitHub Packages API endpoint"
+    milou_log "DEBUG" "No tags found for $image_name from any GitHub Packages API endpoint"
     return 1
 }
 

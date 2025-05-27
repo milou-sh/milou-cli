@@ -5,13 +5,16 @@
 # Comprehensive security measures and compliance checks
 # =============================================================================
 
-# Source utility functions from core module
-if [[ -f "${SCRIPT_DIR}/lib/core/utilities.sh" ]]; then
-    source "${SCRIPT_DIR}/lib/core/utilities.sh"
-elif [[ -f "${BASH_SOURCE%/*}/../core/utilities.sh" ]]; then
-    source "${BASH_SOURCE%/*}/../core/utilities.sh"
+# Ensure logging is available
+if ! command -v milou_log >/dev/null 2>&1; then
+    local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+    if [[ -f "${script_dir}/lib/core/logging.sh" ]]; then
+        source "${script_dir}/lib/core/logging.sh"
+    else
+        echo "ERROR: Logging module not available" >&2
+        return 1
+    fi
 fi
-source "${BASH_SOURCE%/*}/user-management.sh" 2>/dev/null || true
 
 # Security Constants
 readonly SECURITY_LOG_FILE="${CONFIG_DIR}/security.log"
@@ -30,7 +33,7 @@ readonly DOCKER_SECURITY_OPTS=(
 
 # Comprehensive security assessment
 run_security_assessment() {
-    log "STEP" "Running comprehensive security assessment..."
+    milou_log "STEP" "Running comprehensive security assessment..."
     
     local score=100
     local issues=0
@@ -316,17 +319,17 @@ run_security_assessment() {
 
 # Apply comprehensive security hardening
 harden_system() {
-    log "STEP" "Applying system security hardening..."
+    milou_log "STEP" "Applying system security hardening..."
     
     if ! is_running_as_root; then
-        log "WARN" "Root privileges required for system hardening"
+    milou_log "WARN" "Root privileges required for system hardening"
         return 1
     fi
     
     local applied=0
     
     # Secure file permissions
-    log "INFO" "Hardening file permissions..."
+    milou_log "INFO" "Hardening file permissions..."
     if [[ -f "$ENV_FILE" ]]; then
         chmod 600 "$ENV_FILE"
         ((applied++))
@@ -340,7 +343,7 @@ harden_system() {
     
     # Secure Docker daemon configuration
     if [[ -f /etc/docker/daemon.json ]]; then
-        log "INFO" "Hardening Docker daemon configuration..."
+    milou_log "INFO" "Hardening Docker daemon configuration..."
         local docker_config="/etc/docker/daemon.json"
         local backup_config="${docker_config}.backup.$(date +%Y%m%d_%H%M%S)"
         
@@ -365,13 +368,13 @@ harden_system() {
   "experimental": false
 }
 EOF
-        log "INFO" "Docker daemon configuration hardened (backup: $backup_config)"
+    milou_log "INFO" "Docker daemon configuration hardened (backup: $backup_config)"
         ((applied++))
     fi
     
     # Configure firewall rules
     if command -v ufw >/dev/null 2>&1; then
-        log "INFO" "Configuring firewall rules..."
+    milou_log "INFO" "Configuring firewall rules..."
         
         # Reset and configure UFW
         ufw --force reset >/dev/null 2>&1
@@ -389,13 +392,13 @@ EOF
         ufw deny 15672/tcp comment "RabbitMQ" >/dev/null 2>&1
         
         ufw --force enable >/dev/null 2>&1
-        log "INFO" "Firewall rules configured"
+    milou_log "INFO" "Firewall rules configured"
         ((applied++))
     fi
     
     # Set up fail2ban if available
     if command -v fail2ban-server >/dev/null 2>&1; then
-        log "INFO" "Configuring fail2ban..."
+    milou_log "INFO" "Configuring fail2ban..."
         
         # Create Milou-specific jail
         cat > /etc/fail2ban/jail.d/milou.conf << 'EOF'
@@ -419,11 +422,11 @@ findtime = 300
 EOF
         
         systemctl restart fail2ban >/dev/null 2>&1
-        log "INFO" "Fail2ban configured for Milou"
+    milou_log "INFO" "Fail2ban configured for Milou"
         ((applied++))
     fi
     
-    log "SUCCESS" "Applied $applied security hardening measures"
+    milou_log "SUCCESS" "Applied $applied security hardening measures"
     return 0
 }
 
@@ -433,7 +436,7 @@ EOF
 
 # Monitor for security events
 monitor_security_events() {
-    log "INFO" "Monitoring security events..."
+    milou_log "INFO" "Monitoring security events..."
     
     local events=0
     
@@ -442,7 +445,7 @@ monitor_security_events() {
         local failed_logins
         failed_logins=$(grep "authentication failure" /var/log/auth.log | wc -l)
         if [[ $failed_logins -gt 10 ]]; then
-            log "WARN" "High number of failed login attempts detected: $failed_logins"
+    milou_log "WARN" "High number of failed login attempts detected: $failed_logins"
             ((events++))
         fi
     fi
@@ -453,7 +456,7 @@ monitor_security_events() {
         local priv_attempts
         priv_attempts=$(docker events --since="1h" --filter="event=start" 2>/dev/null | grep -c "privileged" || echo "0")
         if [[ $priv_attempts -gt 0 ]]; then
-            log "WARN" "Privileged container starts detected: $priv_attempts"
+    milou_log "WARN" "Privileged container starts detected: $priv_attempts"
             ((events++))
         fi
     fi
@@ -463,7 +466,7 @@ monitor_security_events() {
         local suspicious_connections
         suspicious_connections=$(netstat -tuln | grep -E ":5432|:6379|:15672" | grep -v "127.0.0.1" | wc -l)
         if [[ $suspicious_connections -gt 0 ]]; then
-            log "WARN" "Suspicious network connections detected"
+    milou_log "WARN" "Suspicious network connections detected"
             ((events++))
         fi
     fi
@@ -506,7 +509,7 @@ validate_secure_config() {
     local issues=0
     
     if [[ ! -f "$config_file" ]]; then
-        log "ERROR" "Configuration file not found: $config_file"
+    milou_log "ERROR" "Configuration file not found: $config_file"
         return 1
     fi
     
@@ -521,7 +524,7 @@ validate_secure_config() {
     
     for pattern in "${insecure_patterns[@]}"; do
         if grep -qi "$pattern" "$config_file"; then
-            log "WARN" "Potentially insecure configuration found: $pattern"
+    milou_log "WARN" "Potentially insecure configuration found: $pattern"
             ((issues++))
         fi
     done
@@ -533,7 +536,7 @@ validate_secure_config() {
 create_security_report() {
     local report_file="${1:-security-report-$(date +%Y%m%d_%H%M%S).txt}"
     
-    log "INFO" "Generating security report: $report_file"
+    milou_log "INFO" "Generating security report: $report_file"
     
     {
         echo "MILOU SECURITY REPORT"
@@ -568,7 +571,7 @@ create_security_report() {
         
     } > "$report_file"
     
-    log "SUCCESS" "Security report saved to: $report_file"
+    milou_log "SUCCESS" "Security report saved to: $report_file"
 }
 
 # Export security functions

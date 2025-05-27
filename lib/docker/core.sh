@@ -18,7 +18,7 @@ GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
 
 # Constants (use defaults if not already set)
 DEFAULT_IMAGE_TAG="${DEFAULT_IMAGE_TAG:-v1.0.0}"
-DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+DOCKER_COMPOSE_FILE="${DOCKER_COMPOSE_FILE:-${SCRIPT_DIR}/static/docker-compose.yml}"
 REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 
 # =============================================================================
@@ -29,19 +29,19 @@ REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 detect_and_handle_conflicts() {
     local current_mode="${1:-prod}"  # dev or prod
     
-    log "DEBUG" "Checking for conflicting Milou services (current mode: $current_mode)"
+    milou_log "DEBUG" "Checking for conflicting Milou services (current mode: $current_mode)"
     
     # Check for different types of Milou containers
     local cli_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null || true)
     local source_containers=$(docker ps -a --filter "name=milou_fresh-" --format "{{.Names}}" 2>/dev/null || true)
     
     if [[ -n "$cli_containers" && -n "$source_containers" ]]; then
-        log "WARN" "⚠️  Conflicting Milou environments detected!"
-        log "WARN" "   CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
-        log "WARN" "   Source containers: $(echo "$source_containers" | tr '\n' ' ')"
+    milou_log "WARN" "⚠️  Conflicting Milou environments detected!"
+    milou_log "WARN" "   CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
+    milou_log "WARN" "   Source containers: $(echo "$source_containers" | tr '\n' ' ')"
         
         if [[ "${INTERACTIVE:-true}" == "false" ]]; then
-            log "INFO" "Non-interactive mode: automatically stopping conflicting services"
+    milou_log "INFO" "Non-interactive mode: automatically stopping conflicting services"
             stop_conflicting_services "$current_mode"
         else
             echo
@@ -60,34 +60,34 @@ detect_and_handle_conflicts() {
             
             case "$choice" in
                 1)
-                    log "INFO" "Stopping CLI-managed containers..."
+    milou_log "INFO" "Stopping CLI-managed containers..."
                     stop_containers_by_pattern "milou-"
                     ;;
                 2)
-                    log "INFO" "Stopping source containers..."
+    milou_log "INFO" "Stopping source containers..."
                     stop_containers_by_pattern "milou_fresh-"
                     ;;
                 3)
-                    log "INFO" "Stopping all Milou containers..."
+    milou_log "INFO" "Stopping all Milou containers..."
                     stop_containers_by_pattern "milou-"
                     stop_containers_by_pattern "milou_fresh-"
                     ;;
                 4)
-                    log "INFO" "Operation cancelled"
+    milou_log "INFO" "Operation cancelled"
                     return 1
                     ;;
                 *)
-                    log "ERROR" "Invalid choice. Operation cancelled"
+    milou_log "ERROR" "Invalid choice. Operation cancelled"
                     return 1
                     ;;
             esac
         fi
     elif [[ -n "$cli_containers" ]]; then
-        log "DEBUG" "Found existing CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
+    milou_log "DEBUG" "Found existing CLI containers: $(echo "$cli_containers" | tr '\n' ' ')"
     elif [[ -n "$source_containers" ]]; then
-        log "DEBUG" "Found existing source containers: $(echo "$source_containers" | tr '\n' ' ')"
+    milou_log "DEBUG" "Found existing source containers: $(echo "$source_containers" | tr '\n' ' ')"
         if [[ "${INTERACTIVE:-true}" == "false" ]]; then
-            log "INFO" "Non-interactive mode: stopping source containers to avoid conflicts"
+    milou_log "INFO" "Non-interactive mode: stopping source containers to avoid conflicts"
             stop_containers_by_pattern "milou_fresh-"
         fi
     fi
@@ -99,17 +99,17 @@ detect_and_handle_conflicts() {
 stop_containers_by_pattern() {
     local pattern="$1"
     
-    log "DEBUG" "Stopping containers matching pattern: $pattern"
+    milou_log "DEBUG" "Stopping containers matching pattern: $pattern"
     
     local containers
     containers=$(docker ps --filter "name=$pattern" --format "{{.Names}}" 2>/dev/null || true)
     
     if [[ -n "$containers" ]]; then
-        log "INFO" "Stopping containers: $(echo "$containers" | tr '\n' ' ')"
+    milou_log "INFO" "Stopping containers: $(echo "$containers" | tr '\n' ' ')"
         echo "$containers" | xargs docker stop >/dev/null 2>&1 || true
-        log "SUCCESS" "✅ Stopped containers matching pattern: $pattern"
+    milou_log "SUCCESS" "✅ Stopped containers matching pattern: $pattern"
     else
-        log "DEBUG" "No running containers found matching pattern: $pattern"
+    milou_log "DEBUG" "No running containers found matching pattern: $pattern"
     fi
 }
 
@@ -119,15 +119,15 @@ stop_conflicting_services() {
     
     case "$current_mode" in
         "dev")
-            log "INFO" "Development mode requested - stopping production containers"
+    milou_log "INFO" "Development mode requested - stopping production containers"
             stop_containers_by_pattern "milou_fresh-"
             ;;
         "prod")
-            log "INFO" "Production mode requested - stopping source development containers"
+    milou_log "INFO" "Production mode requested - stopping source development containers"
             stop_containers_by_pattern "milou_fresh-"
             ;;
         *)
-            log "WARN" "Unknown mode: $current_mode - stopping all conflicting containers"
+    milou_log "WARN" "Unknown mode: $current_mode - stopping all conflicting containers"
             stop_containers_by_pattern "milou-"
             stop_containers_by_pattern "milou_fresh-"
             ;;
@@ -143,15 +143,15 @@ check_docker_access() {
 
 # Create Docker networks if they don't exist
 create_networks() {
-    log "DEBUG" "Creating Docker networks..."
+    milou_log "DEBUG" "Creating Docker networks..."
     
     local -a networks=("milou_network" "proxy")
     
     for network in "${networks[@]}"; do
         if ! docker network inspect "$network" >/dev/null 2>&1; then
-            log "DEBUG" "Creating network: $network"
+    milou_log "DEBUG" "Creating network: $network"
             if ! docker network create "$network" >/dev/null 2>&1; then
-                log "WARN" "Failed to create network: $network"
+    milou_log "WARN" "Failed to create network: $network"
             fi
         fi
     done
@@ -159,20 +159,20 @@ create_networks() {
 
 # Ensure all required Docker networks exist
 ensure_docker_networks() {
-    log "DEBUG" "Ensuring required Docker networks exist..."
+    milou_log "DEBUG" "Ensuring required Docker networks exist..."
     
     local -a required_networks=("proxy")
     
     for network in "${required_networks[@]}"; do
         if ! docker network inspect "$network" >/dev/null 2>&1; then
-            log "INFO" "Creating required network: $network"
+    milou_log "INFO" "Creating required network: $network"
             if docker network create "$network" >/dev/null 2>&1; then
-                log "DEBUG" "Network $network created successfully"
+    milou_log "DEBUG" "Network $network created successfully"
             else
-                log "WARN" "Failed to create network: $network"
+    milou_log "WARN" "Failed to create network: $network"
             fi
         else
-            log "DEBUG" "Network $network already exists"
+    milou_log "DEBUG" "Network $network already exists"
         fi
     done
 }
@@ -183,31 +183,31 @@ ensure_docker_networks() {
 
 # Clean up Docker resources
 cleanup_docker_resources() {
-    log "STEP" "Cleaning up Docker resources..."
+    milou_log "STEP" "Cleaning up Docker resources..."
     
     # Remove unused images
     if docker image prune -f >/dev/null 2>&1; then
-        log "INFO" "Removed unused Docker images"
+    milou_log "INFO" "Removed unused Docker images"
     fi
     
     # Remove unused volumes (with confirmation)
     if [[ "$FORCE" == true ]] || confirm "Remove unused Docker volumes? (This may delete persistent data)"; then
         if docker volume prune -f >/dev/null 2>&1; then
-            log "INFO" "Removed unused Docker volumes"
+    milou_log "INFO" "Removed unused Docker volumes"
         fi
     fi
     
     # Remove unused networks
     if docker network prune -f >/dev/null 2>&1; then
-        log "INFO" "Removed unused Docker networks"
+    milou_log "INFO" "Removed unused Docker networks"
     fi
     
-    log "SUCCESS" "Docker cleanup completed"
+    milou_log "SUCCESS" "Docker cleanup completed"
 }
 
 # Complete cleanup of all Milou-related Docker resources
 complete_cleanup_milou_resources() {
-    log "STEP" "Performing complete cleanup of all Milou resources..."
+    milou_log "STEP" "Performing complete cleanup of all Milou resources..."
     
     echo
     echo -e "${BOLD}${RED}⚠️  WARNING: DESTRUCTIVE OPERATION${NC}"
@@ -221,98 +221,98 @@ complete_cleanup_milou_resources() {
     
     # In non-interactive mode with force flag, proceed automatically
     if [[ "${INTERACTIVE:-true}" == "false" && "$FORCE" == "true" ]]; then
-        log "INFO" "Non-interactive mode with --force flag: proceeding with complete cleanup"
+    milou_log "INFO" "Non-interactive mode with --force flag: proceeding with complete cleanup"
     elif [[ "${INTERACTIVE:-true}" == "false" ]]; then
-        log "WARN" "Non-interactive mode detected but --force not specified"
-        log "INFO" "To perform complete cleanup automatically, use: --force"
-        log "INFO" "Cancelling cleanup to prevent accidental data loss"
+    milou_log "WARN" "Non-interactive mode detected but --force not specified"
+    milou_log "INFO" "To perform complete cleanup automatically, use: --force"
+    milou_log "INFO" "Cancelling cleanup to prevent accidental data loss"
         return 1
     elif ! confirm "Are you ABSOLUTELY SURE you want to delete ALL Milou data?" "N"; then
-        log "INFO" "Complete cleanup cancelled"
+    milou_log "INFO" "Complete cleanup cancelled"
         return 1
     fi
     
     if ! confirm "Last chance - this cannot be undone. Continue?" "N"; then
-        log "INFO" "Complete cleanup cancelled"
+    milou_log "INFO" "Complete cleanup cancelled"
         return 1
     fi
     
     # Stop and remove all Milou containers
-    log "INFO" "🗑️ Removing all Milou containers..."
+    milou_log "INFO" "🗑️ Removing all Milou containers..."
     local containers
     containers=$(docker ps -a --filter "name=static-" --format "{{.Names}}" 2>/dev/null || true)
     if [[ -n "$containers" ]]; then
         echo "$containers" | xargs docker stop 2>/dev/null || true
         echo "$containers" | xargs docker rm -f 2>/dev/null || true
-        log "SUCCESS" "Removed containers: $(echo "$containers" | tr '\n' ' ')"
+    milou_log "SUCCESS" "Removed containers: $(echo "$containers" | tr '\n' ' ')"
     else
-        log "INFO" "No Milou containers found"
+    milou_log "INFO" "No Milou containers found"
     fi
     
     # Remove all Milou-related images
-    log "INFO" "🗑️ Removing all Milou Docker images..."
+    milou_log "INFO" "🗑️ Removing all Milou Docker images..."
     local images
     images=$(docker images --filter "reference=ghcr.io/milou-sh/*" --format "{{.Repository}}:{{.Tag}}" 2>/dev/null || true)
     if [[ -n "$images" ]]; then
         echo "$images" | xargs docker rmi -f 2>/dev/null || true
-        log "SUCCESS" "Removed images: $(echo "$images" | tr '\n' ' ')"
+    milou_log "SUCCESS" "Removed images: $(echo "$images" | tr '\n' ' ')"
     else
-        log "INFO" "No Milou images found"
+    milou_log "INFO" "No Milou images found"
     fi
     
     # Remove all Milou volumes
-    log "INFO" "🗑️ Removing all Milou data volumes..."
+    milou_log "INFO" "🗑️ Removing all Milou data volumes..."
     local volumes
     volumes=$(docker volume ls --filter "name=static_" --format "{{.Name}}" 2>/dev/null || true)
     if [[ -n "$volumes" ]]; then
         echo "$volumes" | xargs docker volume rm -f 2>/dev/null || true
-        log "SUCCESS" "Removed volumes: $(echo "$volumes" | tr '\n' ' ')"
+    milou_log "SUCCESS" "Removed volumes: $(echo "$volumes" | tr '\n' ' ')"
     else
-        log "INFO" "No Milou volumes found"
+    milou_log "INFO" "No Milou volumes found"
     fi
     
     # Remove Milou networks (but keep standard Docker networks)
-    log "INFO" "🗑️ Removing Milou networks..."
+    milou_log "INFO" "🗑️ Removing Milou networks..."
     local networks
     networks=$(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null || true)
     if [[ -n "$networks" ]]; then
         echo "$networks" | xargs docker network rm 2>/dev/null || true
-        log "SUCCESS" "Removed networks: $(echo "$networks" | tr '\n' ' ')"
+    milou_log "SUCCESS" "Removed networks: $(echo "$networks" | tr '\n' ' ')"
     else
-        log "INFO" "No Milou networks found"
+    milou_log "INFO" "No Milou networks found"
     fi
     
     # Remove configuration files
-    log "INFO" "🗑️ Removing configuration files..."
+    milou_log "INFO" "🗑️ Removing configuration files..."
     if [[ -f "$ENV_FILE" ]]; then
         rm -f "$ENV_FILE"
-        log "SUCCESS" "Removed configuration file: $ENV_FILE"
+    milou_log "SUCCESS" "Removed configuration file: $ENV_FILE"
     fi
     
     # Remove SSL certificates if they exist
     if [[ -d "./ssl" ]]; then
         if [[ "$FORCE" == true ]] || confirm "Remove SSL certificates directory?" "N"; then
             rm -rf "./ssl"
-            log "SUCCESS" "Removed SSL certificates directory"
+    milou_log "SUCCESS" "Removed SSL certificates directory"
         fi
     fi
     
     # Remove Docker Compose override files
     if [[ -f "./docker-compose.override.yml" ]]; then
         rm -f "./docker-compose.override.yml"
-        log "SUCCESS" "Removed Docker Compose override file"
+    milou_log "SUCCESS" "Removed Docker Compose override file"
     fi
     
     # Clean up Docker system resources
-    log "INFO" "🗑️ Cleaning up Docker system resources..."
+    milou_log "INFO" "🗑️ Cleaning up Docker system resources..."
     docker system prune -f >/dev/null 2>&1 || true
     
-    log "SUCCESS" "🎉 Complete cleanup finished!"
+    milou_log "SUCCESS" "🎉 Complete cleanup finished!"
     echo
-    log "INFO" "💡 Next steps:"
-    log "INFO" "  • Run '$0 setup' to create a fresh installation"
-    log "INFO" "  • All data has been permanently removed"
-    log "INFO" "  • You can now test the tool from scratch"
+    milou_log "INFO" "💡 Next steps:"
+    milou_log "INFO" "  • Run '$0 setup' to create a fresh installation"
+    milou_log "INFO" "  • All data has been permanently removed"
+    milou_log "INFO" "  • You can now test the tool from scratch"
     
     return 0
 }
@@ -321,12 +321,12 @@ complete_cleanup_milou_resources() {
 if [[ -f "${SCRIPT_DIR}/lib/docker/uninstall.sh" ]]; then
     source "${SCRIPT_DIR}/lib/docker/uninstall.sh"
 else
-    log "ERROR" "Uninstall module not found: ${SCRIPT_DIR}/lib/docker/uninstall.sh"
+    milou_log "ERROR" "Uninstall module not found: ${SCRIPT_DIR}/lib/docker/uninstall.sh"
     
     # Fallback function
     complete_milou_uninstall() {
-        log "ERROR" "Uninstall functionality not available - module missing"
-        log "INFO" "Please ensure lib/docker/uninstall.sh exists"
+    milou_log "ERROR" "Uninstall functionality not available - module missing"
+    milou_log "INFO" "Please ensure lib/docker/uninstall.sh exists"
         return 1
     }
 fi
@@ -337,7 +337,7 @@ fi
 
 # Check for existing Milou installation
 check_existing_installation() {
-    log "STEP" "Checking for existing Milou installation..."
+    milou_log "STEP" "Checking for existing Milou installation..."
     
     local has_existing=false
     local -a issues=()
@@ -350,7 +350,7 @@ check_existing_installation() {
     
     if [[ -n "$existing_containers" ]]; then
         has_existing=true
-        log "INFO" "Found existing Milou containers:"
+    milou_log "INFO" "Found existing Milou containers:"
         echo "$existing_containers" | while IFS=$'\t' read -r name status; do
             echo "  🐳 $name - $status"
             if [[ "$status" =~ Up ]]; then
@@ -384,7 +384,7 @@ check_existing_installation() {
         local current_time=$(date +%s)
         local age_days=$(( (current_time - env_age) / 86400 ))
         
-        log "INFO" "Found existing configuration file (${age_days} days old)"
+    milou_log "INFO" "Found existing configuration file (${age_days} days old)"
     fi
     
     # Check for existing volumes
@@ -393,25 +393,25 @@ check_existing_installation() {
     
     if [[ -n "$existing_volumes" ]]; then
         has_existing=true
-        log "INFO" "Found existing data volumes:"
+    milou_log "INFO" "Found existing data volumes:"
         echo "$existing_volumes" | sed 's/^/  💾 /'
         echo
     fi
     
     # Report findings
     if [[ "$has_existing" == true ]]; then
-        log "WARN" "Existing Milou installation detected!"
+    milou_log "WARN" "Existing Milou installation detected!"
         echo
         
         if [[ ${#issues[@]} -gt 0 ]]; then
-            log "WARN" "Potential conflicts found:"
+    milou_log "WARN" "Potential conflicts found:"
             printf '  ⚠️  %s\n' "${issues[@]}"
             echo
         fi
         
         return 1  # Existing installation found
     else
-        log "SUCCESS" "No existing installation detected - proceeding with fresh install"
+    milou_log "SUCCESS" "No existing installation detected - proceeding with fresh install"
         return 0  # No existing installation
     fi
 }
@@ -425,7 +425,7 @@ check_port_availability() {
     local port="$1"
     local service_name="$2"
     
-    log "DEBUG" "Checking if port $port is available for $service_name..."
+    milou_log "DEBUG" "Checking if port $port is available for $service_name..."
     
     if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
         return 1
@@ -472,7 +472,7 @@ get_port_process() {
 
 # Show comprehensive system status
 show_detailed_status() {
-    log "STEP" "Comprehensive System Status Check"
+    milou_log "STEP" "Comprehensive System Status Check"
     echo
     
     # Check installation state

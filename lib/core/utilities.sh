@@ -410,20 +410,9 @@ milou_create_timestamped_backup() {
 }
 
 # =============================================================================
-# Backward Compatibility Aliases
+# Module Exports
 # =============================================================================
-
-# Maintain backward compatibility with existing function names
-generate_secure_random() { milou_generate_secure_random "$@"; }
-check_system_requirements() { milou_check_system_requirements "$@"; }
-get_system_info() { milou_get_system_info "$@"; }
-cleanup_temp() { milou_cleanup_temp "$@"; }
-create_timestamped_backup() { milou_create_timestamped_backup "$@"; }
 
 # Export functions for external use
 export -f milou_generate_secure_random milou_check_system_requirements
-export -f milou_get_system_info milou_cleanup_temp milou_create_timestamped_backup
-
-# Export backward compatibility functions
-export -f generate_secure_random check_system_requirements get_system_info
-export -f cleanup_temp create_timestamped_backup 
+export -f milou_get_system_info milou_cleanup_temp milou_create_timestamped_backup 

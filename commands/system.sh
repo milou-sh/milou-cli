@@ -2,7 +2,7 @@
 
 # =============================================================================
 # System Management Command Handlers for Milou CLI
-# Extracted from milou.sh to improve maintainability
+# Simplified and standardized command handlers
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly
@@ -11,58 +11,49 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# Ensure system modules are loaded (using centralized loader)
 # Modules are loaded centrally by milou_load_command_modules() in main script
 
 # Configuration display command handler
 handle_config() {
-    log "INFO" "📋 Displaying current configuration..."
+    milou_log "INFO" "📋 Displaying current configuration..."
     
-    # Load required modules
-    
-    if command -v show_config >/dev/null 2>&1; then
+    if command -v milou_config_show >/dev/null 2>&1; then
+        milou_config_show "$@"
+    elif command -v show_config >/dev/null 2>&1; then
         show_config "$@"
-    elif command -v show_current_configuration >/dev/null 2>&1; then
-        show_current_configuration "$@"
     else
-        log "ERROR" "Configuration display function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(config|show)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Configuration display function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize configuration modules"
         return 1
     fi
 }
 
 # Configuration validation command handler
 handle_validate() {
-    log "INFO" "🔍 Validating configuration and environment..."
+    milou_log "INFO" "🔍 Validating configuration and environment..."
     
-    # Load required modules
-    
-    if command -v validate_configuration >/dev/null 2>&1; then
+    if command -v milou_config_validate_environment_production >/dev/null 2>&1; then
+        milou_config_validate_environment_production "$@"
+    elif command -v validate_configuration >/dev/null 2>&1; then
         validate_configuration "$@"
-    elif command -v validate_config >/dev/null 2>&1; then
-        validate_config "$@"
-    elif command -v validate_milou_configuration >/dev/null 2>&1; then
-        validate_milou_configuration "$@"
     else
-        log "ERROR" "Configuration validation function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(validate|config)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Configuration validation function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize validation modules"
         return 1
     fi
 }
 
 # Backup command handler
 handle_backup() {
-    log "INFO" "💾 Creating system backup..."
+    milou_log "INFO" "💾 Creating system backup..."
     
-    # Load required modules
-    
-    if command -v backup_config >/dev/null 2>&1; then
+    if command -v milou_config_backup >/dev/null 2>&1; then
+        milou_config_backup "$@"
+    elif command -v backup_config >/dev/null 2>&1; then
         backup_config "$@"
-    elif command -v create_system_backup >/dev/null 2>&1; then
-        create_system_backup "$@"
     else
-        log "ERROR" "Backup function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(backup|create)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Backup function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize backup modules"
         return 1
     fi
 }
@@ -72,164 +63,54 @@ handle_restore() {
     local backup_file="${1:-}"
     
     if [[ -z "$backup_file" ]]; then
-        log "ERROR" "Backup file is required for restore"
-        log "INFO" "Usage: ./milou.sh restore <backup_file>"
+        milou_log "ERROR" "Backup file is required for restore"
+        milou_log "INFO" "Usage: ./milou.sh restore <backup_file>"
         return 1
     fi
     
-    log "INFO" "📁 Restoring from backup: $backup_file"
-    
-    # Load required modules
+    milou_log "INFO" "📁 Restoring from backup: $backup_file"
     
     if command -v restore_config >/dev/null 2>&1; then
         restore_config "$backup_file"
     elif command -v restore_from_backup >/dev/null 2>&1; then
         restore_from_backup "$backup_file"
     else
-        log "ERROR" "Restore function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(restore|backup)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Restore function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize backup modules"
         return 1
     fi
 }
 
 # Update command handler
 handle_update() {
-    log "INFO" "🔄 Updating to latest version..."
+    milou_log "INFO" "🔄 Updating to latest version..."
     
-    # Load required modules
-    
-    if command -v update_milou_system >/dev/null 2>&1; then
+    if command -v milou_system_update >/dev/null 2>&1; then
+        milou_system_update "$@"
+    elif command -v update_milou_system >/dev/null 2>&1; then
         update_milou_system "$@"
-    elif command -v update_system >/dev/null 2>&1; then
-        update_system "$@"
     else
-        log "ERROR" "Update function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(update|milou)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Update function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize update modules"
         return 1
     fi
 }
 
 # SSL management command handler
 handle_ssl() {
-    log "INFO" "🔒 Managing SSL certificates..."
+    milou_log "INFO" "🔒 Managing SSL certificates..."
     
-    # Parse command-line options and delegate to the enhanced SSL system
-    local domain="${DOMAIN:-${SERVER_NAME:-localhost}}"
-    local ssl_path="${SSL_PATH:-./ssl}"
-    local restart_nginx=false
-    
-    # Parse basic options
-    local action="${1:-}"
-    if [[ $# -gt 0 ]]; then
-        shift
-    fi
-    
-    # Extract domain and nginx restart flags if present
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --domain|--domain=*)
-                if [[ "$1" == *"="* ]]; then
-                    domain="${1#*=}"
-                else
-                    domain="${2:-}"
-                    shift
-                fi
-                shift
-                ;;
-            --restart-nginx)
-                restart_nginx=true
-                shift
-                ;;
-            *)
-                # Keep other arguments for SSL module
-                break
-                ;;
-        esac
-    done
-    
-    # Update environment configuration if domain changed
-    if [[ "$domain" != "${SERVER_NAME:-localhost}" ]]; then
-        log "INFO" "📝 Updating configuration for domain: $domain"
-        update_domain_configuration "$domain" "$ssl_path"
-    fi
-    
-    # Delegate to enhanced SSL management system
-    if command -v setup_ssl_interactive_enhanced >/dev/null 2>&1; then
-        setup_ssl_interactive_enhanced "$action" "$ssl_path" "$domain" "$restart_nginx" "$@"
+    # Delegate to SSL module with enhanced interactive system
+    if command -v milou_ssl_setup_interactive_enhanced >/dev/null 2>&1; then
+        milou_ssl_setup_interactive_enhanced "$@"
+    elif command -v setup_ssl_interactive_enhanced >/dev/null 2>&1; then
+        setup_ssl_interactive_enhanced "$@"
+    elif command -v setup_ssl_interactive >/dev/null 2>&1; then
+        setup_ssl_interactive "$@"
     else
-        # Fallback to existing SSL functions
-        case "$action" in
-            setup|generate|create)
-                if command -v setup_ssl_interactive >/dev/null 2>&1; then
-                    setup_ssl_interactive "$ssl_path" "$domain"
-                    if [[ "$restart_nginx" == true ]]; then
-                        restart_nginx_container
-                    fi
-                else
-                    log "ERROR" "SSL setup function not available"
-                    return 1
-                fi
-                ;;
-            status|info|show)
-                # Show status from nginx container (renamed from status-container)
-                if command -v show_nginx_certificate_status >/dev/null 2>&1; then
-                    show_nginx_certificate_status "$domain"
-                else
-                    log "ERROR" "Nginx certificate status function not available"
-                    return 1
-                fi
-                ;;
-            backup)
-                # Backup directly from nginx container (simplified - only container backup)
-                if command -v backup_nginx_ssl_certificates >/dev/null 2>&1; then
-                    backup_nginx_ssl_certificates "./ssl_backups"
-                else
-                    log "ERROR" "Nginx SSL backup function not available"
-                    return 1
-                fi
-                ;;
-            inject)
-                # Enhanced inject command - can accept cert file directly as argument
-                if command -v inject_ssl_certificates_enhanced >/dev/null 2>&1; then
-                    inject_ssl_certificates_enhanced "$ssl_path" "$domain" "$@"
-                elif command -v inject_ssl_certificates >/dev/null 2>&1; then
-                    log "INFO" "💉 Injecting SSL certificates into nginx container..."
-                    inject_ssl_certificates "$ssl_path" "$domain" true
-                else
-                    log "ERROR" "SSL injection function not available"
-                    return 1
-                fi
-                ;;
-            validate)
-                # Validate certificates
-                if command -v ssl_validate_enhanced >/dev/null 2>&1; then
-                    ssl_validate_enhanced "$ssl_path" "$domain"
-                elif command -v validate_ssl_certificates >/dev/null 2>&1; then
-                    validate_ssl_certificates "$ssl_path/milou.crt" "$ssl_path/milou.key" "$domain"
-                else
-                    log "ERROR" "SSL validation function not available"
-                    return 1
-                fi
-                ;;
-            restart)
-                # Restart nginx
-                restart_nginx_container
-                ;;
-            help|--help|-h)
-                # Show help
-                if command -v ssl_show_help >/dev/null 2>&1; then
-                    ssl_show_help
-                else
-                    echo "SSL Management Commands - see detailed help with ssl help"
-                fi
-                ;;
-            *)
-                log "ERROR" "Unknown SSL command: $action"
-                log "INFO" "Available commands: setup, status, backup, inject, validate, restart, help"
-                log "INFO" "Use './milou.sh ssl help' for detailed information"
-                return 1
-                ;;
-        esac
+        milou_log "ERROR" "SSL management function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize SSL modules"
+        return 1
     fi
 }
 
@@ -240,11 +121,11 @@ update_domain_configuration() {
     local env_file="${SCRIPT_DIR}/.env"
     
     if [[ ! -f "$env_file" ]]; then
-        log "WARN" "⚠️  Environment file not found: $env_file"
+    milou_log "WARN" "⚠️  Environment file not found: $env_file"
         return 1
     fi
     
-    log "INFO" "📝 Updating domain configuration..."
+    milou_log "INFO" "📝 Updating domain configuration..."
     
     # Create backup of .env file
     cp "$env_file" "${env_file}.backup.$(date +%s)"
@@ -265,8 +146,8 @@ update_domain_configuration() {
     # Clean up temporary file
     rm -f "${env_file}.tmp"
     
-    log "SUCCESS" "✅ Domain configuration updated to: $new_domain"
-    log "INFO" "  Updated variables: SERVER_NAME, DOMAIN, CORS_ORIGIN, API_URL"
+    milou_log "SUCCESS" "✅ Domain configuration updated to: $new_domain"
+    milou_log "INFO" "  Updated variables: SERVER_NAME, DOMAIN, CORS_ORIGIN, API_URL"
     
     # Update exported environment variables for current session
     export SERVER_NAME="$new_domain"
@@ -278,16 +159,16 @@ update_domain_configuration() {
 
 # Restart nginx container to apply SSL changes
 restart_nginx_container() {
-    log "INFO" "🔄 Restarting nginx container to apply SSL changes..."
+    milou_log "INFO" "🔄 Restarting nginx container to apply SSL changes..."
     
     # Check if nginx container is running
     if ! docker ps --format "{{.Names}}" | grep -q "milou-nginx"; then
-        log "WARN" "⚠️  Nginx container is not running, starting services..."
+    milou_log "WARN" "⚠️  Nginx container is not running, starting services..."
         if command -v start_services >/dev/null 2>&1; then
             start_services
             return $?
         else
-            log "ERROR" "❌ Cannot start services - start function not available"
+    milou_log "ERROR" "❌ Cannot start services - start function not available"
             return 1
         fi
     fi
@@ -299,28 +180,28 @@ restart_nginx_container() {
     fi
     
     if [[ ! -f "$compose_file" ]]; then
-        log "ERROR" "❌ Docker compose file not found"
+    milou_log "ERROR" "❌ Docker compose file not found"
         return 1
     fi
     
     # Restart nginx container
-    log "INFO" "🔄 Restarting nginx container..."
+    milou_log "INFO" "🔄 Restarting nginx container..."
     if docker compose -f "$compose_file" restart nginx; then
-        log "SUCCESS" "✅ Nginx container restarted successfully"
+    milou_log "SUCCESS" "✅ Nginx container restarted successfully"
         
         # Wait a moment for nginx to start
         sleep 2
         
         # Check nginx health
         if docker ps --format "{{.Names}}\t{{.Status}}" | grep "milou-nginx" | grep -q "healthy\|Up"; then
-            log "SUCCESS" "✅ Nginx is healthy and serving requests"
+    milou_log "SUCCESS" "✅ Nginx is healthy and serving requests"
             return 0
         else
-            log "WARN" "⚠️  Nginx restarted but health check pending"
+    milou_log "WARN" "⚠️  Nginx restarted but health check pending"
             return 0
         fi
     else
-        log "ERROR" "❌ Failed to restart nginx container"
+    milou_log "ERROR" "❌ Failed to restart nginx container"
         return 1
     fi
 }
@@ -331,25 +212,25 @@ handle_cleanup() {
     
     case "$cleanup_type" in
         docker|--docker)
-            log "INFO" "🧹 Cleaning up Docker resources..."
+    milou_log "INFO" "🧹 Cleaning up Docker resources..."
             if command -v cleanup_docker_resources >/dev/null 2>&1; then
                 cleanup_docker_resources
             else
-                log "ERROR" "Docker cleanup function not available"
+    milou_log "ERROR" "Docker cleanup function not available"
                 return 1
             fi
             ;;
         system|--system)
-            log "INFO" "🧹 Cleaning up system resources..."
+    milou_log "INFO" "🧹 Cleaning up system resources..."
             if command -v cleanup_system_resources >/dev/null 2>&1; then
                 cleanup_system_resources
             else
-                log "ERROR" "System cleanup function not available"
+    milou_log "ERROR" "System cleanup function not available"
                 return 1
             fi
             ;;
         all|--all)
-            log "INFO" "🧹 Performing complete system cleanup..."
+    milou_log "INFO" "🧹 Performing complete system cleanup..."
             if command -v cleanup_docker_resources >/dev/null 2>&1; then
                 cleanup_docker_resources
             fi
@@ -358,7 +239,7 @@ handle_cleanup() {
             fi
             ;;
         complete|--complete|uninstall|--uninstall)
-            log "INFO" "🗑️ Complete Milou uninstallation..."
+    milou_log "INFO" "🗑️ Complete Milou uninstallation..."
             handle_uninstall "${@:2}"
             ;;
         --help|-h)
@@ -374,11 +255,11 @@ handle_cleanup() {
             echo "For complete uninstall, see: ./milou.sh uninstall --help"
             ;;
         *)
-            log "WARN" "Unknown cleanup type: $cleanup_type, defaulting to docker cleanup"
+    milou_log "WARN" "Unknown cleanup type: $cleanup_type, defaulting to docker cleanup"
             if command -v cleanup_docker_resources >/dev/null 2>&1; then
                 cleanup_docker_resources
             else
-                log "ERROR" "Docker cleanup function not available"
+    milou_log "ERROR" "Docker cleanup function not available"
                 return 1
             fi
             ;;
@@ -474,14 +355,14 @@ handle_uninstall() {
 
     # Ensure the uninstall module is loaded
     if ! command -v complete_milou_uninstall >/dev/null 2>&1; then
-        log "INFO" "Loading uninstall module..."
+        milou_log "INFO" "Loading uninstall module..."
         if command -v milou_load_module >/dev/null 2>&1; then
             milou_load_module "docker/uninstall" || {
-                log "ERROR" "Failed to load uninstall module"
+                milou_log "ERROR" "Failed to load uninstall module"
                 return 1
             }
         else
-            log "ERROR" "Module loader not available"
+            milou_log "ERROR" "Module loader not available"
             return 1
         fi
     fi
@@ -492,51 +373,53 @@ handle_uninstall() {
         local exit_code=$?
         
         if [[ $exit_code -eq 0 ]]; then
-            log "SUCCESS" "🎉 Uninstall completed successfully"
+            milou_log "SUCCESS" "🎉 Uninstall completed successfully"
         else
-            log "ERROR" "Uninstall completed with errors (exit code: $exit_code)"
+            milou_log "ERROR" "Uninstall completed with errors (exit code: $exit_code)"
         fi
         
         return $exit_code
     elif command -v complete_cleanup_milou_resources >/dev/null 2>&1; then
-        log "WARN" "Using legacy cleanup function (limited options)"
+        milou_log "WARN" "Using legacy cleanup function (limited options)"
         complete_cleanup_milou_resources
         return $?
     else
-        log "ERROR" "Uninstall function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(uninstall|cleanup)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Uninstall function not available"
+        milou_log "INFO" "💡 Try restarting services and running the command again"
         return 1
     fi
 }
 
 # Debug images command handler
 handle_debug_images() {
-    log "INFO" "🔧 Debugging Docker image availability..."
+    milou_log "INFO" "🔧 Debugging Docker image availability..."
     
     if command -v debug_docker_images >/dev/null 2>&1; then
         debug_docker_images "$@"
     else
-        log "ERROR" "Debug images function not available"
+        milou_log "ERROR" "Debug images function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize Docker debugging"
         return 1
     fi
 }
 
 # System diagnosis command handler
 handle_diagnose() {
-    log "INFO" "🩺 Running comprehensive system diagnosis..."
+    milou_log "INFO" "🩺 Running comprehensive system diagnosis..."
     
     if command -v run_system_diagnosis >/dev/null 2>&1; then
         run_system_diagnosis "$@"
     else
-        log "ERROR" "System diagnosis function not available"
+        milou_log "ERROR" "System diagnosis function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize diagnostic modules"
         return 1
     fi
 }
 
 # Cleanup test files command handler (DEPRECATED - use uninstall instead)
 handle_cleanup_test_files() {
-    log "WARN" "⚠️  The 'cleanup-test-files' command is deprecated"
-    log "INFO" "💡 Use 'cleanup' or 'uninstall' commands instead:"
+    milou_log "WARN" "⚠️  The 'cleanup-test-files' command is deprecated"
+    milou_log "INFO" "💡 Use 'cleanup' or 'uninstall' commands instead:"
     echo "  • './milou.sh cleanup all' - Clean temporary files and unused resources"
     echo "  • './milou.sh uninstall --keep-config' - Remove everything except config"
     echo "  • './milou.sh uninstall' - Complete removal"
@@ -547,9 +430,7 @@ handle_cleanup_test_files() {
 
 # Install dependencies command handler  
 handle_install_deps() {
-    log "INFO" "📦 Installing system dependencies..."
-    
-    # Ensure system modules are loaded
+    milou_log "INFO" "📦 Installing system dependencies..."
     
     # Parse command-specific options
     local auto_install="true"
@@ -588,42 +469,34 @@ handle_install_deps() {
         esac
     done
     
-    log "DEBUG" "Checking for install_prerequisites function..."
     if command -v install_prerequisites >/dev/null 2>&1; then
-        log "DEBUG" "Found install_prerequisites, calling with params: auto_install=$auto_install, enable_firewall=$enable_firewall, skip_confirmation=$skip_confirmation"
-        
         # Temporarily disable strict error handling for prerequisites installation
         set +e
         install_prerequisites "$auto_install" "$enable_firewall" "$skip_confirmation"
         local exit_code=$?
         set -e
-        
-        log "DEBUG" "install_prerequisites returned with exit code: $exit_code"
         return $exit_code
     elif command -v install_system_dependencies >/dev/null 2>&1; then
-        log "DEBUG" "Found install_system_dependencies, calling with params: auto_install=$auto_install, enable_firewall=$enable_firewall, skip_confirmation=$skip_confirmation"
         install_system_dependencies "$auto_install" "$enable_firewall" "$skip_confirmation"
-        local exit_code=$?
-        log "DEBUG" "install_system_dependencies returned with exit code: $exit_code"
-        return $exit_code
+        return $?
     else
-        log "ERROR" "Install dependencies function not available"
-        log "DEBUG" "Available functions: $(compgen -A function | grep -E '(install|deps|prerequisites)' | head -5 | tr '\n' ' ')"
+        milou_log "ERROR" "Install dependencies function not available"
+        milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize dependency installation"
         return 1
     fi
 }
 
 # Build local images command handler  
 handle_build_images() {
-    log "INFO" "🔨 Building Docker images locally for development..."
+    milou_log "INFO" "🔨 Building Docker images locally for development..."
     
     # Get script directory to find the build script
     local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
     local build_script="${script_dir}/scripts/dev/build-local-images.sh"
     
     if [[ ! -f "$build_script" ]]; then
-        log "ERROR" "Build script not found: $build_script"
-        log "INFO" "Expected location: scripts/dev/build-local-images.sh"
+    milou_log "ERROR" "Build script not found: $build_script"
+    milou_log "INFO" "Expected location: scripts/dev/build-local-images.sh"
         return 1
     fi
     
@@ -631,7 +504,7 @@ handle_build_images() {
     chmod +x "$build_script"
     
     # Execute the build script with all arguments
-    log "DEBUG" "Executing: $build_script $*"
+    milou_log "DEBUG" "Executing: $build_script $*"
     exec "$build_script" "$@"
 }
 
@@ -650,12 +523,12 @@ handle_admin() {
             show_admin_help
             ;;
         "")
-            log "ERROR" "Admin subcommand is required"
+    milou_log "ERROR" "Admin subcommand is required"
             show_admin_help
             return 1
             ;;
         *)
-            log "ERROR" "Unknown admin subcommand: $subcommand"
+    milou_log "ERROR" "Unknown admin subcommand: $subcommand"
             show_admin_help
             return 1
             ;;
@@ -685,12 +558,12 @@ show_admin_help() {
 }
 
 handle_admin_credentials() {
-    log "INFO" "🔐 Displaying admin credentials..."
+    milou_log "INFO" "🔐 Displaying admin credentials..."
     
     local env_file="${SCRIPT_DIR}/.env"
     if [[ ! -f "$env_file" ]]; then
-        log "ERROR" "Environment file not found: $env_file"
-        log "INFO" "Run './milou.sh setup' to create configuration"
+    milou_log "ERROR" "Environment file not found: $env_file"
+    milou_log "INFO" "Run './milou.sh setup' to create configuration"
         return 1
     fi
     
@@ -718,7 +591,7 @@ handle_admin_credentials() {
         fi
         
         echo
-        log "SUCCESS" "🔐 ADMIN CREDENTIALS"
+    milou_log "SUCCESS" "🔐 ADMIN CREDENTIALS"
         echo "=================================================================="
         echo "  📧 Email:    $admin_email"
         
@@ -726,44 +599,44 @@ handle_admin_credentials() {
             echo "  🔑 Password: *** (changed by user - no longer visible) ***"
             echo "=================================================================="
             echo
-            log "INFO" "ℹ️  The admin password has been changed by the user"
-            log "INFO" "   • The original password is no longer valid"
-            log "INFO" "   • Use './milou.sh admin reset' if you've lost access"
+    milou_log "INFO" "ℹ️  The admin password has been changed by the user"
+    milou_log "INFO" "   • The original password is no longer valid"
+    milou_log "INFO" "   • Use './milou.sh admin reset' if you've lost access"
         else
             echo "  🔑 Password: $admin_password"
             echo "=================================================================="
             echo
-            log "WARN" "⚠️  These credentials provide full system access"
-            log "WARN" "   • Keep them secure and change them after first login"
-            log "WARN" "   • Use './milou.sh admin reset' to generate a new password"
+    milou_log "WARN" "⚠️  These credentials provide full system access"
+    milou_log "WARN" "   • Keep them secure and change them after first login"
+    milou_log "WARN" "   • Use './milou.sh admin reset' to generate a new password"
         fi
     else
-        log "ERROR" "Admin credentials not found in configuration"
-        log "INFO" "Run './milou.sh setup' to configure admin credentials"
+    milou_log "ERROR" "Admin credentials not found in configuration"
+    milou_log "INFO" "Run './milou.sh setup' to configure admin credentials"
         return 1
     fi
 }
 
 handle_admin_reset() {
-    log "INFO" "🔄 Resetting admin credentials..."
+    milou_log "INFO" "🔄 Resetting admin credentials..."
     
     local env_file="${SCRIPT_DIR}/.env"
     if [[ ! -f "$env_file" ]]; then
-        log "ERROR" "Environment file not found: $env_file"
-        log "INFO" "Run './milou.sh setup' to create configuration"
+    milou_log "ERROR" "Environment file not found: $env_file"
+    milou_log "INFO" "Run './milou.sh setup' to create configuration"
         return 1
     fi
     
     # Check if services are running
     if ! command -v milou_docker_status >/dev/null 2>&1 || ! milou_docker_status "false" >/dev/null 2>&1; then
-        log "ERROR" "Docker services are not running"
-        log "INFO" "💡 Start services first: ./milou.sh start"
+    milou_log "ERROR" "Docker services are not running"
+    milou_log "INFO" "💡 Start services first: ./milou.sh start"
         return 1
     fi
     
     # Load configuration generation module
     if ! command -v generate_secure_random >/dev/null 2>&1; then
-        log "ERROR" "Configuration generation functions not available"
+    milou_log "ERROR" "Configuration generation functions not available"
         return 1
     fi
     
@@ -775,12 +648,12 @@ handle_admin_reset() {
     local admin_email
     admin_email=$(grep "^ADMIN_EMAIL=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "admin@localhost")
     
-    log "INFO" "📧 Resetting password for admin user: $admin_email"
+    milou_log "INFO" "📧 Resetting password for admin user: $admin_email"
     
     # Update the database with the new password and force password change
-    log "INFO" "🔄 Updating database with new credentials..."
+    milou_log "INFO" "🔄 Updating database with new credentials..."
     if reset_admin_in_database "$admin_email" "$new_password"; then
-        log "SUCCESS" "✅ Database updated successfully"
+    milou_log "SUCCESS" "✅ Database updated successfully"
         
         # Update the environment file
         if command -v update_env_variable >/dev/null 2>&1; then
@@ -791,24 +664,24 @@ handle_admin_reset() {
         fi
         
         echo
-        log "SUCCESS" "🔐 ADMIN PASSWORD RESET COMPLETED"
+    milou_log "SUCCESS" "🔐 ADMIN PASSWORD RESET COMPLETED"
         echo "=================================================================="
         echo "  📧 Email:    $admin_email"
         echo "  🔑 Password: $new_password"
         echo "=================================================================="
         echo
-        log "WARN" "⚠️  IMPORTANT SECURITY NOTICE:"
-        log "WARN" "   • Please save these credentials in a secure location"
-        log "WARN" "   • User will be forced to change password on first login"
-        log "WARN" "   • The old password is no longer valid"
+    milou_log "WARN" "⚠️  IMPORTANT SECURITY NOTICE:"
+    milou_log "WARN" "   • Please save these credentials in a secure location"
+    milou_log "WARN" "   • User will be forced to change password on first login"
+    milou_log "WARN" "   • The old password is no longer valid"
         echo
-        log "INFO" "✅ Ready to use! The admin user can now log in with:"
-        log "INFO" "   • Email: $admin_email"
-        log "INFO" "   • Password: $new_password"
-        log "INFO" "   • They will be prompted to change the password on first login"
+    milou_log "INFO" "✅ Ready to use! The admin user can now log in with:"
+    milou_log "INFO" "   • Email: $admin_email"
+    milou_log "INFO" "   • Password: $new_password"
+    milou_log "INFO" "   • They will be prompted to change the password on first login"
     else
-        log "ERROR" "❌ Failed to update database"
-        log "INFO" "💡 Try restarting services and running the command again"
+    milou_log "ERROR" "❌ Failed to update database"
+    milou_log "INFO" "💡 Try restarting services and running the command again"
         return 1
     fi
 }
@@ -819,7 +692,7 @@ reset_admin_in_database() {
     local new_password="$2"
     
     if [[ -z "$admin_email" || -z "$new_password" ]]; then
-        log "ERROR" "Admin email and password are required"
+    milou_log "ERROR" "Admin email and password are required"
         return 1
     fi
     
@@ -832,7 +705,7 @@ reset_admin_in_database() {
     db_user="${db_user:-milou}"
     db_name="${db_name:-milou}"
     
-    log "DEBUG" "Using database: $db_name, user: $db_user"
+    milou_log "DEBUG" "Using database: $db_name, user: $db_user"
     
     # Generate bcrypt hash for the new password using a safer approach
     local password_hash
@@ -841,11 +714,11 @@ reset_admin_in_database() {
         const password = process.argv[1];
         bcrypt.hashSync(password, 10);
     " "$new_password" 2>/dev/null); then
-        log "ERROR" "Failed to generate password hash"
+    milou_log "ERROR" "Failed to generate password hash"
         return 1
     fi
     
-    log "DEBUG" "Generated password hash: ${password_hash:0:20}..."
+    milou_log "DEBUG" "Generated password hash: ${password_hash:0:20}..."
     
     # Create a temporary SQL file to avoid quoting issues
     local temp_sql="/tmp/reset_admin_$$.sql"
@@ -865,21 +738,21 @@ EOF
         rm -f "$temp_sql"
         docker exec milou-database rm -f /tmp/reset_admin.sql
         
-        log "DEBUG" "Password updated in database for user: $admin_email"
+    milou_log "DEBUG" "Password updated in database for user: $admin_email"
         
         # Verify the update worked
         local updated_count
         updated_count=$(docker exec milou-database psql -U "$db_user" -d "$db_name" -t -c "SELECT COUNT(*) FROM users WHERE email = '$admin_email' AND \"requirePasswordChange\" = true;" | tr -d ' \n')
         
         if [[ "$updated_count" == "1" ]]; then
-            log "DEBUG" "Verified: requirePasswordChange is set for $admin_email"
+    milou_log "DEBUG" "Verified: requirePasswordChange is set for $admin_email"
             return 0
         else
-            log "ERROR" "Update verification failed"
+    milou_log "ERROR" "Update verification failed"
             return 1
         fi
     else
-        log "ERROR" "Failed to update password in database"
+    milou_log "ERROR" "Failed to update password in database"
         rm -f "$temp_sql"
         return 1
     fi

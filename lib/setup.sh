@@ -276,7 +276,7 @@ interactive_setup_wizard() {
         # Fresh installation detected (return 0)
         export PRESERVE_EXISTING=false
         export FRESH_INSTALL=true
-        log "SUCCESS" "Fresh installation detected - proceeding with new setup"
+    milou_log "SUCCESS" "Fresh installation detected - proceeding with new setup"
         echo
     else
         # Existing installation detected (return 1)
@@ -297,37 +297,37 @@ interactive_setup_wizard() {
                 1)
                     export PRESERVE_EXISTING=true
                     export FRESH_INSTALL=false
-                    log "INFO" "✅ Will preserve existing configuration and data"
+    milou_log "INFO" "✅ Will preserve existing configuration and data"
                     break
                     ;;
                 2)
                     export PRESERVE_EXISTING=false
                     export FRESH_INSTALL=true
-                    log "INFO" "🆕 Will start fresh (existing data will be removed)"
+    milou_log "INFO" "🆕 Will start fresh (existing data will be removed)"
                     
                     echo
                     echo -e "${RED}⚠️  WARNING: This will remove all existing containers and data!${NC}"
                     if ! confirm "Are you sure you want to proceed with a fresh installation?" "N"; then
-                        log "INFO" "Setup cancelled by user"
+    milou_log "INFO" "Setup cancelled by user"
                         exit 0
                     fi
                     
                     # Stop and remove existing containers
-                    log "INFO" "Stopping and removing existing containers..."
+    milou_log "INFO" "Stopping and removing existing containers..."
                     if docker ps -a --filter "name=static-" --format "{{.Names}}" | xargs -r docker rm -f >/dev/null 2>&1; then
-                        log "SUCCESS" "Existing containers removed"
+    milou_log "SUCCESS" "Existing containers removed"
                     fi
                     
                     # Optionally remove volumes
                     if confirm "Also remove existing data volumes? (This will delete all data)" "N"; then
                         if docker volume ls --filter "name=static_" --format "{{.Name}}" | xargs -r docker volume rm >/dev/null 2>&1; then
-                            log "SUCCESS" "Existing volumes removed"
+    milou_log "SUCCESS" "Existing volumes removed"
                         fi
                     fi
                     break
                     ;;
                 3)
-                    log "INFO" "Setup cancelled by user"
+    milou_log "INFO" "Setup cancelled by user"
                     exit 0
                     ;;
                 *)
@@ -344,9 +344,9 @@ interactive_setup_wizard() {
     check_system_requirements
     local req_exit_code=$?
     set -e
-    log "DEBUG" "System requirements check returned: $req_exit_code"
+    milou_log "DEBUG" "System requirements check returned: $req_exit_code"
     if [[ $req_exit_code -ne 0 ]]; then
-        log "ERROR" "System requirements check failed"
+    milou_log "ERROR" "System requirements check failed"
         return 1
     fi
     echo
@@ -354,7 +354,7 @@ interactive_setup_wizard() {
     # Step 2: GitHub Authentication (skip in development mode)
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
         echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
-        log "INFO" "🚀 Development mode: Skipping GitHub authentication (using local images)"
+    milou_log "INFO" "🚀 Development mode: Skipping GitHub authentication (using local images)"
         local github_auth="DEV_MODE_PLACEHOLDER"
         echo
     else
@@ -362,11 +362,11 @@ interactive_setup_wizard() {
         local github_auth="${GITHUB_TOKEN:-}"
         
         if [[ -n "$github_auth" ]]; then
-            log "INFO" "Using provided GitHub token"
+    milou_log "INFO" "Using provided GitHub token"
             if test_github_authentication "$github_auth"; then
-                log "SUCCESS" "GitHub token validated successfully"
+    milou_log "SUCCESS" "GitHub token validated successfully"
             else
-                log "ERROR" "Provided GitHub token is invalid"
+    milou_log "ERROR" "Provided GitHub token is invalid"
                 github_auth=""
             fi
         fi
@@ -377,7 +377,7 @@ interactive_setup_wizard() {
             echo
             
             if [[ -z "$github_auth" ]]; then
-                log "ERROR" "GitHub token is required"
+    milou_log "ERROR" "GitHub token is required"
                 continue
             fi
             
@@ -420,12 +420,12 @@ interactive_setup_wizard() {
             case "$ssl_choice" in
                 1)
                     ssl_path="./ssl"
-                    log "INFO" "✅ Will use existing SSL certificates"
+    milou_log "INFO" "✅ Will use existing SSL certificates"
                     break
                     ;;
                 2)
                     ssl_path="./ssl"
-                    log "INFO" "🆕 Will generate new SSL certificates"
+    milou_log "INFO" "🆕 Will generate new SSL certificates"
                     # Backup existing certificates
                     mv "./ssl/milou.crt" "./ssl/milou.crt.backup.$(date +%s)" 2>/dev/null || true
                     mv "./ssl/milou.key" "./ssl/milou.key.backup.$(date +%s)" 2>/dev/null || true
@@ -523,7 +523,7 @@ interactive_setup_wizard() {
     echo
     
     if ! confirm "Proceed with this configuration?" "Y"; then
-        log "INFO" "Setup cancelled by user"
+    milou_log "INFO" "Setup cancelled by user"
         exit 0
     fi
     echo
@@ -560,23 +560,23 @@ interactive_setup_wizard() {
                 fi
             fi
         else
-            log "ERROR" "SSL module not available"
+    milou_log "ERROR" "SSL module not available"
             if ! confirm "Continue without SSL certificates?" "N"; then
                 error_exit "Setup cancelled - SSL required"
             fi
         fi
     else
-        log "SUCCESS" "Using existing SSL certificates"
+    milou_log "SUCCESS" "Using existing SSL certificates"
     fi
     echo
     
     # Step 9: Pull Docker Images (skip in development mode)
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
         echo -e "${BOLD}Step 9: Docker Images${NC}"
-        log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
-        log "INFO" "Local images available:"
+    milou_log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
+    milou_log "INFO" "Local images available:"
         docker images | grep "ghcr.io/milou-sh/milou" | grep latest | while read -r line; do
-            log "INFO" "  📦 $line"
+    milou_log "INFO" "  📦 $line"
         done
     else
         echo -e "${BOLD}Step 9: Pulling Docker Images${NC}"
@@ -592,16 +592,16 @@ interactive_setup_wizard() {
         
         # Skip validation when using latest images (more efficient)
         if [[ "$use_latest" == "true" ]]; then
-            log "INFO" "Using latest images - skipping validation, pulling directly"
+    milou_log "INFO" "Using latest images - skipping validation, pulling directly"
             show_progress "Pulling latest Docker images from GitHub Container Registry" 2
             if ! pull_required_images "$github_token" "$use_latest" "$compose_file"; then
                 error_exit "Failed to pull Docker images"
             fi
         else
-            log "INFO" "Using fixed image versions - validating availability first"
+    milou_log "INFO" "Using fixed image versions - validating availability first"
             show_progress "Validating image availability" 2
             if ! validate_required_images "$github_token" "$use_latest" "$compose_file"; then
-                log "WARN" "Some images may not be available - continuing anyway"
+    milou_log "WARN" "Some images may not be available - continuing anyway"
             fi
             
             show_progress "Pulling Docker images from GitHub Container Registry" 2
@@ -678,7 +678,7 @@ interactive_setup_wizard() {
 
 # Non-interactive setup using environment variables and defaults
 run_non_interactive_setup() {
-    log "INFO" "🤖 Starting non-interactive configuration setup..."
+    milou_log "INFO" "🤖 Starting non-interactive configuration setup..."
     
     # Use environment variables or defaults
     local github_auth="${GITHUB_TOKEN:-}"
@@ -689,45 +689,45 @@ run_non_interactive_setup() {
     
     # Validate required parameters (token not needed in dev mode)
     if [[ -z "$github_auth" && "${DEV_MODE:-false}" != "true" ]]; then
-        log "ERROR" "GitHub token is required for non-interactive setup"
-        log "INFO" "Set GITHUB_TOKEN environment variable or use --token flag"
-        log "INFO" "Or use --dev flag to enable development mode with local images"
+    milou_log "ERROR" "GitHub token is required for non-interactive setup"
+    milou_log "INFO" "Set GITHUB_TOKEN environment variable or use --token flag"
+    milou_log "INFO" "Or use --dev flag to enable development mode with local images"
         return 1
     fi
     
-    log "INFO" "📋 Configuration parameters:"
-    log "INFO" "  🌍 Domain: $domain"
-    log "INFO" "  🔒 SSL Path: $ssl_path"
-    log "INFO" "  📧 Admin Email: ${admin_email:-Not provided}"
-    log "INFO" "  🐳 Image Strategy: $([ "$use_latest" == "true" ] && echo "Latest versions" || echo "Fixed version")"
+    milou_log "INFO" "📋 Configuration parameters:"
+    milou_log "INFO" "  🌍 Domain: $domain"
+    milou_log "INFO" "  🔒 SSL Path: $ssl_path"
+    milou_log "INFO" "  📧 Admin Email: ${admin_email:-Not provided}"
+    milou_log "INFO" "  🐳 Image Strategy: $([ "$use_latest" == "true" ] && echo "Latest versions" || echo "Fixed version")"
     echo
     
     # Step 1: Generate Configuration
-    log "STEP" "Generating configuration..."
+    milou_log "STEP" "Generating configuration..."
     if ! generate_config "$domain" "$ssl_path" "$admin_email"; then
-        log "ERROR" "Failed to generate configuration"
+    milou_log "ERROR" "Failed to generate configuration"
         return 1
     fi
-    log "SUCCESS" "✅ Configuration generated successfully"
+    milou_log "SUCCESS" "✅ Configuration generated successfully"
     echo
     
     # Step 2: SSL Certificate Setup
-    log "STEP" "Setting up SSL certificates..."
+    milou_log "STEP" "Setting up SSL certificates..."
     mkdir -p "$ssl_path"
     
     # Check if certificates already exist
     if [[ -f "$ssl_path/milou.crt" && -f "$ssl_path/milou.key" ]]; then
-        log "SUCCESS" "✅ Using existing SSL certificates"
+    milou_log "SUCCESS" "✅ Using existing SSL certificates"
         
         # Validate existing certificates using SSL module if available
         if command -v validate_certificate >/dev/null 2>&1; then
             if ! validate_certificate "$ssl_path/milou.crt" "$ssl_path/milou.key"; then
-                log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
+    milou_log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
                 rm -f "$ssl_path/milou.crt" "$ssl_path/milou.key"
             fi
         elif command -v openssl >/dev/null 2>&1; then
             if ! openssl x509 -in "$ssl_path/milou.crt" -noout -text >/dev/null 2>&1; then
-                log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
+    milou_log "WARN" "⚠️  Existing SSL certificate appears corrupted, regenerating..."
                 rm -f "$ssl_path/milou.crt" "$ssl_path/milou.key"
             fi
         fi
@@ -735,38 +735,38 @@ run_non_interactive_setup() {
     
     # Generate certificates if needed
     if [[ ! -f "$ssl_path/milou.crt" || ! -f "$ssl_path/milou.key" ]]; then
-        log "INFO" "Generating self-signed SSL certificate for $domain..."
+    milou_log "INFO" "Generating self-signed SSL certificate for $domain..."
         
         # Use the centralized SSL module
         if command -v setup_ssl >/dev/null 2>&1; then
             if setup_ssl "$ssl_path" "$domain"; then
-                log "SUCCESS" "✅ SSL certificate generated successfully"
-                log "INFO" "  📄 Certificate: $ssl_path/milou.crt"
-                log "INFO" "  🔑 Private key: $ssl_path/milou.key"
-                log "INFO" "  🌍 Domain: $domain"
-                log "INFO" "  ⏰ Valid for: 365 days"
+    milou_log "SUCCESS" "✅ SSL certificate generated successfully"
+    milou_log "INFO" "  📄 Certificate: $ssl_path/milou.crt"
+    milou_log "INFO" "  🔑 Private key: $ssl_path/milou.key"
+    milou_log "INFO" "  🌍 Domain: $domain"
+    milou_log "INFO" "  ⏰ Valid for: 365 days"
             else
-                log "ERROR" "❌ SSL certificate generation failed"
-                log "WARN" "⚠️  Continuing with HTTP only - nginx may fail to start"
-                log "INFO" "💡 You can generate SSL certificates manually with: ./milou.sh ssl setup"
+    milou_log "ERROR" "❌ SSL certificate generation failed"
+    milou_log "WARN" "⚠️  Continuing with HTTP only - nginx may fail to start"
+    milou_log "INFO" "💡 You can generate SSL certificates manually with: ./milou.sh ssl setup"
             fi
         else
-            log "ERROR" "❌ SSL module not available"
-            log "WARN" "⚠️  Continuing without SSL certificates"
+    milou_log "ERROR" "❌ SSL module not available"
+    milou_log "WARN" "⚠️  Continuing without SSL certificates"
         fi
     fi
     echo
     
     # Step 3: Docker Authentication (skip in development mode)
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
-        log "INFO" "🚀 Development mode: Skipping Docker registry authentication (using local images)"
+    milou_log "INFO" "🚀 Development mode: Skipping Docker registry authentication (using local images)"
     else
-        log "STEP" "Authenticating with Docker registry..."
+    milou_log "STEP" "Authenticating with Docker registry..."
         if echo "$github_auth" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
-            log "SUCCESS" "✅ Docker registry authentication successful"
+    milou_log "SUCCESS" "✅ Docker registry authentication successful"
             docker logout ghcr.io >/dev/null 2>&1
         else
-            log "ERROR" "❌ Docker registry authentication failed"
+    milou_log "ERROR" "❌ Docker registry authentication failed"
             return 1
         fi
     fi
@@ -774,13 +774,13 @@ run_non_interactive_setup() {
     
     # Step 4: Pull Docker Images (skip in development mode)
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
-        log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
-        log "INFO" "Local images available:"
+    milou_log "INFO" "🚀 Development mode: Skipping Docker image pull (using local images)"
+    milou_log "INFO" "Local images available:"
         docker images | grep "ghcr.io/milou-sh/milou" | grep latest | while read -r line; do
-            log "INFO" "  📦 $line"
+    milou_log "INFO" "  📦 $line"
         done
     else
-        log "STEP" "Pulling Docker images..."
+    milou_log "STEP" "Pulling Docker images..."
         local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
         if [[ ! -f "$compose_file" ]]; then
             compose_file="./static/docker-compose.yml"
@@ -789,75 +789,75 @@ run_non_interactive_setup() {
         if [[ -f "$compose_file" ]]; then
             # Skip validation when using latest images (more efficient)
             if [[ "$use_latest" == "true" ]]; then
-                log "INFO" "Using latest images - skipping validation, pulling directly"
+    milou_log "INFO" "Using latest images - skipping validation, pulling directly"
                 if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-                    log "SUCCESS" "✅ Docker images pulled successfully"
+    milou_log "SUCCESS" "✅ Docker images pulled successfully"
                 else
-                    log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+    milou_log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
                 fi
             else
-                log "INFO" "Using fixed image versions - validating availability first"
+    milou_log "INFO" "Using fixed image versions - validating availability first"
                 if validate_required_images "$github_token" "$use_latest" "$compose_file"; then
-                    log "SUCCESS" "✅ Image validation passed"
+    milou_log "SUCCESS" "✅ Image validation passed"
                 else
-                    log "WARN" "Some images may not be available - continuing anyway"
+    milou_log "WARN" "Some images may not be available - continuing anyway"
                 fi
                 
                 if pull_required_images "$github_token" "$use_latest" "$compose_file"; then
-                    log "SUCCESS" "✅ Docker images pulled successfully"
+    milou_log "SUCCESS" "✅ Docker images pulled successfully"
                 else
-                    log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
+    milou_log "WARN" "⚠️  Some Docker images may not have been pulled correctly"
                 fi
             fi
         else
-            log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
+    milou_log "WARN" "⚠️  Docker Compose file not found, skipping image pull"
         fi
     fi
     echo
     
     # Step 5: Final Validation
-    log "STEP" "Validating setup..."
+    milou_log "STEP" "Validating setup..."
     if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-        log "SUCCESS" "✅ Configuration file created"
+    milou_log "SUCCESS" "✅ Configuration file created"
     else
-        log "ERROR" "❌ Configuration file missing"
+    milou_log "ERROR" "❌ Configuration file missing"
         return 1
     fi
     
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        log "SUCCESS" "✅ Docker is accessible"
+    milou_log "SUCCESS" "✅ Docker is accessible"
     else
-        log "ERROR" "❌ Docker is not accessible"
+    milou_log "ERROR" "❌ Docker is not accessible"
         return 1
     fi
     
-    log "SUCCESS" "🎉 Non-interactive setup completed successfully!"
+    milou_log "SUCCESS" "🎉 Non-interactive setup completed successfully!"
     echo
     
     # Step 6: Auto-start services
-    log "STEP" "Starting Milou services automatically..."
+    milou_log "STEP" "Starting Milou services automatically..."
     if command -v start_services_with_checks >/dev/null 2>&1; then
         if start_services_with_checks "true"; then
-            log "SUCCESS" "✅ Services started successfully!"
+    milou_log "SUCCESS" "✅ Services started successfully!"
             echo
-            log "INFO" "🌐 Your Milou installation is now ready!"
-            log "INFO" "📝 Check service status with: ./milou.sh status"
-            log "INFO" "📊 View logs with: ./milou.sh logs"
+    milou_log "INFO" "🌐 Your Milou installation is now ready!"
+    milou_log "INFO" "📝 Check service status with: ./milou.sh status"
+    milou_log "INFO" "📊 View logs with: ./milou.sh logs"
         else
-            log "ERROR" "❌ Failed to start services automatically"
-            log "INFO" "💡 You can start them manually with: ./milou.sh start"
+    milou_log "ERROR" "❌ Failed to start services automatically"
+    milou_log "INFO" "💡 You can start them manually with: ./milou.sh start"
         fi
     else
-        log "WARN" "Service startup function not available - please start manually"
+    milou_log "WARN" "Service startup function not available - please start manually"
     fi
     
     echo
-    log "INFO" "📋 Setup Summary:"
-    log "INFO" "  🌍 Domain: $domain"
-    log "INFO" "  🔒 SSL: $([ -f "$ssl_path/milou.crt" ] && echo "Configured" || echo "HTTP only")"
-    log "INFO" "  🐳 Docker: Authenticated and ready"
-    log "INFO" "  📝 Configuration: Generated"
-    log "INFO" "  🚀 Services: $(docker compose -f ./static/docker-compose.yml ps --services --filter 'status=running' 2>/dev/null | wc -l || echo "0") running"
+    milou_log "INFO" "📋 Setup Summary:"
+    milou_log "INFO" "  🌍 Domain: $domain"
+    milou_log "INFO" "  🔒 SSL: $([ -f "$ssl_path/milou.crt" ] && echo "Configured" || echo "HTTP only")"
+    milou_log "INFO" "  🐳 Docker: Authenticated and ready"
+    milou_log "INFO" "  📝 Configuration: Generated"
+    milou_log "INFO" "  🚀 Services: $(docker compose -f ./static/docker-compose.yml ps --services --filter 'status=running' 2>/dev/null | wc -l || echo "0") running"
     
     return 0
 }

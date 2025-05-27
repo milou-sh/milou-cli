@@ -5,7 +5,7 @@
 # Extracted from monolithic handle_setup() function
 # =============================================================================
 
-# Ensure logging is available
+# Ensure logging and utilities are available
 if ! command -v milou_log >/dev/null 2>&1; then
     if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/core/logging.sh" ]]; then
         source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || {
@@ -14,6 +14,19 @@ if ! command -v milou_log >/dev/null 2>&1; then
         }
     else
         echo "ERROR: milou_log function not available" >&2
+        exit 1
+    fi
+fi
+
+# Ensure utilities are available (for secure random generation)
+if ! command -v milou_generate_secure_random >/dev/null 2>&1; then
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/core/utilities.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/core/utilities.sh" 2>/dev/null || {
+            milou_log "ERROR" "Cannot load utilities module"
+            exit 1
+        }
+    else
+        milou_log "ERROR" "milou_generate_secure_random function not available"
         exit 1
     fi
 fi
@@ -188,11 +201,15 @@ _collect_domain_configuration() {
 _collect_ssl_configuration() {
     milou_log "INFO" "🔒 SSL Configuration"
     
+    # Show domain that will be used for certificates
+    milou_log "INFO" "🌐 Domain for SSL: ${DOMAIN}"
+    echo
+    
     # SSL mode selection
     echo "SSL Configuration Options:"
-    echo "  1. Generate self-signed certificates (development)"
-    echo "  2. Use existing certificates"
-    echo "  3. Skip SSL setup (HTTP only)"
+    echo "  1. Generate self-signed certificates for '${DOMAIN}' (development/testing)"
+    echo "  2. Use existing certificates (production)"
+    echo "  3. Skip SSL setup (HTTP only - not recommended)"
     echo
     
     milou_prompt_user "Select SSL option [1-3]" "1" "choice" "false" 3
@@ -201,18 +218,37 @@ _collect_ssl_configuration() {
     case "$ssl_choice" in
         1)
             SSL_MODE="generate"
-            milou_log "INFO" "Will generate self-signed certificates"
+            milou_log "INFO" "✅ Will generate self-signed certificates for domain: ${DOMAIN}"
+            milou_log "INFO" "💡 Certificate will be valid for: ${DOMAIN}, localhost, 127.0.0.1"
             ;;
         2)
             SSL_MODE="existing"
-            milou_prompt_user "Path to certificate file" "" "path" "false" 3
+            milou_log "INFO" "📁 Using existing SSL certificates"
+            milou_prompt_user "Path to certificate file (.crt)" "" "path" "false" 3
             SSL_CERT_PATH="$REPLY"
-            milou_prompt_user "Path to private key file" "" "path" "false" 3
+            milou_prompt_user "Path to private key file (.key)" "" "path" "false" 3
             SSL_KEY_PATH="$REPLY"
+            
+            # Validate paths
+            if [[ ! -f "$SSL_CERT_PATH" ]]; then
+                milou_log "ERROR" "Certificate file not found: $SSL_CERT_PATH"
+                return 1
+            fi
+            if [[ ! -f "$SSL_KEY_PATH" ]]; then
+                milou_log "ERROR" "Private key file not found: $SSL_KEY_PATH"
+                return 1
+            fi
             ;;
         3)
             SSL_MODE="none"
-            milou_log "WARN" "⚠️  SSL disabled - HTTP only mode"
+            milou_log "WARN" "⚠️  SSL disabled - HTTP only mode (not recommended for production)"
+            if [[ "${DOMAIN}" != "localhost" ]]; then
+                milou_log "WARN" "⚠️  WARNING: Using HTTP-only for domain '${DOMAIN}' - data will be unencrypted!"
+                if ! milou_confirm "Continue with HTTP-only mode?" "N"; then
+                    milou_log "INFO" "SSL configuration cancelled - please choose a different option"
+                    return 1
+                fi
+            fi
             ;;
         *)
             milou_log "ERROR" "Invalid SSL option: $ssl_choice"
@@ -220,7 +256,7 @@ _collect_ssl_configuration() {
             ;;
     esac
     
-    milou_log "DEBUG" "SSL config collected: mode=$SSL_MODE"
+    milou_log "DEBUG" "SSL config collected: mode=$SSL_MODE, domain=$DOMAIN"
     return 0
 }
 
@@ -333,58 +369,130 @@ _validate_collected_configuration() {
 
 # Save configuration to environment file
 _save_configuration_to_env() {
-    milou_log "INFO" "💾 Saving configuration to: ${ENV_FILE}"
+    # Set default env file if not provided
+    local env_file="${ENV_FILE:-${SCRIPT_DIR}/.env}"
+    
+    milou_log "INFO" "💾 Saving configuration to: $env_file"
     
     # Create configuration directory if it doesn't exist
     local config_dir
-    config_dir=$(dirname "${ENV_FILE}")
+    config_dir=$(dirname "$env_file")
     mkdir -p "$config_dir"
     
-    # Generate environment file
-    cat > "${ENV_FILE}" << EOF
+    # Generate secure database credentials first
+    local postgres_user="milou_user_$(milou_generate_secure_random 8 "alphanumeric")"
+    local postgres_password="$(milou_generate_secure_random 32 "safe")"
+    local postgres_db="milou_database"
+    local redis_password="$(milou_generate_secure_random 32 "safe")"
+    local rabbitmq_user="milou_rabbit_$(milou_generate_secure_random 6 "alphanumeric")"
+    local rabbitmq_password="$(milou_generate_secure_random 32 "safe")"
+    local session_secret="$(milou_generate_secure_random 64 "safe")"
+    local encryption_key="$(milou_generate_secure_random 64 "hex")"
+    
+    # Generate comprehensive environment file based on centralized validation requirements
+    cat > "$env_file" << EOF
 # =============================================================================
-# Milou CLI Configuration
+# Milou CLI Configuration - Complete Production Environment
 # Generated on: $(date)
 # =============================================================================
 
-# Basic Configuration
+# =============================================================================
+# METADATA AND VERSIONING
+# =============================================================================
+MILOU_VERSION=${SCRIPT_VERSION:-latest}
+MILOU_GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+NODE_ENV=production
+
+# =============================================================================
+# SERVER CONFIGURATION (Required by centralized validation)
+# =============================================================================
+SERVER_NAME=${DOMAIN}
+CUSTOMER_DOMAIN_NAME=${DOMAIN}
 DOMAIN=${DOMAIN}
+PORT=9999
+CORS_ORIGIN=https://${DOMAIN}
+
+# =============================================================================
+# SSL CONFIGURATION
+# =============================================================================
+SSL_MODE=${SSL_MODE:-generate}
+SSL_PORT=${HTTPS_PORT:-443}
+SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl/milou.crt}
+SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl/milou.key}
+
+# =============================================================================
+# DATABASE CONFIGURATION (PostgreSQL - Required)
+# =============================================================================
+POSTGRES_USER=$postgres_user
+POSTGRES_PASSWORD=$postgres_password
+POSTGRES_DB=$postgres_db
+DATABASE_URI=postgresql://$postgres_user:$postgres_password@db:5432/$postgres_db
+DB_HOST=db
+DB_PORT=5432
+DB_USER=$postgres_user
+DB_PASSWORD=$postgres_password
+DB_NAME=$postgres_db
+
+# =============================================================================
+# REDIS CONFIGURATION (Required)
+# =============================================================================
+REDIS_PASSWORD=$redis_password
+REDIS_URL=redis://:$redis_password@redis:6379/0
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_SESSION_TTL=86400
+
+# =============================================================================
+# RABBITMQ CONFIGURATION (Required)
+# =============================================================================
+RABBITMQ_USER=$rabbitmq_user
+RABBITMQ_PASSWORD=$rabbitmq_password
+RABBITMQ_URL=amqp://$rabbitmq_user:$rabbitmq_password@rabbitmq:5672/
+
+# =============================================================================
+# SECURITY CONFIGURATION (Required)
+# =============================================================================
+JWT_SECRET=${JWT_SECRET}
+SESSION_SECRET=$session_secret
+ENCRYPTION_KEY=$encryption_key
+
+# =============================================================================
+# ADMIN CONFIGURATION
+# =============================================================================
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
-# Network Configuration
+# =============================================================================
+# GITHUB TOKEN (Optional but recommended)
+# =============================================================================
+GITHUB_TOKEN=${GITHUB_TOKEN:-}
+
+# =============================================================================
+# NETWORK CONFIGURATION
+# =============================================================================
 HTTP_PORT=${HTTP_PORT:-80}
 HTTPS_PORT=${HTTPS_PORT:-443}
+FRONTEND_URL=https://${DOMAIN}
+BACKEND_URL=https://${DOMAIN}/api
 
-# SSL Configuration
-SSL_MODE=${SSL_MODE:-generate}
-SSL_CERT_PATH=${SSL_CERT_PATH:-}
-SSL_KEY_PATH=${SSL_KEY_PATH:-}
+# =============================================================================
+# SSO CONFIGURATION (Optional)
+# =============================================================================
+SSO_CONFIG_ENCRYPTION_KEY=$encryption_key
 
-# Security Configuration
-GITHUB_TOKEN=${GITHUB_TOKEN}
-JWT_SECRET=${JWT_SECRET}
-DB_PASSWORD=${DB_PASSWORD}
-
-# Docker Configuration
+# =============================================================================
+# DOCKER CONFIGURATION
+# =============================================================================
 COMPOSE_PROJECT_NAME=milou-static
 DOCKER_BUILDKIT=1
-
-# Generated Secrets
-REDIS_PASSWORD=$(milou_generate_secure_random 16)
-RABBIT_PASSWORD=$(milou_generate_secure_random 16)
-
-# Timestamps
-CREATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-MILOU_VERSION=${SCRIPT_VERSION:-latest}
 EOF
     
     # Set secure permissions
-    chmod 600 "${ENV_FILE}"
+    chmod 600 "$env_file"
     
     milou_log "SUCCESS" "✅ Configuration saved successfully"
-    milou_log "INFO" "📍 Configuration file: ${ENV_FILE}"
+    milou_log "INFO" "📍 Configuration file: $env_file"
     milou_log "WARN" "🔒 File permissions set to 600 for security"
     
     return 0

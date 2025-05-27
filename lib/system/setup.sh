@@ -355,37 +355,37 @@ interactive_setup_wizard() {
     if [[ "${DEV_MODE:-false}" == "true" ]]; then
         echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
         log "INFO" "🚀 Development mode: Skipping GitHub authentication (using local images)"
-        local github_token="DEV_MODE_PLACEHOLDER"
+        local github_auth="DEV_MODE_PLACEHOLDER"
         echo
     else
         echo -e "${BOLD}Step 2: GitHub Authentication${NC}"
-        local github_token="${GITHUB_TOKEN:-}"
+        local github_auth="${GITHUB_TOKEN:-}"
         
-        if [[ -n "$github_token" ]]; then
+        if [[ -n "$github_auth" ]]; then
             log "INFO" "Using provided GitHub token"
-            if test_github_authentication "$github_token"; then
+            if test_github_authentication "$github_auth"; then
                 log "SUCCESS" "GitHub token validated successfully"
             else
                 log "ERROR" "Provided GitHub token is invalid"
-                github_token=""
+                github_auth=""
             fi
         fi
         
-        while [[ -z "$github_token" ]]; do
+        while [[ -z "$github_auth" ]]; do
             echo -ne "${CYAN}GitHub Personal Access Token: ${NC}"
-            read -rs github_token
+            read -rs github_auth
             echo
             
-            if [[ -z "$github_token" ]]; then
+            if [[ -z "$github_auth" ]]; then
                 log "ERROR" "GitHub token is required"
                 continue
             fi
             
-            if test_github_authentication "$github_token"; then
+            if test_github_authentication "$github_auth"; then
                 break
             else
                 echo "Please try again with a valid token."
-                github_token=""
+                github_auth=""
                 echo
             fi
         done
@@ -681,14 +681,14 @@ run_non_interactive_setup() {
     log "INFO" "🤖 Starting non-interactive configuration setup..."
     
     # Use environment variables or defaults
-    local github_token="${GITHUB_TOKEN:-}"
+    local github_auth="${GITHUB_TOKEN:-}"
     local domain="${DOMAIN:-localhost}"
     local ssl_path="${SSL_PATH:-./ssl}"
     local admin_email="${ADMIN_EMAIL:-}"
     local use_latest="${USE_LATEST_IMAGES:-true}"
     
     # Validate required parameters (token not needed in dev mode)
-    if [[ -z "$github_token" && "${DEV_MODE:-false}" != "true" ]]; then
+    if [[ -z "$github_auth" && "${DEV_MODE:-false}" != "true" ]]; then
         log "ERROR" "GitHub token is required for non-interactive setup"
         log "INFO" "Set GITHUB_TOKEN environment variable or use --token flag"
         log "INFO" "Or use --dev flag to enable development mode with local images"
@@ -762,7 +762,7 @@ run_non_interactive_setup() {
         log "INFO" "🚀 Development mode: Skipping Docker registry authentication (using local images)"
     else
         log "STEP" "Authenticating with Docker registry..."
-        if echo "$github_token" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
+        if echo "$github_auth" | docker login ghcr.io -u "token" --password-stdin >/dev/null 2>&1; then
             log "SUCCESS" "✅ Docker registry authentication successful"
             docker logout ghcr.io >/dev/null 2>&1
         else

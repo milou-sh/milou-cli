@@ -546,21 +546,14 @@ ssl_prompt_letsencrypt_anyway() {
     esac
 }
 
-# Validate certificate and key pair
+# REMOVED: ssl_validate_cert_key_pair() - now consolidated in lib/core/validation.sh
+# Use milou_ssl_validate_cert_key_pair() instead
 ssl_validate_cert_key_pair() {
     local cert_file="$1"
     local key_file="$2"
     
-    if ! command -v openssl >/dev/null 2>&1; then
-        milou_log "WARN" "OpenSSL not available, skipping validation"
-        return 0
-    fi
-    
-    local cert_modulus key_modulus
-    cert_modulus=$(openssl x509 -noout -modulus -in "$cert_file" 2>/dev/null | openssl md5 2>/dev/null)
-    key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | openssl md5 2>/dev/null)
-    
-    [[ "$cert_modulus" == "$key_modulus" && -n "$cert_modulus" ]]
+    # Use the enhanced consolidated function
+    milou_ssl_validate_cert_key_pair "$cert_file" "$key_file" "true"
 }
 
 # Setup completion handler

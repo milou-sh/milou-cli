@@ -40,117 +40,29 @@ fi
 # Certificate Validation Functions
 # =============================================================================
 
-# Validate SSL certificates comprehensively
+# REMOVED: validate_ssl_certificates() - now consolidated in lib/core/validation.sh
+# Use milou_validate_ssl_certificates() instead
 validate_ssl_certificates() {
     local cert_file="$1"
     local key_file="$2"
     local domain="${3:-}"
     
-    milou_log "DEBUG" "Validating SSL certificates"
+    # Convert to directory path for consolidated function
+    local ssl_path
+    ssl_path=$(dirname "$cert_file")
     
-    # Check if files exist
-    if [[ ! -f "$cert_file" ]]; then
-        milou_log "ERROR" "Certificate file not found: $cert_file"
-        return 1
-    fi
-    
-    if [[ ! -f "$key_file" ]]; then
-        milou_log "ERROR" "Private key file not found: $key_file"
-        return 1
-    fi
-    
-    # Check file permissions
-    local cert_perms key_perms
-    cert_perms=$(stat -c "%a" "$cert_file" 2>/dev/null || echo "unknown")
-    key_perms=$(stat -c "%a" "$key_file" 2>/dev/null || echo "unknown")
-    
-    if [[ "$key_perms" != "600" ]]; then
-        milou_log "WARN" "Private key permissions are not secure: $key_perms (should be 600)"
-        chmod 600 "$key_file" 2>/dev/null && milou_log "INFO" "Fixed private key permissions"
-    fi
-    
-    # Validate certificate format
-    if ! openssl x509 -in "$cert_file" -noout -text >/dev/null 2>&1; then
-        milou_log "ERROR" "Invalid certificate format: $cert_file"
-        return 1
-    fi
-    
-    # Validate private key format
-    if ! openssl rsa -in "$key_file" -check -noout >/dev/null 2>&1; then
-        milou_log "ERROR" "Invalid private key format: $key_file"
-        return 1
-    fi
-    
-    # Check if certificate and key match
-    local cert_modulus key_modulus
-    cert_modulus=$(openssl x509 -noout -modulus -in "$cert_file" 2>/dev/null | openssl md5 2>/dev/null)
-    key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | openssl md5 2>/dev/null)
-    
-    if [[ "$cert_modulus" != "$key_modulus" ]]; then
-        milou_log "ERROR" "Certificate and private key do not match"
-        return 1
-    fi
-    
-    # Check certificate expiration
-    if ! check_ssl_expiration "$cert_file"; then
-        milou_log "WARN" "Certificate is expired or expires soon"
-        # Don't return error for expiration - just warn
-    fi
-    
-    # Validate domain if provided
-    if [[ -n "$domain" ]]; then
-        if ! validate_certificate_domain "$cert_file" "$domain"; then
-            milou_log "WARN" "Certificate domain validation failed for: $domain"
-            return 1  # Return error for domain mismatch to trigger regeneration
-        fi
-    fi
-    
-    milou_log "SUCCESS" "SSL certificates validation passed"
-    return 0
+    # Use the enhanced consolidated function
+    milou_validate_ssl_certificates "$ssl_path" "$domain" "true" "false"
 }
 
-# Check SSL certificate expiration
+# REMOVED: check_ssl_expiration() - now consolidated in lib/core/validation.sh
+# Use milou_check_ssl_expiration() instead
 check_ssl_expiration() {
     local cert_file="$1"
     local warning_days="${2:-30}"
     
-    if [[ ! -f "$cert_file" ]]; then
-        milou_log "ERROR" "Certificate file not found: $cert_file"
-        return 1
-    fi
-    
-    # Get certificate expiration date
-    local exp_date
-    exp_date=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2)
-    
-    if [[ -z "$exp_date" ]]; then
-        milou_log "ERROR" "Could not read certificate expiration date"
-        return 1
-    fi
-    
-    # Convert to epoch time
-    local exp_epoch current_epoch
-    exp_epoch=$(date -d "$exp_date" +%s 2>/dev/null || date -j -f "%b %d %H:%M:%S %Y %Z" "$exp_date" +%s 2>/dev/null)
-    current_epoch=$(date +%s)
-    
-    if [[ -z "$exp_epoch" ]]; then
-        milou_log "ERROR" "Could not parse certificate expiration date: $exp_date"
-        return 1
-    fi
-    
-    # Calculate days until expiration
-    local days_until_exp=$(( (exp_epoch - current_epoch) / 86400 ))
-    
-    if [[ $days_until_exp -lt 0 ]]; then
-        milou_log "ERROR" "Certificate has expired ${days_until_exp#-} days ago"
-        return 1
-    elif [[ $days_until_exp -le $warning_days ]]; then
-        milou_log "WARN" "Certificate expires in $days_until_exp days"
-        return 1
-    else
-        milou_log "DEBUG" "Certificate valid for $days_until_exp more days"
-        return 0
-    fi
+    # Use the enhanced consolidated function
+    milou_check_ssl_expiration "$cert_file" "$warning_days" "false"
 }
 
 # Validate certificate domain

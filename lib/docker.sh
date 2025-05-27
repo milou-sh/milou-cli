@@ -5,6 +5,11 @@
 # All Docker functionality in one organized module (500 lines max)
 # =============================================================================
 
+# Preserve PATH to prevent corruption during environment loading
+if [[ -n "${SYSTEM_PATH:-}" ]]; then
+    export PATH="$SYSTEM_PATH"
+fi
+
 # Module guard to prevent multiple loading
 if [[ "${MILOU_DOCKER_LOADED:-}" == "true" ]]; then
     return 0
@@ -47,6 +52,8 @@ docker_init() {
     # Find environment file
     local env_file=""
     local -a env_search_paths=(
+        "${CONFIG_DIR:-${HOME}/.milou}/.env"
+        "${ENV_FILE:-}"
         "${script_dir}/.env"
         "$(pwd)/.env"
         "${PWD}/.env"
@@ -66,20 +73,16 @@ docker_init() {
         return 1
     fi
     
-    # Set working directory
-    local working_dir="$(dirname "$env_file")"
-    if [[ -d "$working_dir" ]]; then
-        cd "$working_dir" || {
-            log "ERROR" "Cannot change to working directory: $working_dir"
-            return 1
-        }
-    fi
-    
-    # Find compose file
-    local compose_file="$DEFAULT_COMPOSE_FILE"
+    # Find compose file (look in script directory, not env file directory)
+    local compose_file="${script_dir}/${DEFAULT_COMPOSE_FILE}"
     if [[ ! -f "$compose_file" ]]; then
-        log "ERROR" "Docker Compose file not found: $compose_file"
-        return 1
+        # Try relative to current directory
+        compose_file="$DEFAULT_COMPOSE_FILE"
+        if [[ ! -f "$compose_file" ]]; then
+            log "ERROR" "Docker Compose file not found: $compose_file"
+            log "DEBUG" "Searched in: ${script_dir}/${DEFAULT_COMPOSE_FILE} and $DEFAULT_COMPOSE_FILE"
+            return 1
+        fi
     fi
     
     # Export variables
@@ -591,12 +594,12 @@ docker_system_info() {
 docker_health_check() {
     log "INFO" "Docker Services Health Check:"
     
-    # Get service status
+    # Get service status using docker ps directly since docker_compose might not be initialized
     local services_status
-    services_status=$(docker_compose ps --format "{{.Name}} {{.Status}}" 2>/dev/null || true)
+    services_status=$(docker ps --filter "name=milou-" --format "{{.Names}} {{.Status}}" 2>/dev/null || true)
     
     if [[ -z "$services_status" ]]; then
-        log "WARN" "No services found"
+        log "WARN" "No Milou services found"
         return 1
     fi
     
@@ -611,7 +614,7 @@ docker_health_check() {
             
             ((total++))
             
-            if [[ "$status" =~ Up|running ]]; then
+            if [[ "$status" =~ (Up|running) ]]; then
                 echo "  ✅ $service_name: $status"
                 ((healthy++))
             else
@@ -630,9 +633,791 @@ docker_health_check() {
     fi
 }
 
+# =============================================================================
+# Update and Version Management (Lines 601-700)
+# =============================================================================
+
+# Update Docker images to new versions
+docker_update_images() {
+    local target_version="${1:-latest}"
+    local services=("${@:2}")
+    
+    log "STEP" "Updating Docker images to version: $target_version"
+    
+    # Validate GitHub token for private registry access
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+        log "ERROR" "GitHub token required for image updates"
+        log "INFO" "Use: ./milou.sh update --token YOUR_GITHUB_TOKEN"
+        return 1
+    fi
+    
+    # Login to GitHub Container Registry
+    # For GitHub Container Registry, use the token as both username and password
+    if ! docker_registry_login "ghcr.io" "${GITHUB_TOKEN}" "${GITHUB_TOKEN}"; then
+        log "ERROR" "Failed to authenticate with GitHub Container Registry"
+        return 1
+    fi
+    
+    # Create backup before update
+    if ! docker_backup_before_update; then
+        log "ERROR" "Failed to create backup before update"
+        return 1
+    fi
+    
+    # Get current image versions for rollback
+    local current_images
+    current_images=$(docker_compose config --images 2>/dev/null)
+    echo "$current_images" > "/tmp/milou-images-backup-$(date +%Y%m%d-%H%M%S).txt"
+    
+    # Update image tags in environment
+    if ! docker_update_image_tags "$target_version" "${services[@]}"; then
+        log "ERROR" "Failed to update image tags"
+        return 1
+    fi
+    
+    # Pull new images
+    log "INFO" "Pulling new Docker images..."
+    if ! docker_pull_images; then
+        log "ERROR" "Failed to pull new images"
+        return 1
+    fi
+    
+    # Validate new images
+    if ! docker_validate_images; then
+        log "ERROR" "Image validation failed"
+        return 1
+    fi
+    
+    log "SUCCESS" "Docker images updated successfully"
+    return 0
+}
+
+# Update image tags in environment file
+docker_update_image_tags() {
+    local target_version="$1"
+    shift
+    local services=("$@")
+    
+    log "INFO" "Updating image tags to version: $target_version"
+    
+    # Backup current .env file
+    cp "$DOCKER_ENV_FILE" "${DOCKER_ENV_FILE}.backup.$(date +%Y%m%d-%H%M%S)"
+    
+    # Define image tag mappings
+    local -A image_tags=(
+        ["backend"]="MILOU_BACKEND_TAG"
+        ["frontend"]="MILOU_FRONTEND_TAG"
+        ["engine"]="MILOU_ENGINE_TAG"
+        ["nginx"]="MILOU_NGINX_TAG"
+        ["database"]="MILOU_DATABASE_TAG"
+    )
+    
+    # Update specific services or all if none specified
+    if [[ ${#services[@]} -eq 0 ]]; then
+        services=("${!image_tags[@]}")
+    fi
+    
+    # Update each service tag
+    for service in "${services[@]}"; do
+        local tag_var="${image_tags[$service]:-}"
+        if [[ -n "$tag_var" ]]; then
+            log "INFO" "Updating $service to version $target_version"
+            
+            # Update or add the tag in .env file
+            if grep -q "^${tag_var}=" "$DOCKER_ENV_FILE"; then
+                sed -i "s/^${tag_var}=.*/${tag_var}=${target_version}/" "$DOCKER_ENV_FILE"
+            else
+                echo "${tag_var}=${target_version}" >> "$DOCKER_ENV_FILE"
+            fi
+        else
+            log "WARN" "Unknown service: $service"
+        fi
+    done
+    
+    log "SUCCESS" "Image tags updated in environment file"
+    return 0
+}
+
+# Validate Docker images integrity and availability
+docker_validate_images() {
+    log "INFO" "Validating Docker images..."
+    
+    # Get list of images from updated compose file
+    local images
+    images=$(docker_compose config --images 2>/dev/null || true)
+    
+    if [[ -z "$images" ]]; then
+        log "ERROR" "No images found in compose configuration"
+        return 1
+    fi
+    
+    local validation_errors=0
+    
+    # Validate each image
+    while IFS= read -r image; do
+        if [[ -n "$image" ]]; then
+            log "INFO" "Validating image: $image"
+            
+            # Check if image exists locally
+            if ! docker image inspect "$image" >/dev/null 2>&1; then
+                log "ERROR" "Image not found locally: $image"
+                ((validation_errors++))
+                continue
+            fi
+            
+            # Check image size (basic validation)
+            local image_size
+            image_size=$(docker image inspect "$image" --format '{{.Size}}' 2>/dev/null || echo "0")
+            if [[ "$image_size" -lt 1000000 ]]; then  # Less than 1MB is suspicious
+                log "WARN" "Image seems unusually small: $image ($image_size bytes)"
+            fi
+            
+            log "SUCCESS" "✅ Image validated: $image"
+        fi
+    done <<< "$images"
+    
+    if [[ $validation_errors -eq 0 ]]; then
+        log "SUCCESS" "All images validated successfully"
+        return 0
+    else
+        log "ERROR" "Image validation failed with $validation_errors errors"
+        return 1
+    fi
+}
+
+# Create comprehensive backup before update
+docker_backup_before_update() {
+    local backup_timestamp
+    backup_timestamp=$(date +%Y%m%d-%H%M%S)
+    local backup_dir="./backups/pre-update-${backup_timestamp}"
+    
+    log "STEP" "Creating comprehensive backup before update..."
+    
+    # Create backup directory
+    safe_mkdir "$backup_dir"
+    
+    # Backup configuration files
+    log "INFO" "Backing up configuration files..."
+    cp "$DOCKER_ENV_FILE" "$backup_dir/env-backup.txt"
+    cp "$DOCKER_COMPOSE_FILE" "$backup_dir/compose-backup.yml"
+    
+    # Backup current image list
+    log "INFO" "Backing up current image versions..."
+    docker_compose config --images > "$backup_dir/images-backup.txt" 2>/dev/null || true
+    docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}" > "$backup_dir/docker-images-backup.txt"
+    
+    # Backup Docker volumes
+    log "INFO" "Backing up Docker volumes..."
+    if ! docker_backup_volumes "$backup_dir/volumes"; then
+        log "WARN" "Volume backup failed, continuing anyway..."
+    fi
+    
+    # Create database backup if database service is running
+    if docker_compose ps db | grep -q "Up"; then
+        log "INFO" "Creating database backup..."
+        docker_backup_database "$backup_dir/database-backup.sql" || {
+            log "WARN" "Database backup failed, continuing anyway..."
+        }
+    fi
+    
+    # Store backup location for potential rollback
+    echo "$backup_dir" > "/tmp/milou-last-backup-location.txt"
+    
+    log "SUCCESS" "Comprehensive backup created: $backup_dir"
+    return 0
+}
+
+# Backup database specifically
+docker_backup_database() {
+    local backup_file="${1:-./database-backup-$(date +%Y%m%d-%H%M%S).sql}"
+    
+    log "INFO" "Creating database backup: $backup_file"
+    
+    # Get database credentials from environment
+    local db_user db_password db_name
+    db_user=$(grep "^POSTGRES_USER=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)
+    db_password=$(grep "^POSTGRES_PASSWORD=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)
+    db_name=$(grep "^POSTGRES_DB=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)
+    
+    if [[ -z "$db_user" || -z "$db_password" || -z "$db_name" ]]; then
+        log "ERROR" "Database credentials not found in environment file"
+        return 1
+    fi
+    
+    # Create database backup using pg_dump
+    docker_compose exec -T db pg_dump \
+        -U "$db_user" \
+        -d "$db_name" \
+        --clean \
+        --if-exists \
+        --create \
+        --verbose > "$backup_file" 2>/dev/null || {
+        log "ERROR" "Failed to create database backup"
+        return 1
+    }
+    
+    # Verify backup file
+    if [[ -f "$backup_file" && -s "$backup_file" ]]; then
+        local backup_size
+        backup_size=$(du -h "$backup_file" | cut -f1)
+        log "SUCCESS" "Database backup created: $backup_file ($backup_size)"
+        return 0
+    else
+        log "ERROR" "Database backup file is empty or missing"
+        return 1
+    fi
+}
+
+# Rollback to previous image versions
+docker_rollback_images() {
+    local backup_location="${1:-}"
+    
+    if [[ -z "$backup_location" && -f "/tmp/milou-last-backup-location.txt" ]]; then
+        backup_location=$(cat "/tmp/milou-last-backup-location.txt")
+    fi
+    
+    if [[ -z "$backup_location" || ! -d "$backup_location" ]]; then
+        log "ERROR" "Backup location not found for rollback"
+        return 1
+    fi
+    
+    log "STEP" "Rolling back Docker images from backup: $backup_location"
+    
+    # Stop current services
+    log "INFO" "Stopping current services..."
+    docker_compose down
+    
+    # Restore configuration files
+    log "INFO" "Restoring configuration files..."
+    if [[ -f "$backup_location/env-backup.txt" ]]; then
+        cp "$backup_location/env-backup.txt" "$DOCKER_ENV_FILE"
+    fi
+    
+    # Restore database if backup exists
+    if [[ -f "$backup_location/database-backup.sql" ]]; then
+        log "INFO" "Restoring database backup..."
+        docker_restore_database "$backup_location/database-backup.sql" || {
+            log "WARN" "Database restore failed"
+        }
+    fi
+    
+    # Restore volumes if backup exists
+    if [[ -d "$backup_location/volumes" ]]; then
+        log "INFO" "Restoring volume backups..."
+        docker_restore_volumes "$backup_location/volumes" || {
+            log "WARN" "Volume restore failed"
+        }
+    fi
+    
+    # Start services with restored configuration
+    log "INFO" "Starting services with restored configuration..."
+    if docker_start; then
+        log "SUCCESS" "Rollback completed successfully"
+        return 0
+    else
+        log "ERROR" "Failed to start services after rollback"
+        return 1
+    fi
+}
+
+# Restore database from backup
+docker_restore_database() {
+    local backup_file="$1"
+    
+    if [[ ! -f "$backup_file" ]]; then
+        log "ERROR" "Database backup file not found: $backup_file"
+        return 1
+    fi
+    
+    log "INFO" "Restoring database from backup: $backup_file"
+    
+    # Start database service if not running
+    if ! docker_compose ps db | grep -q "Up"; then
+        docker_compose up -d db
+        sleep 10  # Wait for database to be ready
+    fi
+    
+    # Restore database
+    docker_compose exec -T db psql \
+        -U "$(grep "^POSTGRES_USER=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)" \
+        -d postgres < "$backup_file" || {
+        log "ERROR" "Failed to restore database"
+        return 1
+    }
+    
+    log "SUCCESS" "Database restored successfully"
+    return 0
+}
+
+# Extended health check for updates
+docker_health_check_extended() {
+    local timeout="${1:-300}"  # 5 minutes default timeout
+    local check_interval="${2:-10}"  # 10 seconds between checks
+    
+    log "INFO" "Running extended health check (timeout: ${timeout}s)..."
+    
+    # In development mode, skip extended health checks if no services are running
+    if command -v milou_is_development >/dev/null 2>&1 && milou_is_development; then
+        log "INFO" "Development mode detected - checking for running services..."
+        if ! docker_compose ps --services --filter "status=running" 2>/dev/null | grep -q .; then
+            log "INFO" "No services running in development mode - skipping extended health check"
+            log "SUCCESS" "✅ Health check skipped (development mode, no services)"
+            return 0
+        fi
+    fi
+    
+    local start_time
+    start_time=$(date +%s)
+    
+    while true; do
+        local current_time
+        current_time=$(date +%s)
+        local elapsed=$((current_time - start_time))
+        
+        if [[ $elapsed -gt $timeout ]]; then
+            log "ERROR" "Health check timeout after ${timeout} seconds"
+            return 1
+        fi
+        
+        # Run standard health check
+        if docker_health_check; then
+            # Additional checks for update validation
+            if docker_validate_service_connectivity && docker_validate_api_endpoints; then
+                log "SUCCESS" "Extended health check passed"
+                return 0
+            fi
+        fi
+        
+        log "INFO" "Health check in progress... (${elapsed}/${timeout}s)"
+        sleep "$check_interval"
+    done
+}
+
+# Validate service connectivity
+docker_validate_service_connectivity() {
+    log "INFO" "Validating service connectivity..."
+    
+    # Check database connectivity
+    if docker_compose exec -T db pg_isready >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Database connectivity verified"
+    else
+        log "ERROR" "❌ Database connectivity failed"
+        return 1
+    fi
+    
+    # Check Redis connectivity
+    if docker_compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Redis connectivity verified"
+    else
+        log "ERROR" "❌ Redis connectivity failed"
+        return 1
+    fi
+    
+    # Check RabbitMQ connectivity
+    if docker_compose exec -T rabbitmq rabbitmqctl status >/dev/null 2>&1; then
+        log "SUCCESS" "✅ RabbitMQ connectivity verified"
+    else
+        log "ERROR" "❌ RabbitMQ connectivity failed"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Validate API endpoints
+docker_validate_api_endpoints() {
+    log "INFO" "Validating API endpoints..."
+    
+    # Get backend port
+    local backend_port
+    backend_port=$(grep "^PORT=" "$DOCKER_ENV_FILE" | cut -d'=' -f2 || echo "9999")
+    
+    # Check backend health endpoint
+    local backend_health_url="http://localhost:${backend_port}/health"
+    if curl -f -s "$backend_health_url" >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Backend API endpoint verified"
+    else
+        log "ERROR" "❌ Backend API endpoint failed: $backend_health_url"
+        return 1
+    fi
+    
+    # Check frontend accessibility
+    if curl -f -s "http://localhost:80/" >/dev/null 2>&1; then
+        log "SUCCESS" "✅ Frontend endpoint verified"
+    else
+        log "ERROR" "❌ Frontend endpoint failed"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Smart Docker startup that handles all scenarios
+smart_docker_start() {
+    log "STEP" "🧠 Smart Docker startup for all installation scenarios"
+    
+    # Clean conflicting environment variables before starting
+    clean_system_env_vars
+    
+    # Ensure environment files are synced
+    if [[ -f ".env" ]]; then
+        sync_env_files ".env" "static/.env"
+    fi
+    
+    # Detect current state
+    local install_state=$(detect_installation_state)
+    local has_running_services=$(docker ps -q --filter "name=milou-" | wc -l)
+    
+    log "INFO" "Installation state: $install_state"
+    log "INFO" "Running services: $has_running_services"
+    
+    # Handle different scenarios
+    case "$install_state" in
+        "fresh")
+            log "INFO" "Fresh installation - starting all services"
+            docker_start_fresh
+            ;;
+        "partial")
+            log "INFO" "Partial installation - cleaning up and restarting"
+            docker_start_partial
+            ;;
+        "complete")
+            # Check if all expected services are running
+            local expected_containers=("milou-database" "milou-redis" "milou-rabbitmq" "milou-backend" "milou-frontend" "milou-nginx")
+            local running_expected=0
+            
+            for container in "${expected_containers[@]}"; do
+                if docker ps --format "{{.Names}}" | grep -q "^${container}$"; then
+                    ((running_expected++))
+                fi
+            done
+            
+            if [[ $running_expected -eq ${#expected_containers[@]} ]]; then
+                log "INFO" "All services running - performing health check"
+                docker_health_check || docker_restart_unhealthy
+            elif [[ $running_expected -gt 0 ]]; then
+                log "INFO" "Partial services running ($running_expected/${#expected_containers[@]}) - restarting all"
+                docker_start_partial
+            else
+                log "INFO" "Complete installation - starting services"
+                docker_start_complete
+            fi
+            ;;
+        "corrupted")
+            log "WARN" "Corrupted installation - performing recovery startup"
+            docker_start_recovery
+            ;;
+        *)
+            log "ERROR" "Unknown installation state: $install_state"
+            return 1
+            ;;
+    esac
+    
+    # Final health check and validation
+    if docker_startup_validation; then
+        log "SUCCESS" "Smart Docker startup completed successfully"
+        return 0
+    else
+        log "ERROR" "Smart Docker startup validation failed"
+        return 1
+    fi
+}
+
+# Start fresh Docker installation
+docker_start_fresh() {
+    log "INFO" "Starting fresh Docker installation"
+    
+    # Ensure proxy network exists
+    if ! docker network ls | grep -q "proxy"; then
+        log "INFO" "Creating proxy network"
+        docker network create proxy || log "WARN" "Failed to create proxy network"
+    fi
+    
+    # Start services
+    docker_compose_up
+}
+
+# Start partial Docker installation
+docker_start_partial() {
+    log "INFO" "Starting partial Docker installation"
+    
+    # Stop any running services first
+    log "INFO" "Stopping existing services"
+    docker_compose_down || true
+    
+    # Clean up orphaned containers
+    docker_cleanup_orphaned
+    
+    # Ensure networks exist
+    docker_ensure_networks
+    
+    # Start services
+    docker_compose_up
+}
+
+# Start complete Docker installation
+docker_start_complete() {
+    log "INFO" "Starting complete Docker installation"
+    
+    # Ensure networks exist
+    docker_ensure_networks
+    
+    # Start services
+    docker_compose_up
+}
+
+# Start recovery Docker installation
+docker_start_recovery() {
+    log "WARN" "Starting recovery Docker installation"
+    
+    # Stop everything
+    log "INFO" "Stopping all services for recovery"
+    docker_compose_down || true
+    
+    # Clean up everything
+    docker_cleanup_all
+    
+    # Recreate networks
+    docker_recreate_networks
+    
+    # Start with force recreate
+    docker_compose_up_force_recreate
+}
+
+# Ensure required networks exist
+docker_ensure_networks() {
+    log "INFO" "Ensuring required Docker networks exist"
+    
+    # Check and create proxy network
+    if ! docker network ls | grep -q "proxy"; then
+        log "INFO" "Creating proxy network"
+        docker network create proxy || log "WARN" "Failed to create proxy network"
+    fi
+    
+    # Check milou_network (should be created by compose)
+    if ! docker network ls | grep -q "static_milou_network"; then
+        log "DEBUG" "Milou network will be created by docker-compose"
+    fi
+}
+
+# Recreate networks (for recovery)
+docker_recreate_networks() {
+    log "INFO" "Recreating Docker networks"
+    
+    # Remove existing networks (ignore errors)
+    docker network rm proxy 2>/dev/null || true
+    docker network rm static_milou_network 2>/dev/null || true
+    
+    # Recreate proxy network
+    docker network create proxy || log "ERROR" "Failed to recreate proxy network"
+}
+
+# Clean up orphaned containers
+docker_cleanup_orphaned() {
+    log "INFO" "Cleaning up orphaned containers"
+    
+    # Remove stopped containers
+    docker container prune -f >/dev/null 2>&1 || true
+    
+    # Remove orphaned volumes
+    docker volume prune -f >/dev/null 2>&1 || true
+}
+
+# Clean up everything (for recovery)
+docker_cleanup_all() {
+    log "WARN" "Performing complete Docker cleanup"
+    
+    # Stop and remove all milou containers
+    docker ps -a --filter "name=milou-" -q | xargs -r docker rm -f 2>/dev/null || true
+    
+    # Remove unused networks
+    docker network prune -f >/dev/null 2>&1 || true
+    
+    # Remove unused volumes (be careful here)
+    docker volume ls --filter "label=project=milou" -q | xargs -r docker volume rm 2>/dev/null || true
+}
+
+# Docker compose up with error handling
+docker_compose_up() {
+    log "INFO" "Starting Docker services with compose"
+    
+    local compose_file="./static/docker-compose.yml"
+    local env_file=".env"
+    
+    # Check if files exist
+    if [[ ! -f "$compose_file" ]]; then
+        log "ERROR" "Docker compose file not found: $compose_file"
+        return 1
+    fi
+    
+    if [[ ! -f "$env_file" ]]; then
+        log "ERROR" "Environment file not found: $env_file"
+        return 1
+    fi
+    
+    # Use docker compose (new syntax) or docker-compose (legacy)
+    local compose_cmd="docker compose"
+    if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+        if command -v docker-compose >/dev/null 2>&1; then
+            compose_cmd="docker-compose"
+        else
+            log "ERROR" "Neither 'docker compose' nor 'docker-compose' is available"
+            return 1
+        fi
+    fi
+    
+    # Start services
+    log "INFO" "Executing: $compose_cmd -f $compose_file --env-file $env_file up -d"
+    
+    if $compose_cmd -f "$compose_file" --env-file "$env_file" up -d; then
+        log "SUCCESS" "Docker services started successfully"
+        return 0
+    else
+        log "ERROR" "Failed to start Docker services"
+        return 1
+    fi
+}
+
+# Docker compose up with force recreate
+docker_compose_up_force_recreate() {
+    log "INFO" "Starting Docker services with force recreate"
+    
+    local compose_file="./static/docker-compose.yml"
+    local env_file=".env"
+    
+    # Use docker compose (new syntax) or docker-compose (legacy)
+    local compose_cmd="docker compose"
+    if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+        if command -v docker-compose >/dev/null 2>&1; then
+            compose_cmd="docker-compose"
+        else
+            log "ERROR" "Neither 'docker compose' nor 'docker-compose' is available"
+            return 1
+        fi
+    fi
+    
+    # Start services with force recreate
+    log "INFO" "Executing: $compose_cmd -f $compose_file --env-file $env_file up -d --force-recreate"
+    
+    if $compose_cmd -f "$compose_file" --env-file "$env_file" up -d --force-recreate; then
+        log "SUCCESS" "Docker services started with force recreate"
+        return 0
+    else
+        log "ERROR" "Failed to start Docker services with force recreate"
+        return 1
+    fi
+}
+
+# Docker compose down with error handling
+docker_compose_down() {
+    log "INFO" "Stopping Docker services with compose"
+    
+    local compose_file="./static/docker-compose.yml"
+    local env_file=".env"
+    
+    # Use docker compose (new syntax) or docker-compose (legacy)
+    local compose_cmd="docker compose"
+    if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+        if command -v docker-compose >/dev/null 2>&1; then
+            compose_cmd="docker-compose"
+        else
+            log "WARN" "Neither 'docker compose' nor 'docker-compose' is available"
+            return 1
+        fi
+    fi
+    
+    # Stop services
+    log "INFO" "Executing: $compose_cmd -f $compose_file --env-file $env_file down"
+    
+    if $compose_cmd -f "$compose_file" --env-file "$env_file" down; then
+        log "SUCCESS" "Docker services stopped successfully"
+        return 0
+    else
+        log "WARN" "Some issues occurred while stopping Docker services"
+        return 1
+    fi
+}
+
+# Restart unhealthy services
+docker_restart_unhealthy() {
+    log "INFO" "Restarting unhealthy Docker services"
+    
+    # Get unhealthy containers
+    local unhealthy_containers=$(docker ps --filter "health=unhealthy" --format "{{.Names}}" | grep "milou-" || true)
+    
+    if [[ -n "$unhealthy_containers" ]]; then
+        log "WARN" "Found unhealthy containers: $unhealthy_containers"
+        
+        # Restart each unhealthy container
+        echo "$unhealthy_containers" | while read -r container; do
+            if [[ -n "$container" ]]; then
+                log "INFO" "Restarting unhealthy container: $container"
+                docker restart "$container" || log "ERROR" "Failed to restart $container"
+            fi
+        done
+    else
+        log "INFO" "No unhealthy containers found"
+    fi
+}
+
+# Startup validation
+docker_startup_validation() {
+    log "INFO" "Performing Docker startup validation"
+    
+    local validation_errors=0
+    
+    # Check if all expected containers are running
+    local expected_containers=("milou-database" "milou-redis" "milou-rabbitmq" "milou-backend" "milou-frontend" "milou-nginx")
+    
+    for container in "${expected_containers[@]}"; do
+        if ! docker ps --format "{{.Names}}" | grep -q "^${container}$"; then
+            log "ERROR" "Expected container not running: $container"
+            ((validation_errors++))
+        else
+            log "DEBUG" "Container running: $container"
+        fi
+    done
+    
+    # Wait for health checks to pass
+    log "INFO" "Waiting for health checks to pass..."
+    local max_wait=120  # 2 minutes
+    local wait_time=0
+    
+    while [[ $wait_time -lt $max_wait ]]; do
+        local unhealthy_count=$(docker ps --filter "health=unhealthy" --format "{{.Names}}" | grep "milou-" | wc -l)
+        
+        if [[ $unhealthy_count -eq 0 ]]; then
+            log "SUCCESS" "All health checks passed"
+            break
+        fi
+        
+        log "INFO" "Waiting for $unhealthy_count services to become healthy... (${wait_time}s/${max_wait}s)"
+        sleep 10
+        ((wait_time += 10))
+    done
+    
+    # Final health check
+    if ! docker_health_check; then
+        log "ERROR" "Health check failed after startup"
+        ((validation_errors++))
+    fi
+    
+    if [[ $validation_errors -eq 0 ]]; then
+        log "SUCCESS" "Docker startup validation passed"
+        return 0
+    else
+        log "ERROR" "Docker startup validation failed with $validation_errors errors"
+        return 1
+    fi
+}
+
 # Export main functions for external use
 export -f docker_init docker_validate_setup docker_test_config docker_check_resources
 export -f docker_compose docker_start docker_stop docker_restart docker_status docker_logs
 export -f docker_clean_volumes docker_backup_volumes docker_restore_volumes
 export -f docker_registry_login docker_pull_images docker_build_images
-export -f docker_exec docker_shell docker_clean_system docker_system_info docker_health_check 
+export -f docker_exec docker_shell docker_clean_system docker_system_info docker_health_check
+export -f docker_update_images docker_update_image_tags docker_validate_images
+export -f docker_backup_before_update docker_backup_database docker_rollback_images
+export -f docker_restore_database docker_health_check_extended docker_validate_service_connectivity
+export -f docker_validate_api_endpoints 

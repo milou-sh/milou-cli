@@ -728,10 +728,92 @@ validate_and_fix_user() {
 # Initialize user management
 users_init
 
+# =============================================================================
+# User Setup Wizard
+# =============================================================================
+
+# Interactive user setup wizard
+milou_user_setup_wizard() {
+    log "INFO" "👤 Starting user setup wizard..."
+    
+    # Check if we're in non-interactive mode
+    log "DEBUG" "INTERACTIVE variable value: '${INTERACTIVE:-not_set}'"
+    if [[ "${INTERACTIVE:-true}" == "false" ]]; then
+        log "INFO" "Non-interactive mode detected, using automatic user setup"
+        
+        # Check if milou user exists
+        if ! milou_user_exists; then
+            if [[ "${AUTO_CREATE_USER:-false}" == "true" ]]; then
+                log "INFO" "Creating milou user automatically"
+                create_milou_user || return 1
+            else
+                log "INFO" "Milou user does not exist, but auto-creation is disabled"
+                log "INFO" "Continuing with current user: $(whoami)"
+            fi
+        else
+            log "INFO" "Milou user already exists"
+        fi
+        
+        # Validate user environment
+        validate_and_fix_user "$(whoami)" || {
+            log "WARN" "User environment validation failed"
+        }
+        
+        log "SUCCESS" "User setup completed"
+        return 0
+    fi
+    
+    # Interactive setup
+    log "INFO" "User Setup Options:"
+    echo "  Current user: $(whoami)"
+    
+    if milou_user_exists; then
+        echo "  Milou user: Exists"
+        
+        if ! is_running_as_milou; then
+            if ask_yes_no "Switch to milou user for installation?"; then
+                log "INFO" "Switching to milou user..."
+                switch_to_milou_user || return 1
+            else
+                log "INFO" "Continuing with current user"
+            fi
+        fi
+    else
+        echo "  Milou user: Does not exist"
+        
+        if ask_yes_no "Create dedicated milou user?"; then
+            if ! is_running_as_root; then
+                log "ERROR" "Root privileges required to create user"
+                if ask_yes_no "Continue with current user instead?"; then
+                    log "INFO" "Continuing with current user: $(whoami)"
+                else
+                    return 1
+                fi
+            else
+                create_milou_user || return 1
+                
+                if ask_yes_no "Switch to milou user now?"; then
+                    switch_to_milou_user || return 1
+                fi
+            fi
+        else
+            log "INFO" "Continuing with current user: $(whoami)"
+        fi
+    fi
+    
+    # Validate user environment
+    validate_and_fix_user "$(whoami)" || {
+        log "WARN" "User environment validation failed"
+    }
+    
+    log "SUCCESS" "User setup completed"
+    return 0
+}
+
 # Export main functions for external use
 export -f user_exists milou_user_exists is_running_as_root is_running_as_milou
 export -f validate_username get_user_home get_milou_home user_has_sudo
 export -f create_milou_user delete_milou_user reset_milou_user
 export -f switch_to_milou_user prepare_user_environment
 export -f show_user_info show_milou_status list_system_users
-export -f cleanup_user_temp validate_and_fix_user 
+export -f cleanup_user_temp validate_and_fix_user milou_user_setup_wizard 

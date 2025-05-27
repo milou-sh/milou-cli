@@ -649,6 +649,300 @@ setup_ssl() {
     fi
 }
 
+# =============================================================================
+# Interactive SSL Setup Wizard
+# =============================================================================
+
+# Interactive SSL setup wizard
+milou_ssl_interactive_setup() {
+    ssl_log "INFO" "🔒 Starting SSL certificate setup wizard..."
+    
+    local domain="${DOMAIN:-localhost}"
+    local ssl_path="${SSL_PATH:-./ssl}"
+    
+    # Check if we're in non-interactive mode
+    if [[ "${INTERACTIVE:-true}" == "false" ]]; then
+        ssl_log "INFO" "Non-interactive mode detected, using automatic SSL setup"
+        
+        # Use self-signed certificates for localhost or development
+        if [[ "$domain" == "localhost" || "$domain" == "127.0.0.1" ]]; then
+            ssl_log "INFO" "Generating self-signed certificate for localhost"
+            generate_ssl_certificate "$domain" "$ssl_path" "selfsigned"
+        else
+            ssl_log "INFO" "Using Let's Encrypt for domain: $domain"
+            generate_ssl_certificate "$domain" "$ssl_path" "letsencrypt"
+        fi
+        
+        return $?
+    fi
+    
+    # Interactive setup
+    echo
+    ssl_log "INFO" "SSL Certificate Setup Options:"
+    echo "  Domain: $domain"
+    echo "  SSL Path: $ssl_path"
+    echo
+    
+    # Check if certificates already exist
+    if [[ -f "$ssl_path/$SSL_CERT_FILE" && -f "$ssl_path/$SSL_KEY_FILE" ]]; then
+        ssl_log "INFO" "Existing SSL certificates found"
+        
+        if validate_ssl_certificate "$ssl_path/$SSL_CERT_FILE" "$ssl_path/$SSL_KEY_FILE" "$domain"; then
+            ssl_log "SUCCESS" "Existing certificates are valid"
+            
+            if ask_yes_no "Use existing SSL certificates?"; then
+                ssl_log "INFO" "Using existing SSL certificates"
+                return 0
+            fi
+        else
+            ssl_log "WARN" "Existing certificates are invalid or expired"
+        fi
+    fi
+    
+    # SSL provider selection
+    echo
+    ssl_log "INFO" "Choose SSL certificate provider:"
+    echo "  1) Self-signed (for development/localhost)"
+    echo "  2) Let's Encrypt (for production domains)"
+    echo "  3) Custom certificates (provide your own)"
+    
+    local ssl_choice
+    read -p "Choose option (1-3, default: 1): " ssl_choice
+    ssl_choice="${ssl_choice:-1}"
+    
+    case "$ssl_choice" in
+        1)
+            ssl_log "INFO" "Generating self-signed certificate..."
+            generate_ssl_certificate "$domain" "$ssl_path" "selfsigned"
+            ;;
+        2)
+            if [[ "$domain" == "localhost" || "$domain" == "127.0.0.1" ]]; then
+                ssl_log "WARN" "Let's Encrypt cannot be used with localhost"
+                ssl_log "INFO" "Falling back to self-signed certificate"
+                generate_ssl_certificate "$domain" "$ssl_path" "selfsigned"
+            else
+                ssl_log "INFO" "Setting up Let's Encrypt certificate..."
+                generate_ssl_certificate "$domain" "$ssl_path" "letsencrypt"
+            fi
+            ;;
+        3)
+            ssl_log "INFO" "Custom certificate setup"
+            echo
+            read -p "Path to certificate file (.crt): " cert_file
+            read -p "Path to private key file (.key): " key_file
+            
+            if [[ -f "$cert_file" && -f "$key_file" ]]; then
+                if validate_ssl_certificate "$cert_file" "$key_file" "$domain"; then
+                    mkdir -p "$ssl_path"
+                    cp "$cert_file" "$ssl_path/$SSL_CERT_FILE"
+                    cp "$key_file" "$ssl_path/$SSL_KEY_FILE"
+                    ssl_log "SUCCESS" "Custom certificates installed"
+                else
+                    ssl_log "ERROR" "Custom certificate validation failed"
+                    return 1
+                fi
+            else
+                ssl_log "ERROR" "Certificate files not found"
+                return 1
+            fi
+            ;;
+        *)
+            ssl_log "ERROR" "Invalid option selected"
+            return 1
+            ;;
+    esac
+    
+    # Verify final setup
+    if [[ -f "$ssl_path/$SSL_CERT_FILE" && -f "$ssl_path/$SSL_KEY_FILE" ]]; then
+        ssl_log "SUCCESS" "SSL certificate setup completed"
+        show_ssl_status "$ssl_path"
+        return 0
+    else
+        ssl_log "ERROR" "SSL certificate setup failed"
+        return 1
+    fi
+}
+
+# =============================================================================
+# Certificate Validation and Auto-Renewal (Lines 401-500)
+# =============================================================================
+
+# Check if certificate is about to expire
+check_certificate_expiration() {
+    local cert_file="${1:-$SSL_PATH/$SSL_CERT_FILE}"
+    local warning_days="${2:-$CERT_MIN_DAYS}"
+    
+    if [[ ! -f "$cert_file" ]]; then
+        ssl_log "WARN" "Certificate file not found: $cert_file"
+        return 1
+    fi
+    
+    if ! command -v openssl >/dev/null 2>&1; then
+        ssl_log "WARN" "OpenSSL not available for certificate validation"
+        return 1
+    fi
+    
+    # Get certificate expiration date
+    local expiry_date
+    expiry_date=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2)
+    
+    if [[ -z "$expiry_date" ]]; then
+        ssl_log "ERROR" "Cannot read certificate expiration date"
+        return 1
+    fi
+    
+    # Convert to epoch time
+    local expiry_epoch
+    if command -v date >/dev/null 2>&1; then
+        expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null)
+    else
+        ssl_log "WARN" "Cannot parse certificate expiration date"
+        return 1
+    fi
+    
+    local current_epoch=$(date +%s)
+    local days_until_expiry=$(( (expiry_epoch - current_epoch) / 86400 ))
+    
+    ssl_log "INFO" "Certificate expires in $days_until_expiry days"
+    
+    if [[ $days_until_expiry -le $warning_days ]]; then
+        ssl_log "WARN" "Certificate expires in $days_until_expiry days (warning threshold: $warning_days)"
+        return 2  # Warning: certificate expires soon
+    elif [[ $days_until_expiry -le 0 ]]; then
+        ssl_log "ERROR" "Certificate has expired!"
+        return 3  # Error: certificate expired
+    fi
+    
+    ssl_log "SUCCESS" "Certificate is valid for $days_until_expiry more days"
+    return 0
+}
+
+# Auto-renew certificate if needed
+auto_renew_certificate() {
+    local domain="${1:-$DOMAIN}"
+    local ssl_path="${2:-$SSL_PATH}"
+    local force="${3:-false}"
+    
+    ssl_log "INFO" "Checking certificate auto-renewal for: $domain"
+    
+    local cert_file="$ssl_path/$SSL_CERT_FILE"
+    local renewal_needed=false
+    
+    if [[ "$force" == "true" ]]; then
+        ssl_log "INFO" "Forced renewal requested"
+        renewal_needed=true
+    elif [[ ! -f "$cert_file" ]]; then
+        ssl_log "INFO" "Certificate not found, generating new one"
+        renewal_needed=true
+    else
+        # Check expiration
+        check_certificate_expiration "$cert_file" "$CERT_MIN_DAYS"
+        local check_result=$?
+        
+        case $check_result in
+            2|3)  # Warning or expired
+                ssl_log "INFO" "Certificate renewal needed"
+                renewal_needed=true
+                ;;
+            0)    # Valid
+                ssl_log "INFO" "Certificate is still valid, no renewal needed"
+                return 0
+                ;;
+            *)    # Error checking
+                ssl_log "WARN" "Cannot determine certificate status, renewing to be safe"
+                renewal_needed=true
+                ;;
+        esac
+    fi
+    
+    if [[ "$renewal_needed" == "true" ]]; then
+        ssl_log "STEP" "Renewing SSL certificate for: $domain"
+        
+        # Backup existing certificate if it exists
+        if [[ -f "$cert_file" ]]; then
+            local backup_dir="$ssl_path/backup-$(date +%Y%m%d-%H%M%S)"
+            mkdir -p "$backup_dir"
+            cp "$cert_file" "$backup_dir/" 2>/dev/null || true
+            cp "$ssl_path/$SSL_KEY_FILE" "$backup_dir/" 2>/dev/null || true
+            ssl_log "INFO" "Backed up existing certificates to: $backup_dir"
+        fi
+        
+        # Determine certificate type based on domain
+        local cert_type="selfsigned"
+        if [[ "$domain" != "localhost" && ! "$domain" =~ \.local$ ]] && check_letsencrypt_prerequisites "$domain"; then
+            cert_type="letsencrypt"
+        fi
+        
+        # Generate new certificate
+        if generate_ssl_certificate "$domain" "$ssl_path" "$cert_type"; then
+            ssl_log "SUCCESS" "Certificate renewed successfully"
+            
+            # Restart nginx if running in Docker
+            if command -v docker >/dev/null 2>&1 && docker ps --format "{{.Names}}" | grep -q "nginx"; then
+                ssl_log "INFO" "Restarting nginx to load new certificate"
+                docker restart milou-nginx 2>/dev/null || true
+            fi
+            
+            return 0
+        else
+            ssl_log "ERROR" "Certificate renewal failed"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Setup automatic certificate renewal (cron job)
+setup_auto_renewal() {
+    local domain="${1:-$DOMAIN}"
+    local ssl_path="${2:-$SSL_PATH}"
+    
+    ssl_log "INFO" "Setting up automatic certificate renewal"
+    
+    # Create renewal script
+    local renewal_script="/usr/local/bin/milou-ssl-renew"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    
+    if [[ $EUID -eq 0 ]]; then
+        cat > "$renewal_script" << EOF
+#!/bin/bash
+# Milou SSL Certificate Auto-Renewal Script
+# Generated on $(date)
+
+cd "$script_dir"
+./milou.sh ssl-renew --domain "$domain" --ssl-path "$ssl_path" --quiet
+EOF
+        chmod +x "$renewal_script"
+        
+        # Add cron job (check daily at 2 AM)
+        local cron_entry="0 2 * * * $renewal_script"
+        
+        if command -v crontab >/dev/null 2>&1; then
+            # Check if entry already exists
+            if ! crontab -l 2>/dev/null | grep -q "$renewal_script"; then
+                (crontab -l 2>/dev/null; echo "$cron_entry") | crontab -
+                ssl_log "SUCCESS" "Automatic renewal cron job added"
+            else
+                ssl_log "INFO" "Automatic renewal cron job already exists"
+            fi
+        else
+            ssl_log "WARN" "Cron not available, automatic renewal not configured"
+        fi
+        
+        ssl_log "SUCCESS" "Automatic renewal setup completed"
+        ssl_log "INFO" "Renewal script: $renewal_script"
+        ssl_log "INFO" "Cron schedule: Daily at 2:00 AM"
+    else
+        ssl_log "WARN" "Root privileges required for automatic renewal setup"
+        ssl_log "INFO" "You can manually run: ./milou.sh ssl-renew"
+    fi
+}
+
+# =============================================================================
+# SSL Status and Information Functions (Lines 501-600)
+# =============================================================================
+
 # Export main functions for external use
 export -f setup_ssl generate_ssl_certificate validate_ssl_certificate show_ssl_status
-export -f backup_ssl_certificates restore_ssl_certificates clean_ssl_certificates 
+export -f backup_ssl_certificates restore_ssl_certificates clean_ssl_certificates milou_ssl_interactive_setup 

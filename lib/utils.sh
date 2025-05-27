@@ -241,6 +241,12 @@ validate_domain() {
 validate_email() {
     local email="$1"
     
+    # Allow localhost for development
+    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@localhost$ ]]; then
+        return 0
+    fi
+    
+    # Standard email validation
     if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
         return 0
     fi
@@ -284,14 +290,14 @@ validate_path() {
     local allow_relative="${2:-true}"
     
     # Remove dangerous characters
-    if [[ "$path" =~ \.\./|/\.\.|^\.\./ ]]; then
+    if [[ "$path" =~ (\.\./|/\.\.|^\.\./) ]]; then
         if [[ "$allow_relative" != true ]]; then
             return 1
         fi
     fi
     
     # Check for null bytes and other dangerous characters
-    if [[ "$path" =~ $'\0'|$'\r'|$'\n' ]]; then
+    if [[ "$path" =~ ($'\0'|$'\r'|$'\n') ]]; then
         return 1
     fi
     
@@ -716,6 +722,130 @@ ask_yes_no() {
                 ;;
         esac
     done
+}
+
+# =============================================================================
+# File System Utilities (Lines 501-550)
+# =============================================================================
+
+# Safe directory creation
+safe_mkdir() {
+    local dir_path="$1"
+    local permissions="${2:-755}"
+    
+    if [[ -z "$dir_path" ]]; then
+        log "ERROR" "Directory path required"
+        return 1
+    fi
+    
+    if [[ -d "$dir_path" ]]; then
+        log "DEBUG" "Directory already exists: $dir_path"
+        return 0
+    fi
+    
+    if mkdir -p "$dir_path" 2>/dev/null; then
+        chmod "$permissions" "$dir_path"
+        log "DEBUG" "Created directory: $dir_path"
+        return 0
+    else
+        log "ERROR" "Failed to create directory: $dir_path"
+        return 1
+    fi
+}
+
+# Safe file copy
+safe_copy() {
+    local source="$1"
+    local destination="$2"
+    local backup="${3:-true}"
+    
+    if [[ ! -f "$source" ]]; then
+        log "ERROR" "Source file does not exist: $source"
+        return 1
+    fi
+    
+    # Create destination directory if needed
+    local dest_dir
+    dest_dir=$(dirname "$destination")
+    safe_mkdir "$dest_dir"
+    
+    # Backup existing file if requested
+    if [[ "$backup" == "true" && -f "$destination" ]]; then
+        local backup_file="${destination}.backup.$(date +%Y%m%d-%H%M%S)"
+        cp "$destination" "$backup_file"
+        log "DEBUG" "Backed up existing file: $backup_file"
+    fi
+    
+    # Copy file
+    if cp "$source" "$destination" 2>/dev/null; then
+        log "DEBUG" "Copied file: $source -> $destination"
+        return 0
+    else
+        log "ERROR" "Failed to copy file: $source -> $destination"
+        return 1
+    fi
+}
+
+# Get absolute path
+get_absolute_path() {
+    local path="$1"
+    
+    if [[ -z "$path" ]]; then
+        echo ""
+        return 1
+    fi
+    
+    # Use realpath if available
+    if command_exists realpath; then
+        realpath "$path" 2>/dev/null || echo "$path"
+    else
+        # Fallback method
+        cd "$(dirname "$path")" && pwd -P
+    fi
+}
+
+# Check disk space
+check_disk_space() {
+    local path="${1:-.}"
+    local required_mb="${2:-1024}"  # Default 1GB
+    
+    local available_kb
+    available_kb=$(df "$path" | awk 'NR==2 {print $4}')
+    local available_mb=$((available_kb / 1024))
+    
+    if [[ $available_mb -lt $required_mb ]]; then
+        log "ERROR" "Insufficient disk space: ${available_mb}MB available, ${required_mb}MB required"
+        return 1
+    fi
+    
+    log "DEBUG" "Disk space check passed: ${available_mb}MB available"
+    return 0
+}
+
+# Backup file with timestamp
+backup_file() {
+    local file_path="$1"
+    local backup_dir="${2:-./backups}"
+    
+    if [[ ! -f "$file_path" ]]; then
+        log "ERROR" "File does not exist: $file_path"
+        return 1
+    fi
+    
+    safe_mkdir "$backup_dir"
+    
+    local filename
+    filename=$(basename "$file_path")
+    local backup_path="${backup_dir}/${filename}.backup.$(date +%Y%m%d-%H%M%S)"
+    
+    if safe_copy "$file_path" "$backup_path" false; then
+        log "INFO" "File backed up: $backup_path"
+        echo "$backup_path"
+        return 0
+    else
+        log "ERROR" "Failed to backup file: $file_path"
+        return 1
+    fi
 }
 
 # Initialize utilities

@@ -7,6 +7,10 @@ set -euo pipefail
 # Simplified architecture with consolidated modules
 # =============================================================================
 
+# Preserve system PATH to prevent corruption
+readonly SYSTEM_PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+export PATH="$SYSTEM_PATH"
+
 # Version and Constants
 readonly SCRIPT_VERSION="3.2.0"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -122,6 +126,8 @@ show_help() {
     echo "    ${CYAN}backup${NC}            Create system backup"
     echo "    ${CYAN}restore${NC} [FILE]    Restore from backup file"
     echo "    ${CYAN}update${NC}            Update to latest version"
+    echo "    ${CYAN}seed${NC}              Run database seeder to populate sample data"
+    echo "    ${CYAN}credentials${NC}       Display current login credentials and access URLs"
     echo "    ${CYAN}ssl${NC}               Manage SSL certificates"
     echo "    ${CYAN}cleanup${NC}           Clean up Docker resources"
     echo "    ${CYAN}shell${NC} [SERVICE]   Get shell access to a running container"
@@ -166,7 +172,7 @@ show_help() {
 # =============================================================================
 
 cmd_setup() {
-    log "INFO" "🚀 Starting Milou setup..."
+    log "INFO" "🚀 Starting Milou smart setup..."
     
     # Check prerequisites first
     if ! milou_check_prerequisites; then
@@ -178,13 +184,105 @@ cmd_setup() {
         fi
     fi
     
-    # Run setup wizard
-    milou_setup_wizard
+    # Use smart configuration that handles all installation scenarios
+    local domain="${DOMAIN:-localhost}"
+    local email="${EMAIL:-admin@localhost}"
+    local github_token="${GITHUB_TOKEN:-}"
+    
+    # If no token provided and interactive mode, ask for it
+    if [[ -z "$github_token" && "${INTERACTIVE:-true}" == "true" ]]; then
+        echo
+        log "INFO" "GitHub token is required for downloading Docker images"
+        read -p "GitHub personal access token: " github_token
+        if [[ -n "$github_token" ]]; then
+            export GITHUB_TOKEN="$github_token"
+        fi
+    fi
+    
+    # Use smart environment configuration
+    local setup_result=0
+    if smart_env_configuration "$domain" "$email" "$github_token"; then
+        log "SUCCESS" "Smart configuration completed successfully"
+    else
+        log "ERROR" "Smart configuration failed"
+        setup_result=1
+    fi
+    
+    # Load the generated environment if configuration succeeded
+    if [[ $setup_result -eq 0 ]]; then
+        if load_env_file ".env"; then
+            log "SUCCESS" "Environment loaded successfully"
+        else
+            log "ERROR" "Failed to load environment"
+            setup_result=1
+        fi
+    fi
+    
+    # Run remaining setup steps if needed and configuration succeeded
+    if [[ $setup_result -eq 0 && "${INTERACTIVE:-true}" == "true" ]]; then
+        # SSL setup
+        if ask_yes_no "Set up SSL certificates?"; then
+            ssl_interactive_setup || log "WARN" "SSL setup failed"
+        fi
+        
+        # User setup
+        if ask_yes_no "Set up system users?"; then
+            milou_user_setup_wizard || log "WARN" "User setup failed"
+        fi
+    fi
+    
+    # Final validation if everything succeeded so far
+    if [[ $setup_result -eq 0 ]]; then
+        log "INFO" "🔍 Validating setup..."
+        if milou_validate_system; then
+            log "SUCCESS" "Setup validation passed"
+        else
+            log "ERROR" "Setup validation failed"
+            setup_result=1
+        fi
+    fi
+    
+    # Complete setup process with credentials display and service startup
+    milou_setup_completion $setup_result
+    return $setup_result
 }
 
 cmd_start() {
     log "INFO" "🚀 Starting Milou services..."
-    docker_start "$@"
+    
+    # Use smart Docker startup that handles all scenarios
+    if smart_docker_start; then
+        log "SUCCESS" "Milou services started successfully"
+        
+        # Show status after startup
+        echo
+        log "INFO" "Service Status:"
+        docker_status
+        
+        # Show access information
+        local domain=$(grep "^DOMAIN=" .env 2>/dev/null | cut -d'=' -f2 || echo "localhost")
+        local http_port=$(grep "^HTTP_PORT=" .env 2>/dev/null | cut -d'=' -f2 || echo "80")
+        local https_port=$(grep "^HTTPS_PORT=" .env 2>/dev/null | cut -d'=' -f2 || echo "443")
+        
+        echo
+        log "INFO" "🌐 Access Information:"
+        if [[ "$http_port" != "80" ]]; then
+            echo "  HTTP:  http://${domain}:${http_port}"
+        else
+            echo "  HTTP:  http://${domain}"
+        fi
+        
+        if [[ "$https_port" != "443" ]]; then
+            echo "  HTTPS: https://${domain}:${https_port}"
+        else
+            echo "  HTTPS: https://${domain}"
+        fi
+        
+        return 0
+    else
+        log "ERROR" "Failed to start Milou services"
+        return 1
+    fi
 }
 
 cmd_stop() {
@@ -259,6 +357,38 @@ cmd_update() {
     milou_system_update "$@"
 }
 
+cmd_seed() {
+    log "INFO" "🌱 Running database seeder..."
+    
+    # Check if services are running
+    if ! docker ps --filter "name=milou-" --format "{{.Names}}" | grep -q "milou-database"; then
+        log "ERROR" "Database service is not running"
+        log "INFO" "Start services first with: ./milou.sh start"
+        return 1
+    fi
+    
+    # Run the seeder
+    if run_database_seeder; then
+        log "SUCCESS" "Database seeder completed successfully"
+        return 0
+    else
+        log "ERROR" "Database seeder failed"
+        return 1
+    fi
+}
+
+cmd_credentials() {
+    log "INFO" "🔐 Displaying current credentials..."
+    
+    if [[ -f ".env" ]]; then
+        display_setup_credentials ".env"
+    else
+        log "ERROR" "Environment file not found"
+        log "INFO" "Run setup first with: ./milou.sh setup"
+        return 1
+    fi
+}
+
 cmd_ssl() {
     case "${1:-status}" in
         "generate")
@@ -275,11 +405,32 @@ cmd_ssl() {
             ssl_interactive_setup
             ;;
         "renew")
-            generate_ssl_certificate --renew
+            shift
+            auto_renew_certificate "$@"
+            ;;
+        "check-expiry")
+            shift
+            check_certificate_expiration "$@"
+            ;;
+        "auto-setup")
+            shift
+            setup_auto_renewal "$@"
+            ;;
+        "force-renew")
+            shift
+            auto_renew_certificate "${1:-$DOMAIN}" "${2:-$SSL_PATH}" "true"
             ;;
         *)
             log "ERROR" "Unknown SSL command: $1"
-            log "INFO" "Available: generate, validate, status, setup, renew"
+            log "INFO" "Available commands:"
+            log "INFO" "  generate     - Generate new SSL certificate"
+            log "INFO" "  validate     - Validate existing certificate"
+            log "INFO" "  status       - Show certificate status"
+            log "INFO" "  setup        - Interactive SSL setup"
+            log "INFO" "  renew        - Auto-renew certificate if needed"
+            log "INFO" "  check-expiry - Check certificate expiration"
+            log "INFO" "  auto-setup   - Setup automatic renewal (cron)"
+            log "INFO" "  force-renew  - Force certificate renewal"
             return 1
             ;;
     esac
@@ -321,6 +472,50 @@ cmd_build_images() {
     docker_build_images "$@"
 }
 
+cmd_status_install() {
+    log "INFO" "📋 Checking installation status..."
+    local install_state
+    install_state=$(milou_detect_installation)
+    
+    echo
+    log "INFO" "${BOLD}Milou Installation Status${NC}"
+    echo "=========================="
+    
+    case "$install_state" in
+        "$INSTALL_STATE_NONE")
+            log "INFO" "Status: ${RED}No installation detected${NC}"
+            log "INFO" "Next steps: Run 'milou setup' to install Milou"
+            ;;
+        "$INSTALL_STATE_DEV")
+            log "INFO" "Status: ${YELLOW}Development environment${NC}"
+            log "INFO" "Location: $(pwd)"
+            log "INFO" "Mode: Local development"
+            ;;
+        "$INSTALL_STATE_PROD")
+            log "INFO" "Status: ${GREEN}Production installation${NC}"
+            log "INFO" "Location: ${MILOU_INSTALL_PATH}"
+            log "INFO" "Service: Active"
+            ;;
+        "$INSTALL_STATE_PARTIAL")
+            log "INFO" "Status: ${YELLOW}Partial installation${NC}"
+            log "INFO" "Warning: Some components may be missing"
+            ;;
+    esac
+    
+    echo
+    log "INFO" "Environment:"
+    log "INFO" "  - User: $(whoami)"
+    log "INFO" "  - Working directory: $(pwd)"
+    log "INFO" "  - Config directory: ${MILOU_CONFIG_DIR}"
+    log "INFO" "  - Development mode: ${DEV_MODE:-false}"
+    
+    if [[ -f ".env" ]]; then
+        log "INFO" "  - Environment file: Present"
+    else
+        log "INFO" "  - Environment file: Missing"
+    fi
+}
+
 # =============================================================================
 # ARGUMENT PARSING
 # =============================================================================
@@ -349,7 +544,8 @@ parse_arguments() {
                 if [[ -n "${2:-}" ]]; then
                     GITHUB_TOKEN="$2"
                     export GITHUB_TOKEN
-                    log "DEBUG" "Token parsed from arguments: length=${#GITHUB_TOKEN}"
+                    # Write debug to stderr to avoid interfering with command parsing
+                    echo "DEBUG: Token set to: ${GITHUB_TOKEN}" >&2
                     shift 2
                 else
                     log "ERROR" "GitHub token value is required after --token"
@@ -450,12 +646,125 @@ parse_arguments() {
 # =============================================================================
 
 main() {
-    # Parse arguments and get command
-    local remaining_args
-    mapfile -t remaining_args < <(parse_arguments "$@")
+    # Parse arguments directly to avoid subshell issues
+    local remaining_args=()
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --verbose)
+                VERBOSE=true
+                export LOG_LEVEL="DEBUG"
+                shift
+                ;;
+            --force)
+                FORCE=true
+                export FORCE
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                export DRY_RUN
+                shift
+                ;;
+            --token)
+                if [[ -n "${2:-}" ]]; then
+                    GITHUB_TOKEN="$2"
+                    export GITHUB_TOKEN
+                    shift 2
+                else
+                    log "ERROR" "GitHub token value is required after --token"
+                    return 1
+                fi
+                ;;
+            --domain)
+                if [[ -n "${2:-}" ]]; then
+                    DOMAIN="$2"
+                    export DOMAIN
+                    shift 2
+                else
+                    log "ERROR" "Domain value is required after --domain"
+                    return 1
+                fi
+                ;;
+            --ssl-path)
+                if [[ -n "${2:-}" ]]; then
+                    SSL_PATH="$2"
+                    export SSL_PATH
+                    shift 2
+                else
+                    log "ERROR" "SSL path value is required after --ssl-path"
+                    return 1
+                fi
+                ;;
+            --email)
+                if [[ -n "${2:-}" ]]; then
+                    EMAIL="$2"
+                    export EMAIL
+                    shift 2
+                else
+                    log "ERROR" "Email value is required after --email"
+                    return 1
+                fi
+                ;;
+            --latest)
+                USE_LATEST=true
+                export USE_LATEST
+                shift
+                ;;
+            --fixed-version)
+                USE_LATEST=false
+                export USE_LATEST
+                shift
+                ;;
+            --non-interactive)
+                INTERACTIVE=false
+                export INTERACTIVE
+                shift
+                ;;
+            --auto-create-user)
+                AUTO_CREATE_USER=true
+                export AUTO_CREATE_USER
+                shift
+                ;;
+            --skip-user-check)
+                SKIP_USER_CHECK=true
+                export SKIP_USER_CHECK
+                shift
+                ;;
+            --auto-install-deps)
+                AUTO_INSTALL_DEPS=true
+                export AUTO_INSTALL_DEPS
+                shift
+                ;;
+            --fresh-install)
+                FRESH_INSTALL=true
+                export FRESH_INSTALL
+                shift
+                ;;
+            --dev)
+                DEV_MODE=true
+                export DEV_MODE
+                shift
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            -*)
+                log "ERROR" "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                remaining_args+=("$1")
+                shift
+                ;;
+        esac
+    done
     
     local command="${remaining_args[0]:-help}"
     local args=("${remaining_args[@]:1}")
+    
+
     
     log "DEBUG" "Milou CLI v$SCRIPT_VERSION started"
     log "DEBUG" "Command: $command, User: $(whoami), PID: $$"
@@ -504,6 +813,12 @@ main() {
     
     log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
     
+    # Debug: Show all environment variables related to tokens
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        log "DEBUG" "All token-related environment variables:"
+        env | grep -i token || log "DEBUG" "No token environment variables found"
+    fi
+    
     # Route to command handlers
     case "$command" in
         "setup")
@@ -542,6 +857,12 @@ main() {
         "update")
             cmd_update "${args[@]}"
             ;;
+        "seed")
+            cmd_seed "${args[@]}"
+            ;;
+        "credentials")
+            cmd_credentials "${args[@]}"
+            ;;
         "ssl")
             cmd_ssl "${args[@]}"
             ;;
@@ -565,6 +886,9 @@ main() {
             ;;
         "build-images")
             cmd_build_images "${args[@]}"
+            ;;
+        "status-install")
+            cmd_status_install "${args[@]}"
             ;;
         "help"|"--help"|"-h")
             show_help

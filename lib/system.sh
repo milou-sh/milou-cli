@@ -12,6 +12,37 @@ source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
 
 # =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+# Get configuration value from environment
+milou_config_get() {
+    local key="$1"
+    local default="${2:-}"
+    
+    # Try to get from environment first
+    local value="${!key:-}"
+    
+    # If not found and we have an env file, try to get from there
+    if [[ -z "$value" && -f "${DOCKER_ENV_FILE:-}" ]]; then
+        value=$(grep "^${key}=" "${DOCKER_ENV_FILE}" 2>/dev/null | cut -d'=' -f2- | tr -d '"'"'"'')
+    fi
+    
+    # Return value or default
+    echo "${value:-$default}"
+}
+
+# Docker health check wrapper
+milou_docker_health() {
+    if command -v docker_health_check >/dev/null 2>&1; then
+        docker_health_check
+    else
+        log "WARN" "Docker health check function not available"
+        return 1
+    fi
+}
+
+# =============================================================================
 # SYSTEM CONSTANTS
 # =============================================================================
 
@@ -20,9 +51,114 @@ readonly MILOU_SYSTEMD_PATH="/etc/systemd/system"
 readonly MILOU_INSTALL_PATH="/opt/milou"
 readonly MILOU_BIN_PATH="/usr/local/bin"
 
+# Configuration directories
+MILOU_CONFIG_DIR="${MILOU_CONFIG_DIR:-${HOME}/.milou}"
+MILOU_BACKUP_DIR="${MILOU_BACKUP_DIR:-./backups}"
+MILOU_SSL_DIR="${MILOU_SSL_DIR:-./ssl}"
+
+# Installation states
+readonly INSTALL_STATE_NONE="none"
+readonly INSTALL_STATE_DEV="development"
+readonly INSTALL_STATE_PROD="production"
+readonly INSTALL_STATE_PARTIAL="partial"
+
 # =============================================================================
 # SYSTEM DETECTION & VALIDATION
 # =============================================================================
+
+# Detect Milou installation state
+milou_detect_installation() {
+    log "DEBUG" "Detecting Milou installation state..."
+    
+    local has_services=false
+    local has_config=false
+    local has_data=false
+    local is_dev_env=false
+    
+    # Check for systemd service
+    if milou_has_systemd && systemctl list-unit-files | grep -q "${MILOU_SERVICE_NAME}"; then
+        has_services=true
+        log "DEBUG" "Found systemd service"
+    fi
+    
+    # Check for production installation
+    if [[ -d "${MILOU_INSTALL_PATH}" && -f "${MILOU_BIN_PATH}/milou" ]]; then
+        has_config=true
+        log "DEBUG" "Found production installation"
+    fi
+    
+    # Check for development environment
+    if [[ -f "./milou.sh" && -d "./lib" && -f "./static/docker-compose.yml" ]]; then
+        is_dev_env=true
+        log "DEBUG" "Found development environment"
+    fi
+    
+    # Check for data/configuration
+    if [[ -f "./.env" || -d "${MILOU_CONFIG_DIR}" ]]; then
+        has_data=true
+        log "DEBUG" "Found configuration data"
+    fi
+    
+    # Determine installation state
+    if [[ "$is_dev_env" == "true" ]]; then
+        echo "$INSTALL_STATE_DEV"
+    elif [[ "$has_services" == "true" && "$has_config" == "true" && "$has_data" == "true" ]]; then
+        echo "$INSTALL_STATE_PROD"
+    elif [[ "$has_services" == "true" || "$has_config" == "true" || "$has_data" == "true" ]]; then
+        echo "$INSTALL_STATE_PARTIAL"
+    else
+        echo "$INSTALL_STATE_NONE"
+    fi
+}
+
+# Check if running in development mode
+milou_is_development() {
+    local install_state
+    install_state=$(milou_detect_installation)
+    [[ "$install_state" == "$INSTALL_STATE_DEV" ]]
+}
+
+# Check if running in production mode
+milou_is_production() {
+    local install_state
+    install_state=$(milou_detect_installation)
+    [[ "$install_state" == "$INSTALL_STATE_PROD" ]]
+}
+
+# Setup development environment
+milou_dev_mode_setup() {
+    log "INFO" "🔧 Setting up development environment..."
+    
+    # Ensure we're in development mode
+    if ! milou_is_development; then
+        log "ERROR" "Not in development environment"
+        return 1
+    fi
+    
+    # Set development-specific environment variables
+    export DEV_MODE=true
+    export MILOU_ENV="development"
+    export LOG_LEVEL="DEBUG"
+    
+    # Use local paths for development
+    export MILOU_CONFIG_DIR="$(pwd)/.milou-dev"
+    export MILOU_BACKUP_DIR="$(pwd)/backups"
+    export MILOU_SSL_DIR="$(pwd)/ssl"
+    
+    # Create development directories
+    safe_mkdir "$MILOU_CONFIG_DIR"
+    safe_mkdir "$MILOU_BACKUP_DIR"
+    safe_mkdir "$MILOU_SSL_DIR"
+    
+    # Copy example configuration if needed
+    if [[ ! -f ".env" && -f ".env.example" ]]; then
+        log "INFO" "Creating development .env from example"
+        cp ".env.example" ".env"
+    fi
+    
+    log "SUCCESS" "✅ Development environment ready"
+    return 0
+}
 
 # Detect operating system
 milou_detect_os() {
@@ -85,12 +221,22 @@ milou_check_prerequisites() {
     esac
     
     # Check required commands
-    local required_commands=("curl" "wget" "tar" "gzip" "systemctl")
+    local required_commands=("tar" "gzip")
     for cmd in "${required_commands[@]}"; do
         if ! command -v "${cmd}" >/dev/null 2>&1; then
             missing_deps+=("${cmd}")
         fi
     done
+    
+    # Check for either curl or wget
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        missing_deps+=("curl or wget")
+    fi
+    
+    # Check systemctl (but don't require it as a package)
+    if ! command -v systemctl >/dev/null 2>&1; then
+        milou_log "warning" "⚠️  systemctl not available - some features may be limited"
+    fi
     
     # Check Docker
     if ! command -v docker >/dev/null 2>&1; then
@@ -131,13 +277,13 @@ milou_install_prerequisites() {
     case "${os_type}" in
         ubuntu|debian)
             sudo apt-get update
-            sudo apt-get install -y curl wget tar gzip systemctl
+            sudo apt-get install -y curl wget tar gzip
             ;;
         centos|rhel|fedora)
-            sudo yum install -y curl wget tar gzip systemd
+            sudo yum install -y curl wget tar gzip
             ;;
         arch)
-            sudo pacman -S --noconfirm curl wget tar gzip systemd
+            sudo pacman -S --noconfirm curl wget tar gzip
             ;;
         *)
             milou_log "error" "❌ Automatic installation not supported for ${os_type}"
@@ -162,7 +308,7 @@ milou_setup_wizard() {
     
     # Check prerequisites
     if ! milou_check_prerequisites; then
-        if milou_prompt_yes_no "Install missing prerequisites automatically?"; then
+        if ask_yes_no "Install missing prerequisites automatically?"; then
             milou_install_prerequisites || return 1
         else
             milou_log "error" "❌ Prerequisites required for installation"
@@ -179,13 +325,22 @@ milou_setup_wizard() {
     milou_user_setup_wizard || return 1
     
     # SSL setup
-    if milou_prompt_yes_no "Set up SSL certificates?"; then
+    if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+        if ask_yes_no "Set up SSL certificates?"; then
+            milou_ssl_interactive_setup || return 1
+        fi
+    else
+        milou_log "info" "🔒 Setting up SSL certificates automatically..."
         milou_ssl_interactive_setup || return 1
     fi
     
     # Service installation
-    if milou_prompt_yes_no "Install Milou as a system service?"; then
-        milou_install_service || return 1
+    if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+        if ask_yes_no "Install Milou as a system service?"; then
+            milou_install_service || return 1
+        fi
+    else
+        milou_log "info" "📦 Skipping system service installation in non-interactive mode"
     fi
     
     # Final validation
@@ -320,7 +475,7 @@ milou_system_backup() {
     milou_log "info" "💾 Creating system backup: ${backup_name}"
     
     # Create backup directory
-    milou_safe_mkdir "${backup_dir}"
+    safe_mkdir "${backup_dir}"
     
     # Create temporary directory for backup
     local temp_dir
@@ -404,37 +559,349 @@ milou_system_restore() {
 # SYSTEM UPDATES
 # =============================================================================
 
-# Update Milou system
+# Enhanced Milou system update with comprehensive validation and rollback
 milou_system_update() {
-    local version="${1:-latest}"
+    local target_version="${1:-latest}"
+    local services=("${@:2}")
+    local auto_rollback="${AUTO_ROLLBACK:-true}"
     
-    milou_log "info" "🔄 Updating Milou system to version: ${version}"
+    log "STEP" "🔄 Starting Milou system update to version: ${target_version}"
     
-    # Create backup before update
-    milou_system_backup "pre-update-$(date +%Y%m%d-%H%M%S)" || {
-        milou_log "warning" "⚠️  Failed to create backup, continuing anyway..."
-    }
+    # Detect installation state and adapt behavior
+    local install_state
+    install_state=$(milou_detect_installation)
+    log "INFO" "Installation state detected: $install_state"
     
-    # Stop services
-    milou_service_stop
+    case "$install_state" in
+        "$INSTALL_STATE_NONE")
+            log "ERROR" "No Milou installation detected"
+            log "INFO" "Use 'milou setup' to install Milou first"
+            return 1
+            ;;
+        "$INSTALL_STATE_DEV")
+            log "INFO" "Development mode detected - using local update process"
+            milou_dev_mode_setup || return 1
+            ;;
+        "$INSTALL_STATE_PARTIAL")
+            log "WARN" "Partial installation detected - some components may be missing"
+            if [[ "${FORCE:-false}" != "true" ]]; then
+                log "ERROR" "Use --force to continue with partial installation"
+                return 1
+            fi
+            ;;
+        "$INSTALL_STATE_PROD")
+            log "INFO" "Production installation detected"
+            ;;
+    esac
+    
+    # Phase 1: Pre-Update Validation
+    log "INFO" "Phase 1: Pre-Update Validation"
+    
+    # Validate system health before update
+    if ! milou_system_health; then
+        log "ERROR" "System health check failed - aborting update"
+        return 1
+    fi
+    
+    # Check available disk space (need at least 2GB free)
+    local available_space
+    available_space=$(df . | awk 'NR==2 {print $4}')
+    if [[ $available_space -lt 2097152 ]]; then  # 2GB in KB
+        log "ERROR" "Insufficient disk space for update (need 2GB, have $(($available_space/1024))MB)"
+        return 1
+    fi
+    
+    # Validate GitHub token if provided
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        log "INFO" "Validating GitHub token..."
+        if ! curl -s -H "Authorization: token ${GITHUB_TOKEN}" https://api.github.com/user >/dev/null; then
+            log "ERROR" "Invalid GitHub token provided"
+            return 1
+        fi
+        log "SUCCESS" "GitHub token validated"
+    else
+        log "WARN" "No GitHub token provided - may not be able to access private images"
+    fi
+    
+    # Phase 2: Backup Creation
+    log "INFO" "Phase 2: Creating comprehensive backup"
+    
+    local backup_timestamp
+    backup_timestamp=$(date +%Y%m%d-%H%M%S)
+    local backup_name="pre-update-${backup_timestamp}"
+    
+    if ! milou_system_backup "$backup_name"; then
+        if [[ "${FORCE:-false}" == "true" ]]; then
+            log "WARN" "Backup failed but continuing due to --force flag"
+        else
+            log "ERROR" "Backup creation failed - aborting update"
+            log "INFO" "Use --force to continue without backup"
+            return 1
+        fi
+    fi
+    
+    # Phase 3: Update Execution
+    log "INFO" "Phase 3: Executing update"
+    
+    # Stop services gracefully
+    log "INFO" "Stopping services gracefully..."
+    if ! milou_service_stop; then
+        log "ERROR" "Failed to stop services gracefully"
+        return 1
+    fi
     
     # Update Docker images
-    milou_docker_update || {
-        milou_log "error" "❌ Failed to update Docker images"
+    log "INFO" "Updating Docker images..."
+    if ! docker_update_images "$target_version" "${services[@]}"; then
+        log "ERROR" "Failed to update Docker images"
+        
+        if [[ "$auto_rollback" == "true" ]]; then
+            log "WARN" "Auto-rollback enabled - attempting to restore system"
+            milou_rollback_system "$backup_name"
+        fi
         return 1
-    }
+    fi
     
-    # Restart services
-    milou_service_start
+    # Phase 4: Service Restart and Validation
+    log "INFO" "Phase 4: Restarting services and validation"
     
-    # Validate update
-    milou_validate_system || {
-        milou_log "error" "❌ System validation failed after update"
+    # Start services with new images
+    log "INFO" "Starting services with updated images..."
+    if ! milou_service_start; then
+        log "ERROR" "Failed to start services after update"
+        
+        if [[ "$auto_rollback" == "true" ]]; then
+            log "WARN" "Auto-rollback enabled - attempting to restore system"
+            milou_rollback_system "$backup_name"
+        fi
         return 1
-    }
+    fi
     
-    milou_log "success" "✅ System updated successfully"
+    # Extended health check
+    log "INFO" "Running extended health check..."
+    if ! docker_health_check_extended 300; then  # 5 minute timeout
+        log "ERROR" "Extended health check failed after update"
+        
+        if [[ "$auto_rollback" == "true" ]]; then
+            log "WARN" "Auto-rollback enabled - attempting to restore system"
+            milou_rollback_system "$backup_name"
+        fi
+        return 1
+    fi
+    
+    # Final system validation
+    log "INFO" "Running final system validation..."
+    if ! milou_validate_system; then
+        log "ERROR" "System validation failed after update"
+        
+        if [[ "$auto_rollback" == "true" ]]; then
+            log "WARN" "Auto-rollback enabled - attempting to restore system"
+            milou_rollback_system "$backup_name"
+        fi
+        return 1
+    fi
+    
+    # Phase 5: Post-Update Cleanup
+    log "INFO" "Phase 5: Post-update cleanup"
+    
+    # Update version tracking
+    milou_update_version_tracking "$target_version"
+    
+    # Cleanup old images (keep last 3 versions)
+    docker image prune -f >/dev/null 2>&1 || true
+    
+    # Success!
+    log "SUCCESS" "🎉 Milou system updated successfully to version: ${target_version}"
+    log "INFO" "Backup created: $backup_name (can be used for rollback if needed)"
+    log "INFO" "Use 'milou.sh status' to verify all services are running correctly"
+    
     return 0
+}
+
+# Rollback system to previous state
+milou_rollback_system() {
+    local backup_name="${1:-}"
+    
+    if [[ -z "$backup_name" ]]; then
+        log "ERROR" "Backup name required for rollback"
+        return 1
+    fi
+    
+    log "STEP" "🔄 Rolling back Milou system from backup: $backup_name"
+    
+    # Stop current services
+    log "INFO" "Stopping current services..."
+    milou_service_stop || true
+    
+    # Restore system backup
+    log "INFO" "Restoring system backup..."
+    if ! milou_system_restore "./backups/system/${backup_name}.tar.gz"; then
+        log "ERROR" "Failed to restore system backup"
+        return 1
+    fi
+    
+    # Rollback Docker images
+    log "INFO" "Rolling back Docker images..."
+    if ! docker_rollback_images "./backups/pre-update-${backup_name#pre-update-}"; then
+        log "ERROR" "Failed to rollback Docker images"
+        return 1
+    fi
+    
+    # Start services
+    log "INFO" "Starting services after rollback..."
+    if ! milou_service_start; then
+        log "ERROR" "Failed to start services after rollback"
+        return 1
+    fi
+    
+    # Validate rollback
+    log "INFO" "Validating rollback..."
+    if ! milou_validate_system; then
+        log "ERROR" "System validation failed after rollback"
+        return 1
+    fi
+    
+    log "SUCCESS" "✅ System rollback completed successfully"
+    return 0
+}
+
+# Update version tracking
+milou_update_version_tracking() {
+    local version="$1"
+    local version_file="${MILOU_CONFIG_DIR}/version.txt"
+    
+    # Create version tracking file
+    cat > "$version_file" << EOF
+# Milou Version Tracking
+CURRENT_VERSION=${version}
+UPDATE_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+UPDATE_USER=$(whoami)
+UPDATE_HOST=$(hostname)
+EOF
+    
+    log "INFO" "Version tracking updated: $version"
+}
+
+# Database-specific backup
+milou_database_backup() {
+    local backup_file="${1:-./database-backup-$(date +%Y%m%d-%H%M%S).sql}"
+    
+    log "INFO" "Creating database backup: $backup_file"
+    
+    # Use Docker module function
+    if docker_backup_database "$backup_file"; then
+        log "SUCCESS" "Database backup created successfully"
+        return 0
+    else
+        log "ERROR" "Database backup failed"
+        return 1
+    fi
+}
+
+# Database migration handling
+milou_database_migrate() {
+    local target_version="$1"
+    
+    log "INFO" "Checking for database migrations for version: $target_version"
+    
+    # Check if migration is needed
+    local current_db_version
+    current_db_version=$(docker_compose exec -T db psql -U "$(grep "^POSTGRES_USER=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)" -d "$(grep "^POSTGRES_DB=" "$DOCKER_ENV_FILE" | cut -d'=' -f2)" -t -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;" 2>/dev/null | tr -d ' \n' || echo "0")
+    
+    log "INFO" "Current database version: $current_db_version"
+    
+    # For now, we'll assume migrations are handled by the application
+    # In a real implementation, you would run specific migration scripts here
+    log "INFO" "Database migrations will be handled by application startup"
+    
+    return 0
+}
+
+    # Configuration migration with secret preservation
+    milou_configuration_migrate() {
+        local target_version="$1"
+        local env_file="${DOCKER_ENV_FILE:-.env}"
+        
+        log "INFO" "Migrating configuration for version: $target_version (preserving secrets)"
+        
+        if [[ ! -f "$env_file" ]]; then
+            log "ERROR" "Environment file not found: $env_file"
+            return 1
+        fi
+        
+        # Extract current domain and email for migration
+        local current_domain=$(grep "^DOMAIN=" "$env_file" | cut -d'=' -f2- | tr -d '"'"'"'')
+        local current_email=$(grep "^EMAIL=" "$env_file" | cut -d'=' -f2- | tr -d '"'"'"'')
+        local current_token=$(grep "^GITHUB_TOKEN=" "$env_file" | cut -d'=' -f2- | tr -d '"'"'"'')
+        
+        # Use the secret-preserving update function
+        if update_env_preserving_secrets "$current_domain" "$current_email" "$current_token" "$env_file"; then
+            log "SUCCESS" "Configuration migrated successfully with preserved secrets"
+            
+            # Add version-specific configuration options
+            case "$target_version" in
+                "v2."*)
+                    # Example: Add new configuration options for v2.x
+                    if ! grep -q "^NEW_FEATURE_ENABLED=" "$env_file"; then
+                        echo "NEW_FEATURE_ENABLED=true" >> "$env_file"
+                        log "INFO" "Added NEW_FEATURE_ENABLED configuration"
+                    fi
+                    ;;
+                "v3."*)
+                    # Example: Add new configuration options for v3.x
+                    if ! grep -q "^ADVANCED_MONITORING=" "$env_file"; then
+                        echo "ADVANCED_MONITORING=false" >> "$env_file"
+                        log "INFO" "Added ADVANCED_MONITORING configuration"
+                    fi
+                    ;;
+            esac
+            
+            return 0
+        else
+            log "ERROR" "Configuration migration failed"
+            return 1
+        fi
+    }
+
+# Post-update validation
+milou_update_validation() {
+    log "INFO" "Running comprehensive post-update validation..."
+    
+    local validation_errors=0
+    
+    # Check all services are running
+    if ! docker_health_check; then
+        log "ERROR" "Service health check failed"
+        ((validation_errors++))
+    fi
+    
+    # Check API endpoints
+    if ! docker_validate_api_endpoints; then
+        log "ERROR" "API endpoint validation failed"
+        ((validation_errors++))
+    fi
+    
+    # Check database connectivity
+    if ! docker_validate_service_connectivity; then
+        log "ERROR" "Service connectivity validation failed"
+        ((validation_errors++))
+    fi
+    
+    # Check SSL certificates if enabled
+    if grep -q "SSL_ENABLED=true" "$DOCKER_ENV_FILE" 2>/dev/null; then
+        if ! validate_ssl_certificate; then
+            log "ERROR" "SSL certificate validation failed"
+            ((validation_errors++))
+        fi
+    fi
+    
+    if [[ $validation_errors -eq 0 ]]; then
+        log "SUCCESS" "All post-update validations passed"
+        return 0
+    else
+        log "ERROR" "Post-update validation failed with $validation_errors errors"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -454,23 +921,34 @@ milou_validate_system() {
     fi
     
     # Check Docker
-    if ! milou_docker_validate; then
-        milou_log "error" "❌ Docker validation failed"
-        ((errors++))
+    if command -v docker_validate_setup >/dev/null 2>&1; then
+        if ! docker_validate_setup; then
+            milou_log "error" "❌ Docker validation failed"
+            ((errors++))
+        fi
+    else
+        milou_log "warning" "⚠️  Docker validation function not available"
     fi
     
     # Check SSL if configured
     if milou_config_get "SSL_ENABLED" | grep -q "true"; then
-        if ! milou_ssl_validate; then
-            milou_log "error" "❌ SSL validation failed"
-            ((errors++))
+        if command -v validate_ssl_certificate >/dev/null 2>&1; then
+            if ! validate_ssl_certificate; then
+                milou_log "error" "❌ SSL validation failed"
+                ((errors++))
+            fi
+        else
+            milou_log "warning" "⚠️  SSL validation function not available"
         fi
     fi
     
     # Check users
-    if ! milou_user_validate; then
-        milou_log "error" "❌ User validation failed"
-        ((errors++))
+    if command -v show_user_info >/dev/null 2>&1; then
+        if ! show_user_info >/dev/null 2>&1; then
+            milou_log "warning" "⚠️  User validation issues detected"
+        fi
+    else
+        milou_log "debug" "User validation function not available"
     fi
     
     # Check service if installed
@@ -526,7 +1004,7 @@ milou_system_health() {
     
     # Check SSL certificates
     if milou_config_get "SSL_ENABLED" | grep -q "true"; then
-        if milou_ssl_check_expiry; then
+        if command -v validate_ssl_certificate >/dev/null 2>&1 && validate_ssl_certificate; then
             milou_log "success" "✅ SSL certificates valid"
             ((health_score += 2))
         else

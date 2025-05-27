@@ -190,6 +190,41 @@ docker_check_resources() {
 # Docker Compose Operations (Lines 101-200)
 # =============================================================================
 
+# Get the appropriate Docker Compose command
+get_docker_compose_command() {
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        echo "docker compose"
+        return 0
+    elif command -v docker-compose >/dev/null 2>&1; then
+        echo "docker-compose"
+        return 0
+    else
+        log "ERROR" "Neither 'docker compose' nor 'docker-compose' is available"
+        return 1
+    fi
+}
+
+# Authenticate with GitHub Container Registry
+authenticate_github_registry() {
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+        log "WARN" "No GitHub token provided - private registry authentication will fail"
+        log "INFO" "If images are private, set GITHUB_TOKEN environment variable"
+        log "INFO" "To get a token: GitHub → Settings → Developer settings → Personal access tokens"
+        return 1
+    fi
+    
+    log "INFO" "Authenticating with GitHub Container Registry..."
+    if echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "token" --password-stdin 2>/dev/null; then
+        log "SUCCESS" "Successfully authenticated with GitHub Container Registry"
+        return 0
+    else
+        log "WARN" "Failed to authenticate with GitHub Container Registry"
+        log "INFO" "Check your GitHub token permissions (required: read:packages)"
+        log "INFO" "Required token scopes: read:packages (and write:packages for pushing)"
+        return 1
+    fi
+}
+
 # Run Docker Compose with proper environment
 docker_compose() {
     # Auto-initialize if needed

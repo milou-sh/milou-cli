@@ -72,15 +72,40 @@ preserve_arguments() {
     shift
     ORIGINAL_ARGUMENTS=("$@")
     
-    # Create a safe string representation for debugging
+    # Create a safe string representation for debugging and user switching
+    local args_str=""
     local debug_args_str=""
+    local skip_next=false
+    
     for arg in "${ORIGINAL_ARGUMENTS[@]}"; do
-        if [[ "$arg" =~ ^--token$ ]] || [[ "$arg" =~ ^ghp_ ]]; then
+        if [[ "$skip_next" == "true" ]]; then
+            # This is the token value, add it to args_str but redact for debug
+            args_str+="\"$arg\" "
+            debug_args_str+="[TOKEN_VALUE] "
+            skip_next=false
+        elif [[ "$arg" =~ ^--token$ ]]; then
+            # This is the --token flag
+            debug_args_str+="--token "
+            args_str+="--token "
+            skip_next=true
+        elif [[ "$arg" =~ ^ghp_ ]]; then
+            # This is a direct token value (not preceded by --token)
             debug_args_str+="[TOKEN] "
+            args_str+="\"$arg\" "
         else
             debug_args_str+="$arg "
+            # Properly quote arguments that contain spaces
+            if [[ "$arg" =~ [[:space:]] ]]; then
+                args_str+="\"$arg\" "
+            else
+                args_str+="$arg "
+            fi
         fi
     done
+    
+    # Store for user switching
+    ORIGINAL_ARGUMENTS_STR="${args_str% }"  # Remove trailing space
+    export ORIGINAL_COMMAND ORIGINAL_ARGUMENTS_STR
     
     log "DEBUG" "Preserved command: '$ORIGINAL_COMMAND' with ${#ORIGINAL_ARGUMENTS[@]} arguments"
     log "DEBUG" "All arguments (sanitized): $debug_args_str"
@@ -224,6 +249,42 @@ show_help() {
 
 cmd_setup() {
     log "INFO" "🚀 Starting Milou smart setup..."
+    
+    # Check if running as root and recommend user switching
+    if [[ $EUID -eq 0 && "${SKIP_USER_CHECK:-false}" != "true" && "${INTERACTIVE:-true}" == "true" ]]; then
+        echo
+        echo -e "${BOLD}${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${YELLOW}║                      ⚠️  Running as Root User Detected!                     ║${NC}"
+        echo -e "${BOLD}${YELLOW}║                                                                              ║${NC}"
+        echo -e "${BOLD}${YELLOW}║         For security, it's recommended to use a dedicated user             ║${NC}"
+        echo -e "${BOLD}${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo
+        
+        echo -e "${BOLD}${BLUE}🔒 Security Recommendation:${NC}"
+        echo "  Running Milou as root exposes your system to security risks."
+        echo "  We recommend creating and switching to a dedicated 'milou' user."
+        echo
+        
+        if ask_yes_no "Create and switch to dedicated milou user? (Recommended)" "y"; then
+            # Create milou user if needed
+            if ! milou_user_exists; then
+                log "INFO" "Creating dedicated milou user..."
+                if create_milou_user; then
+                    log "SUCCESS" "Milou user created successfully"
+                else
+                    log "ERROR" "Failed to create milou user"
+                    return 1
+                fi
+            fi
+            
+            # Switch to milou user with preserved arguments
+            log "INFO" "Switching to milou user for secure setup..."
+            switch_to_milou_user
+            return $?
+        else
+            log "WARN" "Continuing as root user (not recommended for production)"
+        fi
+    fi
     
     # Welcome message for interactive setup
     if [[ "${INTERACTIVE:-true}" == "true" ]]; then
@@ -1032,13 +1093,25 @@ main() {
         log "DEBUG" "Resuming operation after user switch"
         unset MILOU_RESUMED
         
+        # Load GitHub token from milou user's temporary file if available
+        local milou_home
+        if milou_home=$(get_milou_home 2>/dev/null); then
+            local temp_token_file="$milou_home/.milou/.env.token.tmp"
+            if [[ -f "$temp_token_file" ]]; then
+                source "$temp_token_file"
+                rm -f "$temp_token_file"  # Clean up after loading
+                export GITHUB_TOKEN
+                log "DEBUG" "GitHub token loaded from milou user environment"
+            fi
+        fi
+        
         # Re-parse original arguments if available
         if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
             log "DEBUG" "Re-parsing original arguments: $ORIGINAL_ARGUMENTS_STR"
             
-            # Convert string back to array
+            # Convert string back to array properly using eval for quoted arguments
             local original_args_array
-            IFS=' ' read -ra original_args_array <<< "$ORIGINAL_ARGUMENTS_STR"
+            eval "original_args_array=($ORIGINAL_ARGUMENTS_STR)"
             
             # Re-parse arguments
             mapfile -t remaining_args < <(parse_arguments "${original_args_array[@]}")

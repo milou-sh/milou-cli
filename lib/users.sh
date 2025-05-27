@@ -380,11 +380,16 @@ switch_to_milou_user() {
     }
     
     # Build command to run as milou user
-    local switch_cmd="cd '$script_dir' && USER_SWITCH_IN_PROGRESS=true '$script_path'"
+    local switch_cmd="cd '$script_dir' && MILOU_RESUMED=true '$script_path'"
     
-    # Add original arguments if available
-    if [[ -n "${ORIGINAL_ARGS:-}" ]]; then
-        switch_cmd="$switch_cmd $ORIGINAL_ARGS"
+    # Add original command and arguments
+    if [[ -n "${ORIGINAL_COMMAND:-}" ]]; then
+        switch_cmd="$switch_cmd $ORIGINAL_COMMAND"
+        
+        # Add original arguments if available
+        if [[ -n "${ORIGINAL_ARGUMENTS_STR:-}" ]]; then
+            switch_cmd="$switch_cmd $ORIGINAL_ARGUMENTS_STR"
+        fi
     elif [[ $# -gt 0 ]]; then
         switch_cmd="$switch_cmd $(printf '%q ' "$@")"
     fi
@@ -781,7 +786,8 @@ milou_user_setup_wizard() {
     else
         echo "  Milou user: Does not exist"
         
-        if ask_yes_no "Create dedicated milou user?"; then
+        # Make user creation the default recommendation
+        if ask_yes_no "Create dedicated milou user? (Recommended)" "y"; then
             if ! is_running_as_root; then
                 log "ERROR" "Root privileges required to create user"
                 if ask_yes_no "Continue with current user instead?"; then
@@ -792,7 +798,8 @@ milou_user_setup_wizard() {
             else
                 create_milou_user || return 1
                 
-                if ask_yes_no "Switch to milou user now?"; then
+                # Make switching the default recommendation
+                if ask_yes_no "Switch to milou user now? (Recommended)" "y"; then
                     switch_to_milou_user || return 1
                 fi
             fi

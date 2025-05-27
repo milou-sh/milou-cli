@@ -429,7 +429,7 @@ BACKEND_URL=https://$domain/api
 # Admin Configuration
 # ----------------------------------------
 ADMIN_EMAIL=$email
-ADMIN_PASSWORD=admin123
+ADMIN_PASSWORD=$(generate_random_string 16)
 
 # Environment
 # ----------------------------------------
@@ -556,7 +556,7 @@ update_env_preserving_secrets() {
     local encryption_key=$(get_existing_secret "ENCRYPTION_KEY" "${existing_secrets[@]}")
     local jwt_secret=$(get_existing_secret "JWT_SECRET" "${existing_secrets[@]}")
     local sso_encryption_key=$(get_existing_secret "SSO_CONFIG_ENCRYPTION_KEY" "${existing_secrets[@]}")
-    local admin_password=$(get_existing_secret "ADMIN_PASSWORD" "${existing_secrets[@]}" || echo "admin123")
+    local admin_password=$(get_existing_secret "ADMIN_PASSWORD" "${existing_secrets[@]}" || generate_random_string 16)
     
     # Use provided GitHub token or preserve existing one
     if [[ -z "$github_token" ]]; then
@@ -1344,7 +1344,7 @@ BACKEND_URL=https://$domain/api
 # Admin Configuration
 # ----------------------------------------
 ADMIN_EMAIL=$email
-ADMIN_PASSWORD=admin123
+ADMIN_PASSWORD=$(generate_random_string 16)
 
 # Environment
 # ----------------------------------------

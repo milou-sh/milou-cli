@@ -342,20 +342,32 @@ cmd_setup() {
                 fi
             else
                 echo
-                log "INFO" "Setup cancelled. You can install dependencies manually:"
-                log "INFO" "  • Run: ./milou.sh install-deps"
-                log "INFO" "  • Or install Docker manually: https://docs.docker.com/engine/install/"
+                echo -e "${BOLD}${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${BOLD}${YELLOW}║                           📋 Manual Installation Guide                       ║${NC}"
+                echo -e "${BOLD}${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
                 echo
-                log "INFO" "Then run: ./milou.sh setup"
+                echo -e "${BOLD}${BLUE}You can install dependencies manually using these options:${NC}"
+                echo
+                echo -e "  ${CYAN}Option 1 - Use Milou installer:${NC}"
+                echo -e "    ${WHITE}./milou.sh install-deps${NC}"
+                echo
+                echo -e "  ${CYAN}Option 2 - Manual Docker installation:${NC}"
+                echo -e "    ${WHITE}Visit: https://docs.docker.com/engine/install/${NC}"
+                echo
+                echo -e "${BOLD}${GREEN}After installation, run:${NC} ${CYAN}./milou.sh setup${NC}"
+                echo
                 return 0
             fi
         fi
         
         echo
-        log "SUCCESS" "✅ All dependencies are now installed!"
+        echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BOLD}${GREEN}║                     🎉 All Dependencies Successfully Installed!             ║${NC}"
+        echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
         echo
     else
-        log "SUCCESS" "✅ All system dependencies are already installed"
+        echo -e "${BOLD}${GREEN}✅ All system dependencies are already installed!${NC}"
+        echo
     fi
     
     # Use smart configuration that handles all installation scenarios

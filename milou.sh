@@ -114,7 +114,7 @@ show_help() {
     echo
     
     log "INFO" "${BOLD}COMMANDS:${NC}"
-    echo "    ${CYAN}setup${NC}             Interactive setup wizard (recommended for first-time setup)"
+    echo "    ${CYAN}setup${NC}             Interactive setup wizard (installs dependencies & configures Milou)"
     echo "    ${CYAN}start${NC}             Start all services"
     echo "    ${CYAN}stop${NC}              Stop all services"
     echo "    ${CYAN}restart${NC}           Restart all services"
@@ -159,9 +159,10 @@ show_help() {
     echo
     
     log "INFO" "${BOLD}EXAMPLES:${NC}"
-    echo "    milou.sh setup --auto-install-deps --fresh-install"
-    echo "    milou.sh setup --token ghp_xxxx --domain example.com --auto-install-deps --non-interactive"
-    echo "    milou.sh install-deps  # Install Docker and prerequisites manually"
+    echo "    milou.sh setup                    # Interactive setup (recommended for first-time users)"
+    echo "    milou.sh setup --fresh-install    # Optimized for fresh server installation"
+    echo "    milou.sh setup --token ghp_xxxx --domain example.com --non-interactive"
+    echo "    milou.sh install-deps             # Install Docker and prerequisites manually"
     echo "    milou.sh start --verbose"
     echo "    milou.sh backup"
     echo "    milou.sh security-check --verbose"
@@ -175,42 +176,126 @@ show_help() {
 cmd_setup() {
     log "INFO" "🚀 Starting Milou smart setup..."
     
+    # Welcome message for interactive setup
+    if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+        echo
+        log "INFO" "${BOLD}${PURPLE}Welcome to Milou CLI Setup!${NC}"
+        log "INFO" "This wizard will guide you through setting up Milou on your system."
+        echo
+    fi
+    
     # Check prerequisites first
     if ! milou_check_prerequisites; then
-        log "WARN" "Missing prerequisites detected"
+        echo
+        log "WARN" "⚠️  Missing system dependencies detected!"
+        
+        # Show what's missing in a user-friendly way
+        echo
+        log "INFO" "The following components need to be installed:"
+        
+        # Check specific missing components
+        if ! command -v docker >/dev/null 2>&1; then
+            echo "  ❌ Docker Engine - Container platform"
+        fi
+        
+        if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+            echo "  ❌ Docker Compose - Multi-container orchestration"
+        fi
+        
+        if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+            echo "  ❌ curl or wget - Download utilities"
+        fi
+        
+        local missing_basic=()
+        for cmd in tar gzip; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+                missing_basic+=("$cmd")
+            fi
+        done
+        
+        if [[ ${#missing_basic[@]} -gt 0 ]]; then
+            echo "  ❌ Basic tools: ${missing_basic[*]}"
+        fi
+        
+        echo
         
         # In non-interactive mode or if AUTO_INSTALL_DEPS is set, install automatically
         if [[ "${INTERACTIVE:-true}" == "false" ]] || [[ "${AUTO_INSTALL_DEPS}" == "true" ]]; then
-            log "INFO" "Auto-installing missing prerequisites..."
+            log "INFO" "🔧 Auto-installing missing dependencies..."
             if milou_install_prerequisites; then
-                log "SUCCESS" "Prerequisites installed successfully"
+                log "SUCCESS" "✅ Dependencies installed successfully!"
                 # Re-check prerequisites after installation
                 if ! milou_check_prerequisites; then
-                    log "ERROR" "Prerequisites still missing after installation"
+                    log "ERROR" "❌ Some dependencies are still missing after installation"
                     return 1
                 fi
             else
-                log "ERROR" "Failed to install prerequisites"
+                log "ERROR" "❌ Failed to install dependencies"
                 return 1
             fi
-        # In interactive mode, ask user
-        elif ask_yes_no "Install missing prerequisites automatically?" "y"; then
-            if milou_install_prerequisites; then
-                log "SUCCESS" "Prerequisites installed successfully"
-                # Re-check prerequisites after installation
-                if ! milou_check_prerequisites; then
-                    log "ERROR" "Prerequisites still missing after installation"
-                    return 1
-                fi
-            else
-                log "ERROR" "Failed to install prerequisites"
-                return 1
-            fi
+        # In interactive mode, ask user with clear explanation
         else
-            log "ERROR" "Prerequisites required for setup"
-            log "INFO" "Please install Docker and Docker Compose manually, then run setup again"
-            return 1
+            log "INFO" "Milou can automatically install these dependencies for you."
+            log "INFO" "This will:"
+            echo "  • Install Docker Engine and Docker Compose"
+            echo "  • Install basic system tools (curl, wget, tar, gzip)"
+            echo "  • Configure Docker to start automatically"
+            echo "  • Add your user to the docker group (if not root)"
+            echo
+            
+            if ask_yes_no "Would you like Milou to install these dependencies automatically?" "y"; then
+                echo
+                log "INFO" "🔧 Installing dependencies... This may take a few minutes."
+                
+                if milou_install_prerequisites; then
+                    echo
+                    log "SUCCESS" "🎉 Dependencies installed successfully!"
+                    
+                    # Re-check prerequisites after installation
+                    if ! milou_check_prerequisites; then
+                        log "ERROR" "❌ Some dependencies are still missing after installation"
+                        return 1
+                    fi
+                    
+                    # Check if user needs to log out for Docker group
+                    if ! milou_is_root && ! groups "$(whoami)" | grep -q docker 2>/dev/null; then
+                        echo
+                        log "WARN" "⚠️  You may need to log out and back in for Docker group changes to take effect"
+                        log "INFO" "Or run: newgrp docker"
+                        echo
+                        if ask_yes_no "Continue with setup anyway?" "y"; then
+                            log "INFO" "Continuing with setup..."
+                        else
+                            log "INFO" "Setup cancelled. Please log out/in and run setup again."
+                            return 0
+                        fi
+                    fi
+                else
+                    echo
+                    log "ERROR" "❌ Failed to install dependencies"
+                    log "INFO" "You can install them manually:"
+                    log "INFO" "  • Docker: https://docs.docker.com/engine/install/"
+                    log "INFO" "  • Docker Compose: https://docs.docker.com/compose/install/"
+                    echo
+                    log "INFO" "Then run: ./milou.sh setup"
+                    return 1
+                fi
+            else
+                echo
+                log "INFO" "Setup cancelled. You can install dependencies manually:"
+                log "INFO" "  • Run: ./milou.sh install-deps"
+                log "INFO" "  • Or install Docker manually: https://docs.docker.com/engine/install/"
+                echo
+                log "INFO" "Then run: ./milou.sh setup"
+                return 0
+            fi
         fi
+        
+        echo
+        log "SUCCESS" "✅ All dependencies are now installed!"
+        echo
+    else
+        log "SUCCESS" "✅ All system dependencies are already installed"
     fi
     
     # Use smart configuration that handles all installation scenarios

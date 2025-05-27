@@ -489,9 +489,9 @@ handle_diagnose() {
     # Container status
     echo -e "${BOLD}📦 Container Status:${NC}"
     local containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "")
+    local running_count=0
+    local total_count=0
     if [[ -n "$containers" ]]; then
-        local running_count=0
-        local total_count=0
         
         echo "  Container Details:"
         while IFS=$'\t' read -r name status ports; do

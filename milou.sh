@@ -159,10 +159,11 @@ show_help() {
     echo
     
     log "INFO" "${BOLD}EXAMPLES:${NC}"
-    echo "    milou.sh setup --fresh-install"
+    echo "    milou.sh setup --auto-install-deps --fresh-install"
+    echo "    milou.sh setup --token ghp_xxxx --domain example.com --auto-install-deps --non-interactive"
+    echo "    milou.sh install-deps  # Install Docker and prerequisites manually"
     echo "    milou.sh start --verbose"
     echo "    milou.sh backup"
-    echo "    milou.sh setup --token ghp_xxxx --domain example.com --non-interactive"
     echo "    milou.sh security-check --verbose"
     echo
 }
@@ -176,10 +177,38 @@ cmd_setup() {
     
     # Check prerequisites first
     if ! milou_check_prerequisites; then
-        if [[ "${AUTO_INSTALL_DEPS}" == "true" ]] || ask_yes_no "Install missing prerequisites?"; then
-            milou_install_prerequisites || return 1
+        log "WARN" "Missing prerequisites detected"
+        
+        # In non-interactive mode or if AUTO_INSTALL_DEPS is set, install automatically
+        if [[ "${INTERACTIVE:-true}" == "false" ]] || [[ "${AUTO_INSTALL_DEPS}" == "true" ]]; then
+            log "INFO" "Auto-installing missing prerequisites..."
+            if milou_install_prerequisites; then
+                log "SUCCESS" "Prerequisites installed successfully"
+                # Re-check prerequisites after installation
+                if ! milou_check_prerequisites; then
+                    log "ERROR" "Prerequisites still missing after installation"
+                    return 1
+                fi
+            else
+                log "ERROR" "Failed to install prerequisites"
+                return 1
+            fi
+        # In interactive mode, ask user
+        elif ask_yes_no "Install missing prerequisites automatically?" "y"; then
+            if milou_install_prerequisites; then
+                log "SUCCESS" "Prerequisites installed successfully"
+                # Re-check prerequisites after installation
+                if ! milou_check_prerequisites; then
+                    log "ERROR" "Prerequisites still missing after installation"
+                    return 1
+                fi
+            else
+                log "ERROR" "Failed to install prerequisites"
+                return 1
+            fi
         else
             log "ERROR" "Prerequisites required for setup"
+            log "INFO" "Please install Docker and Docker Compose manually, then run setup again"
             return 1
         fi
     fi
@@ -463,8 +492,79 @@ cmd_security_check() {
 }
 
 cmd_install_deps() {
-    log "INFO" "📦 Installing dependencies..."
-    milou_install_prerequisites
+    log "INFO" "📦 Installing Milou dependencies..."
+    
+    # Check current status
+    log "INFO" "Checking current system status..."
+    
+    # Show what will be installed
+    echo
+    log "INFO" "This will install the following if missing:"
+    echo "  • Docker Engine"
+    echo "  • Docker Compose"
+    echo "  • Basic system tools (curl, wget, tar, gzip)"
+    echo
+    
+    # Check if running as root or with sudo access
+    if ! milou_is_root && ! sudo -n true 2>/dev/null; then
+        log "WARN" "Root privileges required for installation"
+        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
+            if ! ask_yes_no "Continue with installation? (will prompt for sudo password)" "y"; then
+                log "INFO" "Installation cancelled"
+                return 0
+            fi
+        else
+            log "ERROR" "Cannot install dependencies without root privileges"
+            return 1
+        fi
+    fi
+    
+    # Install prerequisites
+    if milou_install_prerequisites; then
+        echo
+        log "SUCCESS" "✅ All dependencies installed successfully!"
+        
+        # Show what was installed
+        echo
+        log "INFO" "Installed components:"
+        if command -v docker >/dev/null 2>&1; then
+            local docker_version=$(docker --version | cut -d' ' -f3 | tr -d ',')
+            echo "  ✅ Docker: $docker_version"
+        fi
+        
+        if docker compose version >/dev/null 2>&1; then
+            local compose_version=$(docker compose version --short 2>/dev/null)
+            echo "  ✅ Docker Compose: $compose_version"
+        fi
+        
+        echo "  ✅ System tools: curl, wget, tar, gzip"
+        
+        # Check if user needs to log out for Docker group
+        if ! milou_is_root && groups "$(whoami)" | grep -q docker; then
+            echo
+            log "INFO" "🎉 Installation complete! You can now run:"
+            echo "  ./milou.sh setup --auto-install-deps"
+        elif ! milou_is_root; then
+            echo
+            log "WARN" "⚠️  You may need to log out and back in for Docker group changes to take effect"
+            log "INFO" "Or run: newgrp docker"
+            echo
+            log "INFO" "Then you can run: ./milou.sh setup"
+        else
+            echo
+            log "INFO" "🎉 Installation complete! You can now run:"
+            echo "  ./milou.sh setup"
+        fi
+        
+        return 0
+    else
+        log "ERROR" "❌ Failed to install dependencies"
+        echo
+        log "INFO" "Manual installation instructions:"
+        log "INFO" "  • Docker: https://docs.docker.com/engine/install/"
+        log "INFO" "  • Docker Compose: https://docs.docker.com/compose/install/"
+        return 1
+    fi
 }
 
 cmd_build_images() {

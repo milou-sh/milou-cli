@@ -207,16 +207,16 @@ milou_check_prerequisites() {
     local missing_deps=()
     local os_type
     
-    milou_log "info" "🔍 Checking system prerequisites..."
+    log "INFO" "🔍 Checking system prerequisites..."
     
     # Check OS compatibility
     os_type=$(milou_detect_os)
     case "${os_type}" in
         ubuntu|debian|centos|rhel|fedora|arch)
-            milou_log "success" "✅ Operating system: ${os_type}"
+            log "SUCCESS" "✅ Operating system: ${os_type}"
             ;;
         *)
-            milou_log "warning" "⚠️  Unsupported OS: ${os_type} (may work but not tested)"
+            log "WARN" "⚠️  Unsupported OS: ${os_type} (may work but not tested)"
             ;;
     esac
     
@@ -235,35 +235,35 @@ milou_check_prerequisites() {
     
     # Check systemctl (but don't require it as a package)
     if ! command -v systemctl >/dev/null 2>&1; then
-        milou_log "warning" "⚠️  systemctl not available - some features may be limited"
+        log "WARN" "⚠️  systemctl not available - some features may be limited"
     fi
     
     # Check Docker
     if ! command -v docker >/dev/null 2>&1; then
         missing_deps+=("docker")
     elif ! docker info >/dev/null 2>&1; then
-        milou_log "warning" "⚠️  Docker is installed but not running"
+        log "WARN" "⚠️  Docker is installed but not running"
     else
-        milou_log "success" "✅ Docker is available and running"
+        log "SUCCESS" "✅ Docker is available and running"
     fi
     
     # Check Docker Compose
     if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
         missing_deps+=("docker-compose")
     else
-        milou_log "success" "✅ Docker Compose is available"
+        log "SUCCESS" "✅ Docker Compose is available"
     fi
     
     # Report missing dependencies
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        milou_log "error" "❌ Missing required dependencies:"
+        log "ERROR" "❌ Missing required dependencies:"
         for dep in "${missing_deps[@]}"; do
-            milou_log "error" "   - ${dep}"
+            log "ERROR" "   - ${dep}"
         done
         return 1
     fi
     
-    milou_log "success" "✅ All prerequisites satisfied"
+    log "SUCCESS" "✅ All prerequisites satisfied"
     return 0
 }
 
@@ -272,24 +272,181 @@ milou_install_prerequisites() {
     local os_type
     os_type=$(milou_detect_os)
     
-    milou_log "info" "📦 Installing prerequisites for ${os_type}..."
+    log "INFO" "📦 Installing prerequisites for ${os_type}..."
     
+    # Check if running as root or with sudo access
+    if ! milou_is_root && ! sudo -n true 2>/dev/null; then
+        log "ERROR" "Root privileges required for installation. Please run with sudo or as root."
+        return 1
+    fi
+    
+    # Install basic prerequisites first
     case "${os_type}" in
         ubuntu|debian)
-            sudo apt-get update
-            sudo apt-get install -y curl wget tar gzip
+            log "INFO" "Updating package lists..."
+            sudo apt-get update -qq
+            
+            log "INFO" "Installing basic tools..."
+            sudo apt-get install -y curl wget tar gzip ca-certificates gnupg lsb-release
+            
+            # Install Docker if not present
+            if ! command -v docker >/dev/null 2>&1; then
+                log "INFO" "Installing Docker..."
+                install_docker_debian
+            else
+                log "SUCCESS" "Docker already installed"
+            fi
+            
+            # Install Docker Compose if not present
+            if ! docker compose version >/dev/null 2>&1; then
+                log "INFO" "Installing Docker Compose..."
+                install_docker_compose
+            else
+                log "SUCCESS" "Docker Compose already installed"
+            fi
             ;;
         centos|rhel|fedora)
-            sudo yum install -y curl wget tar gzip
+            log "INFO" "Installing basic tools..."
+            sudo yum install -y curl wget tar gzip ca-certificates
+            
+            # Install Docker if not present
+            if ! command -v docker >/dev/null 2>&1; then
+                log "INFO" "Installing Docker..."
+                install_docker_rhel
+            else
+                log "SUCCESS" "Docker already installed"
+            fi
+            
+            # Install Docker Compose if not present
+            if ! docker compose version >/dev/null 2>&1; then
+                log "INFO" "Installing Docker Compose..."
+                install_docker_compose
+            else
+                log "SUCCESS" "Docker Compose already installed"
+            fi
             ;;
         arch)
-            sudo pacman -S --noconfirm curl wget tar gzip
+            log "INFO" "Installing basic tools..."
+            sudo pacman -S --noconfirm curl wget tar gzip ca-certificates
+            
+            # Install Docker if not present
+            if ! command -v docker >/dev/null 2>&1; then
+                log "INFO" "Installing Docker..."
+                sudo pacman -S --noconfirm docker docker-compose
+            else
+                log "SUCCESS" "Docker already installed"
+            fi
             ;;
         *)
-            milou_log "error" "❌ Automatic installation not supported for ${os_type}"
+            log "ERROR" "❌ Automatic installation not supported for ${os_type}"
+            log "INFO" "Please install Docker and Docker Compose manually:"
+            log "INFO" "  - Docker: https://docs.docker.com/engine/install/"
+            log "INFO" "  - Docker Compose: https://docs.docker.com/compose/install/"
             return 1
             ;;
     esac
+    
+    # Start and enable Docker service
+    if command -v docker >/dev/null 2>&1; then
+        log "INFO" "Starting Docker service..."
+        sudo systemctl start docker 2>/dev/null || true
+        sudo systemctl enable docker 2>/dev/null || true
+        
+        # Add current user to docker group if not root
+        if ! milou_is_root; then
+            local current_user=$(whoami)
+            if ! groups "$current_user" | grep -q docker; then
+                log "INFO" "Adding user $current_user to docker group..."
+                sudo usermod -aG docker "$current_user"
+                log "WARN" "⚠️  You may need to log out and back in for Docker group changes to take effect"
+                log "INFO" "Or run: newgrp docker"
+            fi
+        fi
+        
+        # Test Docker installation
+        if docker --version >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Docker installation verified"
+        else
+            log "ERROR" "❌ Docker installation failed"
+            return 1
+        fi
+        
+        # Test Docker Compose installation
+        if docker compose version >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Docker Compose installation verified"
+        else
+            log "ERROR" "❌ Docker Compose installation failed"
+            return 1
+        fi
+    fi
+    
+    log "SUCCESS" "✅ All prerequisites installed successfully"
+    return 0
+}
+
+# Install Docker on Debian/Ubuntu systems
+install_docker_debian() {
+    log "INFO" "Installing Docker on Debian/Ubuntu..."
+    
+    # Remove old versions
+    sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+    
+    # Add Docker's official GPG key
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    
+    # Add Docker repository
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Update package index
+    sudo apt-get update -qq
+    
+    # Install Docker Engine
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    log "SUCCESS" "Docker installed successfully"
+}
+
+# Install Docker on RHEL/CentOS/Fedora systems
+install_docker_rhel() {
+    log "INFO" "Installing Docker on RHEL/CentOS/Fedora..."
+    
+    # Remove old versions
+    sudo yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null || true
+    
+    # Install yum-utils
+    sudo yum install -y yum-utils
+    
+    # Add Docker repository
+    sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    
+    # Install Docker Engine
+    sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    log "SUCCESS" "Docker installed successfully"
+}
+
+# Install Docker Compose (fallback for older systems)
+install_docker_compose() {
+    log "INFO" "Installing Docker Compose..."
+    
+    # Get latest version
+    local compose_version
+    compose_version=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+    
+    if [[ -z "$compose_version" ]]; then
+        compose_version="v2.24.0"  # Fallback version
+        log "WARN" "Could not detect latest version, using fallback: $compose_version"
+    fi
+    
+    # Download and install
+    sudo curl -L "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+    
+    # Create symlink for docker compose command
+    sudo ln -sf /usr/local/bin/docker-compose /usr/local/bin/docker-compose
+    
+    log "SUCCESS" "Docker Compose installed successfully"
 }
 
 # =============================================================================
@@ -1098,6 +1255,7 @@ milou_system_info() {
 # Export all functions
 export -f milou_detect_os milou_detect_arch milou_is_root milou_has_systemd
 export -f milou_check_prerequisites milou_install_prerequisites milou_setup_wizard
+export -f install_docker_debian install_docker_rhel install_docker_compose
 export -f milou_install_service milou_service_start milou_service_stop milou_service_restart
 export -f milou_service_status milou_service_enable milou_service_disable
 export -f milou_system_backup milou_system_restore milou_system_update

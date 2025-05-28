@@ -31,6 +31,32 @@ if ! command -v milou_generate_secure_random >/dev/null 2>&1; then
     fi
 fi
 
+# Ensure user interface functions are available (for prompts and confirmations)
+if ! command -v milou_prompt_user >/dev/null 2>&1; then
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/core/user-interface.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/core/user-interface.sh" 2>/dev/null || {
+            milou_log "ERROR" "Cannot load user-interface module"
+            exit 1
+        }
+    else
+        milou_log "ERROR" "milou_prompt_user function not available"
+        exit 1
+    fi
+fi
+
+# Ensure validation functions are available (for GitHub token validation)
+if ! command -v milou_validate_github_token >/dev/null 2>&1; then
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/lib/core/validation.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/core/validation.sh" 2>/dev/null || {
+            milou_log "ERROR" "Cannot load validation module"
+            exit 1
+        }
+    else
+        milou_log "ERROR" "milou_validate_github_token function not available"
+        exit 1
+    fi
+fi
+
 # =============================================================================
 # Configuration Wizard Functions
 # =============================================================================
@@ -46,54 +72,26 @@ setup_run_configuration_wizard() {
         milou_log "INFO" "🧙 Starting interactive configuration wizard"
         echo
         
-        # Domain configuration
-        milou_log "INFO" "📋 Basic Configuration"
-        local domain
-        if [[ -n "${DOMAIN:-}" ]]; then
-            domain="$DOMAIN"
-            milou_log "INFO" "Using provided domain: $domain"
-        else
-            read -p "Enter domain name (default: localhost): " domain
-            domain=${domain:-localhost}
-        fi
+        # Use the proper modular configuration collection functions
+        _collect_basic_configuration || return 1
+        _collect_domain_configuration || return 1
+        _collect_ssl_configuration || return 1
+        _collect_admin_configuration || return 1
+        _collect_security_configuration || return 1
+        _collect_docker_version_configuration || return 1
         
-        # Admin email configuration
-        local admin_email
-        if [[ -n "${ADMIN_EMAIL:-}" ]]; then
-            admin_email="$ADMIN_EMAIL"
-            milou_log "INFO" "Using provided admin email: $admin_email"
-        else
-            read -p "Enter admin email (default: admin@localhost): " admin_email
-            admin_email=${admin_email:-admin@localhost}
-        fi
-        
-        # SSL configuration
-        local ssl_mode ssl_path
-        if [[ -n "${SSL_PATH:-}" ]]; then
-            ssl_path="$SSL_PATH"
-            ssl_mode="existing"
-            milou_log "INFO" "Using provided SSL path: $ssl_path"
-        else
-            _setup_configure_ssl_interactive "$domain" ssl_mode ssl_path
-        fi
-        
-        # Security configuration
-        _setup_configure_security_interactive
+        # Validate collected configuration
+        _validate_collected_configuration || return 1
         
         # CRITICAL FIX: Pass USE_LATEST_IMAGES to configuration generation
         local use_latest_param="${USE_LATEST_IMAGES:-true}"
         milou_log "DEBUG" "Using image versioning: latest=$use_latest_param"
         
-        # Generate configuration with proper parameters
-        if command -v generate_config_with_preservation >/dev/null 2>&1; then
-            if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto" "$use_latest_param"; then
-                milou_log "SUCCESS" "✅ Interactive configuration completed"
-            else
-                milou_log "ERROR" "Failed to generate configuration"
-                return 1
-            fi
+        # Save configuration with proper parameters
+        if _save_configuration_to_env; then
+            milou_log "SUCCESS" "✅ Interactive configuration completed"
         else
-            milou_log "ERROR" "Configuration generation function not available"
+            milou_log "ERROR" "Failed to save configuration"
             return 1
         fi
         
@@ -111,16 +109,19 @@ setup_run_configuration_wizard() {
         milou_log "INFO" "SSL Path: $ssl_path"
         milou_log "INFO" "Use Latest Images: $use_latest_param"
         
+        # Set variables for non-interactive configuration
+        DOMAIN="$domain"
+        ADMIN_EMAIL="$admin_email"
+        SSL_MODE="${SSL_MODE:-generate}"
+        SSL_CERT_PATH="$ssl_path"
+        HTTP_PORT="${HTTP_PORT:-80}"
+        HTTPS_PORT="${HTTPS_PORT:-443}"
+        
         # Generate configuration
-        if command -v generate_config_with_preservation >/dev/null 2>&1; then
-            if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto" "$use_latest_param"; then
-                milou_log "SUCCESS" "✅ Non-interactive configuration completed"
-            else
-                milou_log "ERROR" "Failed to generate configuration"
-                return 1
-            fi
+        if _create_env_from_environment; then
+            milou_log "SUCCESS" "✅ Non-interactive configuration completed"
         else
-            milou_log "ERROR" "Configuration generation function not available"
+            milou_log "ERROR" "Failed to generate configuration"
             return 1
         fi
     fi
@@ -156,6 +157,7 @@ _run_interactive_configuration_wizard() {
     _collect_ssl_configuration || return 1
     _collect_admin_configuration || return 1
     _collect_security_configuration || return 1
+    _collect_docker_version_configuration || return 1
     
     # Validate and save configuration
     _validate_collected_configuration || return 1
@@ -446,35 +448,82 @@ _collect_admin_configuration() {
 
 # Collect security configuration
 _collect_security_configuration() {
-    milou_log "INFO" "🔐 Security Configuration"
+    milou_log "INFO" "🔒 Security Configuration"
     
-    # GitHub token for private registries
+    # GitHub token (optional but recommended)
     if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-        milou_log "INFO" "GitHub token is required for accessing private container images"
-        local token
-        milou_prompt_user "GitHub Personal Access Token" "" "token" "false" 3
-        GITHUB_TOKEN="$token"
+        milou_log "INFO" "GitHub token enables access to private container images"
+        milou_log "INFO" "You can skip this and add it later if needed"
         
-        # Validate GitHub token
-        if ! milou_validate_github_token "$GITHUB_TOKEN"; then
-            milou_log "ERROR" "Invalid GitHub token format"
-            return 1
+        local token
+        milou_prompt_user "Enter GitHub token (optional)" "" "token" "true" 3
+        if [[ -n "$token" ]]; then
+            GITHUB_TOKEN="$token"
+            
+            # Validate the token
+            if command -v milou_validate_github_token >/dev/null 2>&1; then
+                if ! milou_validate_github_token "$GITHUB_TOKEN" "false"; then
+                    milou_log "WARN" "⚠️  GitHub token validation failed, but continuing..."
+                fi
+            fi
         fi
     fi
     
-    # JWT secret
-    if [[ -z "${JWT_SECRET:-}" ]]; then
-        JWT_SECRET=$(milou_generate_secure_random 32)
-        milou_log "DEBUG" "Generated JWT secret"
-    fi
+    milou_log "DEBUG" "Security config collected"
+    return 0
+}
+
+# Collect Docker image version configuration (NEW)
+_collect_docker_version_configuration() {
+    milou_log "INFO" "🐳 Docker Image Version Configuration"
+    echo
     
-    # Database passwords
-    if [[ -z "${DB_PASSWORD:-}" ]]; then
-        DB_PASSWORD=$(milou_generate_secure_random 16)
-        milou_log "DEBUG" "Generated database password"
-    fi
+    milou_log "INFO" "Choose which version of Milou Docker images to use:"
+    echo "  1. 📦 latest (recommended for most users - newest features)"
+    echo "  2. 🏷️  specific version (e.g., v1.0.0, v1.2.3)"
+    echo "  3. 🔧 custom tag (for development or specific needs)"
+    echo
     
-    milou_log "DEBUG" "Security config collected and generated"
+    local version_choice
+    milou_prompt_user "Select image version option [1-3]" "1" "version_choice" "false" 3
+    
+    case "$version_choice" in
+        1)
+            USE_LATEST_IMAGES=true
+            MILOU_IMAGE_TAG="latest"
+            milou_log "INFO" "✅ Using latest images"
+            ;;
+        2)
+            USE_LATEST_IMAGES=false
+            milou_log "INFO" "Available stable versions: v1.0.0, v1.1.0, v1.2.0"
+            milou_log "INFO" "💡 Check GitHub releases for latest stable versions"
+            
+            local version_tag
+            milou_prompt_user "Enter version tag (e.g., v1.0.0)" "v1.0.0" "version_tag" "false" 3
+            MILOU_IMAGE_TAG="$version_tag"
+            milou_log "INFO" "✅ Using version: $version_tag"
+            ;;
+        3)
+            USE_LATEST_IMAGES=false
+            milou_log "INFO" "💡 Custom tags might be: dev, staging, feature-branch-name"
+            
+            local custom_tag
+            milou_prompt_user "Enter custom tag" "dev" "custom_tag" "false" 3
+            MILOU_IMAGE_TAG="$custom_tag"
+            milou_log "INFO" "✅ Using custom tag: $custom_tag"
+            ;;
+        *)
+            milou_log "WARN" "Invalid choice, defaulting to latest"
+            USE_LATEST_IMAGES=true
+            MILOU_IMAGE_TAG="latest"
+            ;;
+    esac
+    
+    # Export for use in configuration generation
+    export USE_LATEST_IMAGES
+    export MILOU_IMAGE_TAG
+    
+    milou_log "DEBUG" "Docker version config: USE_LATEST_IMAGES=$USE_LATEST_IMAGES, MILOU_IMAGE_TAG=$MILOU_IMAGE_TAG"
     return 0
 }
 
@@ -830,6 +879,35 @@ SSO_CONFIG_ENCRYPTION_KEY=$encryption_key
 # =============================================================================
 COMPOSE_PROJECT_NAME=milou-static
 DOCKER_BUILDKIT=1
+
+# =============================================================================
+# DOCKER IMAGE CONFIGURATION
+# =============================================================================
+EOF
+
+    # DYNAMIC: Add Docker image tags based on user selection during configuration
+    local image_tag="${MILOU_IMAGE_TAG:-latest}"
+    local use_latest="${USE_LATEST_IMAGES:-true}"
+
+    # If no specific tag was chosen during interactive setup, fall back to use_latest flag
+    if [[ "$image_tag" == "latest" && "$use_latest" != "true" ]]; then
+        image_tag="v1.0.0"  # Default stable version for non-latest preference
+    fi
+
+    milou_log "DEBUG" "Generating image tags with MILOU_IMAGE_TAG=$image_tag, USE_LATEST_IMAGES=$use_latest"
+
+    # Generate image configuration with dynamic tag
+    cat >> "$env_file" << EOF
+MILOU_DATABASE_TAG=$image_tag
+MILOU_BACKEND_TAG=$image_tag
+MILOU_FRONTEND_TAG=$image_tag
+MILOU_ENGINE_TAG=$image_tag
+MILOU_NGINX_TAG=$image_tag
+
+# Third-party service versions
+REDIS_VERSION=7-alpine
+RABBITMQ_VERSION=3-alpine
+PROMETHEUS_VERSION=latest
 EOF
     
     # Set secure permissions
@@ -981,6 +1059,11 @@ _create_env_from_environment() {
     local config_jwt_secret="${JWT_SECRET:-$(milou_generate_secure_random 32)}"
     local config_db_password="${DB_PASSWORD:-$(milou_generate_secure_random 16)}"
     
+    # Generate PostgreSQL credentials (critical for database setup)
+    local config_postgres_user="${POSTGRES_USER:-milou_user_$(milou_generate_secure_random 8 "alphanumeric")}"
+    local config_postgres_password="${POSTGRES_PASSWORD:-$(milou_generate_secure_random 32 "safe")}"
+    local config_postgres_db="${POSTGRES_DB:-milou_database}"
+    
     # Set the variables for saving
     DOMAIN="$config_domain"
     ADMIN_EMAIL="$config_email"
@@ -992,6 +1075,15 @@ _create_env_from_environment() {
     SSL_MODE="${SSL_MODE:-generate}"
     HTTP_PORT="${HTTP_PORT:-80}"
     HTTPS_PORT="${HTTPS_PORT:-443}"
+    
+    # Set PostgreSQL credentials
+    POSTGRES_USER="$config_postgres_user"
+    POSTGRES_PASSWORD="$config_postgres_password"
+    POSTGRES_DB="$config_postgres_db"
+    
+    # Set Docker version variables for non-interactive mode
+    USE_LATEST_IMAGES="${USE_LATEST_IMAGES:-true}"
+    MILOU_IMAGE_TAG="${MILOU_IMAGE_TAG:-latest}"
     
     # Save to file
     _save_configuration_to_env
@@ -1081,4 +1173,5 @@ export -f _save_configuration_to_env
 export -f _create_env_from_environment
 export -f _generate_automatic_configuration
 export -f _run_smart_configuration
-export -f _perform_clean_installation 
+export -f _perform_clean_installation
+export -f _collect_docker_version_configuration 

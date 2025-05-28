@@ -40,14 +40,6 @@ setup_final_validation() {
         return 1
     fi
     
-    # Docker registry authentication
-    if ! _validate_docker_registry_access; then
-        milou_log "ERROR" "Docker registry access validation failed"
-        return 1
-    fi
-    
-    milou_log "SUCCESS" "✅ System readiness validation passed"
-    
     # SSL Certificate Setup
     if ! _setup_ssl_certificates; then
         milou_log "ERROR" "SSL certificate setup failed"
@@ -61,7 +53,7 @@ setup_final_validation() {
     fi
     
     # Start Services
-    if ! _start_milou_services; then
+    if ! _start_and_validate_services; then
         milou_log "ERROR" "Failed to start Milou services"
         return 1
     fi

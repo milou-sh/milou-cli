@@ -27,11 +27,35 @@ milou_validate_github_token() {
         return 1
     fi
     
-    # Enhanced GitHub token patterns including fine-grained tokens
-    if [[ ! "$token" =~ ^gh[pousr]_[A-Za-z0-9_]{36,251}$ ]]; then
+    # Enhanced GitHub token patterns for different types
+    local token_valid=false
+    
+    # Personal Access Token (classic): ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (40 chars total)
+    if [[ "$token" =~ ^ghp_[A-Za-z0-9]{36}$ ]]; then
+        token_valid=true
+    # OAuth App token: gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  
+    elif [[ "$token" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
+        token_valid=true
+    # User access token: ghu_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    elif [[ "$token" =~ ^ghu_[A-Za-z0-9]{36}$ ]]; then
+        token_valid=true
+    # Server access token: ghs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    elif [[ "$token" =~ ^ghs_[A-Za-z0-9]{36}$ ]]; then
+        token_valid=true
+    # Refresh token: ghr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    elif [[ "$token" =~ ^ghr_[A-Za-z0-9]{36}$ ]]; then
+        token_valid=true
+    # Fine-grained personal access token: github_pat_xxxxxxxxxx (much longer)
+    elif [[ "$token" =~ ^github_pat_[A-Za-z0-9_]{22,255}$ ]]; then
+        token_valid=true
+    fi
+    
+    if [[ "$token_valid" != "true" ]]; then
         milou_log "ERROR" "Invalid GitHub token format"
-        milou_log "INFO" "Expected patterns: ghp_*, gho_*, ghu_*, ghs_*, ghr_*"
-        milou_log "INFO" "Token should be 40+ characters long"
+        milou_log "INFO" "Expected patterns:"
+        milou_log "INFO" "  • Classic PAT: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (40 chars)"
+        milou_log "INFO" "  • Fine-grained: github_pat_xxxxxxxxxxxxxxxxxxxx (longer)"
+        milou_log "INFO" "  • OAuth: gho_*, User: ghu_*, Server: ghs_*, Refresh: ghr_*"
         
         if [[ "$strict" == "true" ]]; then
             return 1

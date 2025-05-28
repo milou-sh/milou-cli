@@ -8,7 +8,7 @@
 # Ensure this script is sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "ERROR: This script should be sourced, not executed directly" >&2
-    exit 1
+        exit 1
 fi
 
 # =============================================================================
@@ -42,6 +42,11 @@ generate_secure_random() {
             return 1
             ;;
     esac
+}
+
+# Milou-prefixed alias for compatibility
+milou_generate_secure_random() {
+    generate_secure_random "$@"
 }
 
 # Generate UUID (consolidated from multiple implementations)
@@ -98,6 +103,19 @@ validate_port() {
     else
         return 1
     fi
+}
+
+# Milou-prefixed aliases for compatibility
+milou_validate_email() {
+    validate_email "$@"
+}
+
+milou_validate_domain() {
+    validate_domain "$@"
+}
+
+milou_validate_port() {
+    validate_port "$@"
 }
 
 # =============================================================================
@@ -369,8 +387,9 @@ trim_whitespace() {
 # =============================================================================
 
 # Export all utility functions
-export -f generate_secure_random generate_uuid
+export -f generate_secure_random generate_uuid milou_generate_secure_random
 export -f validate_email validate_domain validate_port
+export -f milou_validate_email milou_validate_domain milou_validate_port
 export -f check_docker_available check_docker_compose_available get_docker_compose_cmd
 export -f pull_docker_image_with_retry
 export -f ensure_directory check_file_readable backup_file

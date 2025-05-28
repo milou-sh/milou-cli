@@ -900,89 +900,112 @@ EOF
 _perform_clean_installation() {
     milou_log "STEP" "🧹 Performing Clean Installation"
     
+    local max_cleanup_time=60  # Maximum time to spend on cleanup
+    local cleanup_start=$(date +%s)
+    
     # Stop all running containers
     milou_log "INFO" "🛑 Stopping all Milou containers..."
     if command -v docker >/dev/null 2>&1; then
-        # Try multiple project naming conventions
+        # Try multiple project naming conventions with timeout
         local project_names=("static" "milou-static" "milou")
         for project in "${project_names[@]}"; do
-            docker compose -p "$project" down --remove-orphans 2>/dev/null || true
+            timeout 30 docker compose -p "$project" down --remove-orphans 2>/dev/null || true
         done
         
         # Also try with environment file if it exists
         if [[ -f "${ENV_FILE:-}" ]]; then
-            docker compose --env-file "${ENV_FILE}" -f "${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}" down --remove-orphans 2>/dev/null || true
+            timeout 30 docker compose --env-file "${ENV_FILE}" -f "${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}" down --remove-orphans 2>/dev/null || true
         fi
         
-        # Force stop any remaining containers
-        docker ps -a --filter "name=milou" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
-        docker ps -a --filter "name=static" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
+        # Force stop any remaining containers with timeout
+        local remaining_containers
+        remaining_containers=$(docker ps -a --filter "name=milou" --format "{{.Names}}" 2>/dev/null || echo "")
+        if [[ -n "$remaining_containers" ]]; then
+            echo "$remaining_containers" | xargs -r timeout 15 docker stop 2>/dev/null || true
+        fi
+        
+        remaining_containers=$(docker ps -a --filter "name=static" --format "{{.Names}}" 2>/dev/null || echo "")
+        if [[ -n "$remaining_containers" ]]; then
+            echo "$remaining_containers" | xargs -r timeout 15 docker stop 2>/dev/null || true
+        fi
     fi
     
     # Wait for containers to fully stop
-    sleep 2
+    sleep 3
     
-    # Remove all volumes - ENHANCED to actually work
+    # Remove all volumes - ENHANCED to actually work with better error handling
     milou_log "INFO" "🗑️  Removing all data volumes..."
     local volumes_removed=0
+    local volume_errors=0
     
     # Get all volumes that contain milou or static in their name
     local all_volumes
-    all_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "(milou|static)" 2>/dev/null || true)
+    all_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null || true)
     
     if [[ -n "$all_volumes" ]]; then
-        while IFS= read -r volume; do
+        while IFS= read -r volume && [[ $(($(date +%s) - cleanup_start)) -lt $max_cleanup_time ]]; do
             if [[ -n "$volume" ]]; then
                 milou_log "DEBUG" "Attempting to remove volume: $volume"
-                if docker volume rm "$volume" 2>/dev/null; then
+                if timeout 10 docker volume rm "$volume" 2>/dev/null; then
                     milou_log "DEBUG" "✅ Removed volume: $volume"
                     ((volumes_removed++))
                 else
-                    milou_log "WARN" "⚠️  Failed to remove volume: $volume (may be in use)"
-                    # Force removal
-                    docker volume rm -f "$volume" 2>/dev/null && {
+                    milou_log "DEBUG" "⚠️  Failed to remove volume: $volume (may be in use)"
+                    ((volume_errors++))
+                    # Force removal with timeout
+                    if timeout 10 docker volume rm -f "$volume" 2>/dev/null; then
                         milou_log "DEBUG" "✅ Force removed volume: $volume"
                         ((volumes_removed++))
-                    } || true
+                    else
+                        milou_log "DEBUG" "❌ Could not force remove volume: $volume"
+                    fi
                 fi
             fi
         done <<< "$all_volumes"
     fi
     
-    # Remove containers - ENHANCED to actually work  
+    # Remove containers - ENHANCED to actually work with timeout protection
     milou_log "INFO" "🗑️  Removing all containers..."
     local containers_removed=0
+    local container_errors=0
     
     # Get all containers that contain milou or static in their name
     local all_containers
-    all_containers=$(docker ps -a --format "{{.Names}}" | grep -E "(milou|static)" 2>/dev/null || true)
+    all_containers=$(docker ps -a --format "{{.Names}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null || true)
     
     if [[ -n "$all_containers" ]]; then
-        while IFS= read -r container; do
+        while IFS= read -r container && [[ $(($(date +%s) - cleanup_start)) -lt $max_cleanup_time ]]; do
             if [[ -n "$container" ]]; then
                 milou_log "DEBUG" "Attempting to remove container: $container"
-                if docker rm -f "$container" 2>/dev/null; then
+                if timeout 10 docker rm -f "$container" 2>/dev/null; then
                     milou_log "DEBUG" "✅ Removed container: $container"
                     ((containers_removed++))
+                else
+                    milou_log "DEBUG" "❌ Failed to remove container: $container"
+                    ((container_errors++))
                 fi
             fi
         done <<< "$all_containers"
     fi
     
-    # Remove networks - ENHANCED
+    # Remove networks - ENHANCED with timeout protection
     milou_log "INFO" "🗑️  Removing Milou networks..."
     local networks_removed=0
+    local network_errors=0
     
     local all_networks
-    all_networks=$(docker network ls --format "{{.Name}}" | grep -E "(milou|static)" 2>/dev/null || true)
+    all_networks=$(docker network ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null || true)
     
     if [[ -n "$all_networks" ]]; then
-        while IFS= read -r network; do
+        while IFS= read -r network && [[ $(($(date +%s) - cleanup_start)) -lt $max_cleanup_time ]]; do
             if [[ -n "$network" && "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
                 milou_log "DEBUG" "Attempting to remove network: $network"
-                if docker network rm "$network" 2>/dev/null; then
+                if timeout 10 docker network rm "$network" 2>/dev/null; then
                     milou_log "DEBUG" "✅ Removed network: $network"
                     ((networks_removed++))
+                else
+                    milou_log "DEBUG" "❌ Failed to remove network: $network"
+                    ((network_errors++))
                 fi
             fi
         done <<< "$all_networks"
@@ -1009,11 +1032,23 @@ _perform_clean_installation() {
         milou_log "DEBUG" "Removed test environment file: $ENV_FILE"
     fi
     
-    milou_log "SUCCESS" "🧹 Clean installation completed"
-    milou_log "INFO" "   • Volumes removed: $volumes_removed"
-    milou_log "INFO" "   • Containers removed: $containers_removed"
-    milou_log "INFO" "   • Networks removed: $networks_removed"
+    local cleanup_elapsed=$(($(date +%s) - cleanup_start))
+    
+    # Report results
+    milou_log "SUCCESS" "🧹 Clean installation completed (${cleanup_elapsed}s)"
+    milou_log "INFO" "   • Volumes: $volumes_removed removed, $volume_errors errors"
+    milou_log "INFO" "   • Containers: $containers_removed removed, $container_errors errors"
+    milou_log "INFO" "   • Networks: $networks_removed removed, $network_errors errors"
     milou_log "INFO" "   • System ready for fresh installation"
+    
+    # Check if cleanup was reasonably successful
+    if [[ $((volumes_removed + containers_removed)) -eq 0 ]]; then
+        milou_log "WARN" "⚠️  No volumes or containers were removed - may have been clean already"
+    fi
+    
+    if [[ $cleanup_elapsed -ge $max_cleanup_time ]]; then
+        milou_log "WARN" "⚠️  Cleanup reached time limit - some items may remain"
+    fi
     
     return 0
 }

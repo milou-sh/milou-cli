@@ -320,12 +320,13 @@ _start_and_validate_services() {
 _wait_for_services_ready() {
     milou_log "INFO" "⏳ Waiting for services to be ready..."
     
-    local max_wait=180  # Increased from 120s to 180s
-    local check_interval=10  # Increased from 5s to 10s for less noise
+    local max_wait=180  # Maximum wait time in seconds
+    local check_interval=10  # Check every 10 seconds
     local elapsed=0
     local ready_services=()
     local failed_services=()
     local last_status_count=0
+    local consecutive_same_status=0  # NEW: Track consecutive same status to prevent infinite loops
     
     milou_log "INFO" "🔍 Monitoring service startup progress..."
     milou_log "INFO" "⏱️  Startup timeout: ${max_wait}s | Check interval: ${check_interval}s"
@@ -364,10 +365,11 @@ _wait_for_services_ready() {
                         ((current_status_count++))
                     elif [[ "$health_status" == "starting" ]]; then
                         # Still starting, don't count as ready yet
-                        :
+                        milou_log "DEBUG" "$display_name is still starting (health: $health_status)"
                     else
                         # Health check failed
                         failed_services+=("$display_name")
+                        milou_log "DEBUG" "$display_name health check failed: $health_status"
                     fi
                     ;;
                 "restarting")
@@ -376,6 +378,7 @@ _wait_for_services_ready() {
                     ;;
                 "exited"|"dead")
                     failed_services+=("$display_name")
+                    milou_log "DEBUG" "$display_name has exited/died"
                     ;;
                 *)
                     # Missing or unknown status
@@ -383,6 +386,19 @@ _wait_for_services_ready() {
                     ;;
             esac
         done
+        
+        # NEW: Track consecutive same status to prevent infinite loops
+        if [[ $current_status_count -eq $last_status_count ]]; then
+            ((consecutive_same_status++))
+        else
+            consecutive_same_status=0
+        fi
+        
+        # NEW: Break if we're stuck in the same state for too long
+        if [[ $consecutive_same_status -gt 6 ]]; then  # 6 * 10s = 60s of no progress
+            milou_log "WARN" "⚠️  No progress detected for 60s - services may be stuck"
+            break
+        fi
         
         # Progress reporting - only show updates when status changes significantly
         local total_services=${#services[@]}
@@ -413,10 +429,17 @@ _wait_for_services_ready() {
             return 0
         fi
         
+        # NEW: Check if we have enough services running to consider success (more lenient)
+        if [[ $ready_count -ge $((total_services - 1)) ]] && [[ $elapsed -gt 60 ]]; then
+            milou_log "SUCCESS" "✅ Most services are ready ($ready_count/$total_services)"
+            milou_log "INFO" "💡 Continuing with partial service readiness"
+            return 0
+        fi
+        
         # Check if we have critical failures
-        if [[ ${#failed_services[@]} -gt 2 ]]; then
-            milou_log "WARN" "⚠️  Multiple service failures detected: ${failed_services[*]}"
-            milou_log "INFO" "💡 Continuing to wait - services may recover..."
+        if [[ ${#failed_services[@]} -gt 3 ]]; then
+            milou_log "ERROR" "❌ Too many service failures: ${failed_services[*]}"
+            break
         fi
         
         # Provide helpful tips periodically
@@ -435,7 +458,7 @@ _wait_for_services_ready() {
         elapsed=$((elapsed + check_interval))
     done
     
-    # Timeout reached
+    # Timeout reached or stuck detected
     local ready_count=${#ready_services[@]}
     local total_services=${#services[@]}
     
@@ -482,7 +505,7 @@ _wait_for_services_ready() {
     if [[ $port_conflicts -eq 0 ]]; then
         echo "   ❌ No critical ports appear to be in use (unexpected)"
     else
-        echo "   ✅ No obvious port conflicts"
+        echo "   ✅ Critical ports are in use as expected"
     fi
     
     # Check running containers
@@ -493,8 +516,8 @@ _wait_for_services_ready() {
     echo
     milou_log "INFO" "💡 Many services continue starting in background. Try accessing the web interface."
     
-    # Return success if we have some services running
-    if [[ $ready_count -gt 2 ]]; then
+    # Return success if we have some core services running
+    if [[ $ready_count -ge 3 ]]; then  # At least database, redis, backend
         return 0
     else
         return 1
@@ -564,8 +587,8 @@ _validate_service_health() {
     fi
 }
 
-# Generate final success report
-_generate_success_report() {
+# Display completion message with admin credentials
+_setup_display_completion_with_credentials() {
     # CRITICAL FIX: Load environment variables first
     if [[ -f "${ENV_FILE:-}" ]]; then
         set +u  # Temporarily disable unbound variable checking
@@ -586,7 +609,7 @@ _generate_success_report() {
     local https_port="${HTTPS_PORT:-443}"
     
     echo -e "${BOLD}📍 Access Information:${NC}"
-    if [[ "$SSL_MODE" != "none" ]]; then
+    if [[ "${SSL_MODE:-}" != "none" ]]; then
         if [[ "$https_port" == "443" ]]; then
             echo "  🌐 Web Interface: https://$domain"
         else
@@ -636,16 +659,16 @@ _generate_success_report() {
     # Important files
     echo -e "${BOLD}📁 Important Files:${NC}"
     echo "  Configuration: ${ENV_FILE:-[not set]}"
-    if [[ "$SSL_MODE" == "generate" ]]; then
-        echo "  SSL Certificate: ${SSL_DIR:-./ssl}/milou.crt"
-        echo "  SSL Private Key: ${SSL_DIR:-./ssl}/milou.key"
+    if [[ "${SSL_MODE:-}" == "generate" ]]; then
+        echo "  SSL Certificate: ${SSL_CERT_PATH:-./ssl}/milou.crt"
+        echo "  SSL Private Key: ${SSL_CERT_PATH:-./ssl}/milou.key"
     fi
     echo
     
     # Security notes
     echo -e "${BOLD}🔒 Security Notes:${NC}"
     echo "  • Configuration file has secure permissions (600)"
-    if [[ "$SSL_MODE" == "generate" ]]; then
+    if [[ "${SSL_MODE:-}" == "generate" ]]; then
         echo "  • Self-signed SSL certificates generated"
         echo "  • For production, consider using valid SSL certificates"
     fi

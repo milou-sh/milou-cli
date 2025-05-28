@@ -150,6 +150,18 @@ milou_load_command_modules() {
         "user/security" "user/docker" "user/interface"
     )
     
+    local -a backup_modules=(
+        "backup/core" "restore/core"
+    )
+    
+    local -a update_modules=(
+        "update/core" "update/self-update"
+    )
+    
+    local -a admin_modules=(
+        "admin/credentials"
+    )
+    
     case "$command" in
         setup)
             milou_load_modules "${user_modules[@]}" "${system_modules[@]}" "${docker_modules[@]}"
@@ -157,7 +169,16 @@ milou_load_command_modules() {
         start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             milou_load_modules "${docker_modules[@]}" "${system_modules[@]}"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|admin)
+        backup|restore|list-backups)
+            milou_load_modules "${backup_modules[@]}" "${system_modules[@]}" "${docker_modules[@]}"
+            ;;
+        update|update-cli|update-status|rollback)
+            milou_load_modules "${update_modules[@]}" "${system_modules[@]}" "${docker_modules[@]}"
+            ;;
+        admin)
+            milou_load_modules "${admin_modules[@]}" "${system_modules[@]}" "${docker_modules[@]}"
+            ;;
+        config|validate|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose)
             milou_load_modules "${system_modules[@]}" "${docker_modules[@]}"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)

@@ -175,7 +175,7 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9999}/health || curl -f http://localhost:${PORT:-9999}/api/health || nc -z localhost ${PORT:-9999} || exit 1"]
+      test: ["CMD-SHELL", "nc -z 0.0.0.0 9999 || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 3

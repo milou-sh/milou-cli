@@ -1058,7 +1058,6 @@ export -f _prepare_docker_environment
 export -f _start_and_validate_services
 export -f _wait_for_services_ready
 export -f _validate_service_health
-export -f _generate_success_report
 export -f _setup_display_completion_with_credentials
 export -f _validate_credential_volume_consistency
 export -f _quick_volume_credential_check

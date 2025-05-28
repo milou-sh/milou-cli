@@ -24,51 +24,50 @@ declare -g DOCKER_VOLUMES_CLEANED=false
 milou_docker_init() {
     local script_dir="${1:-${SCRIPT_DIR:-$(pwd)}}"
     
-    milou_log "DEBUG" "Initializing Docker environment..."
+    milou_log "DEBUG" "Initializing Docker environment from: $script_dir"
+    
+    # Ensure we're working with absolute path
+    if [[ "$script_dir" != /* ]]; then
+        script_dir="$(cd "$script_dir" && pwd)"
+    fi
     
     # Try to find environment file in multiple locations
     local env_file=""
     local -a env_search_paths=(
         "${script_dir}/.env"
+        "${ENV_FILE:-}"  # Use global ENV_FILE if set
         "$(pwd)/.env"
         "${PWD}/.env"
-        "/home/milou/milou-cli/.env"
-        "/opt/milou-cli/.env"
-        "/usr/local/milou-cli/.env"
     )
     
     for path in "${env_search_paths[@]}"; do
-        if [[ -f "$path" && -s "$path" ]]; then
+        if [[ -n "$path" && -f "$path" && -s "$path" ]]; then
             env_file="$path"
+            milou_log "DEBUG" "Found environment file: $path"
             break
         fi
     done
     
     if [[ -z "$env_file" ]]; then
-    milou_log "ERROR" "Environment file not found in any of the search paths"
+        milou_log "ERROR" "Environment file not found in any of the search paths"
+        milou_log "DEBUG" "Searched paths: ${env_search_paths[*]}"
         return 1
     fi
     
-    # Determine working directory from env file location
-    local working_dir
-    working_dir="$(dirname "$env_file")"
-    
-    # Change to working directory
-    if [[ -d "$working_dir" ]]; then
-        cd "$working_dir" || {
-    milou_log "ERROR" "Cannot change to working directory: $working_dir"
-            return 1
-        }
+    # Set Docker Compose file path
+    local compose_file="${script_dir}/static/docker-compose.yml"
+    if [[ ! -f "$compose_file" ]]; then
+        milou_log "ERROR" "Docker Compose file not found: $compose_file"
+        return 1
     fi
     
-    # Set Docker Compose file path
-    local compose_file="static/docker-compose.yml"
-    if [[ ! -f "$compose_file" ]]; then
-        compose_file="$(pwd)/static/docker-compose.yml"
-        if [[ ! -f "$compose_file" ]]; then
-    milou_log "ERROR" "Docker Compose file not found: $compose_file"
+    # Change to the script directory for consistency
+    if [[ -d "$script_dir" ]]; then
+        cd "$script_dir" || {
+            milou_log "ERROR" "Cannot change to script directory: $script_dir"
             return 1
-        fi
+        }
+        milou_log "DEBUG" "Changed to working directory: $script_dir"
     fi
     
     # Export environment variables
@@ -77,7 +76,7 @@ milou_docker_init() {
     
     # Get project name from environment or use default
     local project_name
-    project_name=$(grep "^COMPOSE_PROJECT_NAME=" "$env_file" 2>/dev/null | cut -d '=' -f 2- || echo "static")
+    project_name=$(grep "^COMPOSE_PROJECT_NAME=" "$env_file" 2>/dev/null | cut -d '=' -f 2- | tr -d '"' || echo "static")
     export DOCKER_PROJECT_NAME="$project_name"
     
     # Validate Docker setup
@@ -89,6 +88,7 @@ milou_docker_init() {
     milou_log "DEBUG" "  Environment file: $DOCKER_ENV_FILE"
     milou_log "DEBUG" "  Compose file: $DOCKER_COMPOSE_FILE"
     milou_log "DEBUG" "  Working directory: $(pwd)"
+    milou_log "DEBUG" "  Project name: $DOCKER_PROJECT_NAME"
     
     return 0
 }

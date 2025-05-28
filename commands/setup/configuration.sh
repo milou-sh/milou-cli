@@ -276,6 +276,14 @@ _collect_domain_configuration() {
 _collect_ssl_configuration() {
     milou_log "INFO" "🔒 SSL Configuration"
     
+    # Load SSL manager
+    if [[ -f "${SCRIPT_DIR}/lib/ssl/manager.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/ssl/manager.sh" || {
+            milou_log "ERROR" "Failed to load SSL manager"
+            return 1
+        }
+    fi
+    
     # Show domain that will be used for certificates
     milou_log "INFO" "🌐 Domain for SSL: ${DOMAIN}"
     echo
@@ -306,13 +314,16 @@ _collect_ssl_configuration() {
     case "$ssl_choice" in
         1)
             SSL_MODE="generate"
-            # Set SSL directory path (not file paths) for Docker mounting
-                                      SSL_CERT_DIR="./ssl"
-            SSL_CERT_PATH="./ssl"  # Directory for Docker volume mount (relative to compose context)
-            SSL_KEY_PATH="./ssl"   # Directory for Docker volume mount
+            # Use centralized SSL directory - ALWAYS absolute path
+            SSL_CERT_PATH="$(milou_ssl_get_path)"
+            
+            # Ensure absolute path (failsafe)
+            if [[ ! "$SSL_CERT_PATH" =~ ^/ ]]; then
+                SSL_CERT_PATH="${SCRIPT_DIR}/${SSL_CERT_PATH}"
+            fi
             
             milou_log "SUCCESS" "✅ Will generate self-signed certificates"
-            milou_log "INFO" "📂 Certificates will be stored in: $SSL_CERT_DIR/"
+            milou_log "INFO" "📂 Certificates will be stored in: $SSL_CERT_PATH/"
             milou_log "INFO" "🌐 Valid for domains: ${DOMAIN}, localhost, 127.0.0.1"
             milou_log "INFO" "📅 Validity: 365 days"
             ;;
@@ -323,71 +334,28 @@ _collect_ssl_configuration() {
             milou_log "INFO" "💡 You can provide either:"
             echo "  • Individual certificate files (.crt and .key)"
             echo "  • A directory containing 'milou.crt' and 'milou.key'"
+            echo "  • Standard certificate files (server.crt, certificate.crt, etc.)"
             echo
             
             local cert_input
             milou_prompt_user "Certificate path (file or directory)" "" "cert_input" "false" 3
             
-            # Determine if input is file or directory
-            if [[ -f "$cert_input" ]]; then
-                # It's a certificate file
-                SSL_CERT_FILE="$cert_input"
-                local cert_dir
-                cert_dir=$(dirname "$cert_input")
-                
-                # Ask for private key
-                local key_input
-                milou_prompt_user "Private key path" "${cert_dir}/milou.key" "key_input" "false" 3
-                
-                if [[ ! -f "$key_input" ]]; then
-                    milou_log "ERROR" "Private key file not found: $key_input"
-                    return 1
-                fi
-                
-                SSL_KEY_FILE="$key_input"
-                
-                # For Docker, we need to mount the directory, not individual files
-                SSL_CERT_PATH="$cert_dir"
-                SSL_KEY_PATH="$cert_dir"
-                
-                milou_log "SUCCESS" "✅ Using certificate: $SSL_CERT_FILE"
-                milou_log "INFO" "🔑 Using private key: $SSL_KEY_FILE"
-                
-            elif [[ -d "$cert_input" ]]; then
-                # It's a directory
-                SSL_CERT_DIR="$cert_input"
-                SSL_CERT_PATH="$cert_input"
-                SSL_KEY_PATH="$cert_input"
-                
-                # Check for expected files
-                if [[ ! -f "$cert_input/milou.crt" ]]; then
-                    milou_log "ERROR" "Certificate file not found: $cert_input/milou.crt"
-                    milou_log "INFO" "💡 Expected file names: milou.crt and milou.key"
-                    return 1
-                fi
-                if [[ ! -f "$cert_input/milou.key" ]]; then
-                    milou_log "ERROR" "Private key file not found: $cert_input/milou.key"
-                    milou_log "INFO" "💡 Expected file names: milou.crt and milou.key"
-                    return 1
-                fi
-                
-                SSL_CERT_FILE="$cert_input/milou.crt"
-                SSL_KEY_FILE="$cert_input/milou.key"
-                
-                milou_log "SUCCESS" "✅ Using SSL directory: $SSL_CERT_DIR"
-                milou_log "INFO" "📄 Certificate: $SSL_CERT_FILE"
-                milou_log "INFO" "🔑 Private key: $SSL_KEY_FILE"
-                
-            else
-                milou_log "ERROR" "Path not found: $cert_input"
-                milou_log "INFO" "💡 Please provide either:"
-                milou_log "INFO" "  • Path to certificate file (.crt)"
-                milou_log "INFO" "  • Path to directory containing milou.crt and milou.key"
-                return 1
+            # The SSL manager will handle all the complexity of finding and validating certificates
+            SSL_CERT_SOURCE="$cert_input"
+            SSL_CERT_PATH="$(milou_ssl_get_path)"  # Always use centralized location
+            
+            # Ensure absolute path (failsafe)
+            if [[ ! "$SSL_CERT_PATH" =~ ^/ ]]; then
+                SSL_CERT_PATH="${SCRIPT_DIR}/${SSL_CERT_PATH}"
             fi
+            
+            milou_log "SUCCESS" "✅ Will setup existing certificates from: $cert_input"
+            milou_log "INFO" "📂 Certificates will be copied to: $SSL_CERT_PATH/"
             ;;
         3)
             SSL_MODE="none"
+            SSL_CERT_PATH=""
+            
             milou_log "WARN" "⚠️  SSL disabled - HTTP only mode"
             
             if [[ "${DOMAIN}" != "localhost" ]]; then
@@ -401,10 +369,6 @@ _collect_ssl_configuration() {
                     return 1
                 fi
             fi
-            
-            # Clear SSL paths for HTTP-only mode
-            SSL_CERT_PATH=""
-            SSL_KEY_PATH=""
             ;;
         *)
             milou_log "ERROR" "Invalid SSL option: $ssl_choice"
@@ -591,8 +555,20 @@ _save_configuration_to_env() {
     local is_fresh_install=true
     local preserve_existing_credentials=false
     
-    # Check if this is an existing installation
-    if [[ -f "$env_file" ]]; then
+    # PRIORITY 1: Handle clean installation request FIRST
+    if [[ "${CLEAN_INSTALL:-false}" == "true" ]]; then
+        milou_log "INFO" "🧹 Clean installation explicitly requested via --clean flag"
+        if command -v _perform_clean_installation >/dev/null 2>&1; then
+            _perform_clean_installation || return 1
+            preserve_existing_credentials=false
+            is_fresh_install=true
+            milou_log "SUCCESS" "🧹 Clean installation completed - generating fresh credentials"
+        else
+            milou_log "ERROR" "Clean installation function not available"
+            return 1
+        fi
+    # PRIORITY 2: Check if this is an existing installation (only if not clean install)
+    elif [[ -f "$env_file" ]]; then
         milou_log "INFO" "🔍 Existing configuration detected - analyzing installation state"
         
         # Load existing credentials
@@ -694,16 +670,6 @@ _save_configuration_to_env() {
             milou_log "WARN" "   💡 Consider using '--clean' option for a completely fresh installation"
             preserve_existing_credentials=false
             is_fresh_install=false
-        elif [[ "${CLEAN_INSTALL:-false}" == "true" ]]; then
-            milou_log "INFO" "🧹 Clean installation requested via --clean option"
-            if command -v _perform_clean_installation >/dev/null 2>&1; then
-                _perform_clean_installation || return 1
-            else
-                milou_log "ERROR" "Clean installation function not available"
-                return 1
-            fi
-            preserve_existing_credentials=false
-            is_fresh_install=true
         else
             # Found env file but no substantial volumes or credentials - treat as partial installation
             milou_log "INFO" "📋 Found configuration file but no substantial data volumes - updating configuration"
@@ -804,10 +770,10 @@ CORS_ORIGIN=https://${DOMAIN}
 # =============================================================================
 SSL_MODE=${SSL_MODE:-generate}
 SSL_PORT=${HTTPS_PORT:-443}
-SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
-SSL_KEY_PATH=${SSL_KEY_PATH:-./ssl}
-SSL_CERT_FILE=${SSL_CERT_FILE:-./ssl/milou.crt}
-SSL_KEY_FILE=${SSL_KEY_FILE:-./ssl/milou.key}
+SSL_CERT_PATH=${SSL_CERT_PATH:-${SCRIPT_DIR}/ssl}
+SSL_KEY_PATH=${SSL_KEY_PATH:-${SCRIPT_DIR}/ssl}
+SSL_CERT_FILE=${SSL_CERT_FILE:-${SSL_CERT_PATH}/milou.crt}
+SSL_KEY_FILE=${SSL_KEY_FILE:-${SSL_CERT_PATH}/milou.key}
 
 # =============================================================================
 # DATABASE CONFIGURATION (PostgreSQL - Required)
@@ -943,103 +909,110 @@ _perform_clean_installation() {
             docker compose -p "$project" down --remove-orphans 2>/dev/null || true
         done
         
+        # Also try with environment file if it exists
+        if [[ -f "${ENV_FILE:-}" ]]; then
+            docker compose --env-file "${ENV_FILE}" -f "${DOCKER_COMPOSE_FILE:-static/docker-compose.yml}" down --remove-orphans 2>/dev/null || true
+        fi
+        
         # Force stop any remaining containers
         docker ps -a --filter "name=milou" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
         docker ps -a --filter "name=static" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
     fi
     
-    # Remove all volumes
+    # Wait for containers to fully stop
+    sleep 2
+    
+    # Remove all volumes - ENHANCED to actually work
     milou_log "INFO" "🗑️  Removing all data volumes..."
     local volumes_removed=0
     
-    # Standard volume names
-    local -a volume_patterns=(
-        "static_pgdata"
-        "static_redis_data" 
-        "static_rabbitmq_data"
-        "static_rabbitmq_logs"
-        "static_backend_logs"
-        "static_engine_logs"
-        "static_engine_cache"
-        "static_engine_models"
-        "static_uploads"
-        "static_nginx_logs"
-        "static_nginx_cache"
-        "static_prometheus_data"
-        "milou-static_pgdata"
-        "milou-static_redis_data"
-        "milou-static_rabbitmq_data"
-        "milou_pgdata"
-        "milou_redis_data"
-        "milou_rabbitmq_data"
-    )
+    # Get all volumes that contain milou or static in their name
+    local all_volumes
+    all_volumes=$(docker volume ls --format "{{.Name}}" | grep -E "(milou|static)" 2>/dev/null || true)
     
-    for volume in "${volume_patterns[@]}"; do
-        if docker volume inspect "$volume" >/dev/null 2>&1; then
-            if docker volume rm "$volume" 2>/dev/null; then
-                milou_log "DEBUG" "Removed volume: $volume"
-                ((volumes_removed++))
-            else
-                milou_log "WARN" "Failed to remove volume: $volume"
+    if [[ -n "$all_volumes" ]]; then
+        while IFS= read -r volume; do
+            if [[ -n "$volume" ]]; then
+                milou_log "DEBUG" "Attempting to remove volume: $volume"
+                if docker volume rm "$volume" 2>/dev/null; then
+                    milou_log "DEBUG" "✅ Removed volume: $volume"
+                    ((volumes_removed++))
+                else
+                    milou_log "WARN" "⚠️  Failed to remove volume: $volume (may be in use)"
+                    # Force removal
+                    docker volume rm -f "$volume" 2>/dev/null && {
+                        milou_log "DEBUG" "✅ Force removed volume: $volume"
+                        ((volumes_removed++))
+                    } || true
+                fi
             fi
-        fi
-    done
+        done <<< "$all_volumes"
+    fi
     
-    # Remove any additional volumes with milou/static in the name
-    local additional_volumes
-    additional_volumes=$(docker volume ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null || true)
-    additional_volumes+=" $(docker volume ls --filter "name=static" --format "{{.Name}}" 2>/dev/null || true)"
-    
-    for volume in $additional_volumes; do
-        if [[ -n "$volume" ]] && docker volume inspect "$volume" >/dev/null 2>&1; then
-            if docker volume rm "$volume" 2>/dev/null; then
-                milou_log "DEBUG" "Removed additional volume: $volume"
-                ((volumes_removed++))
-            fi
-        fi
-    done
-    
-    # Remove containers
+    # Remove containers - ENHANCED to actually work  
     milou_log "INFO" "🗑️  Removing all containers..."
     local containers_removed=0
     
-    local containers
-    containers=$(docker ps -a --filter "name=milou" --filter "name=static" --format "{{.Names}}" 2>/dev/null || true)
+    # Get all containers that contain milou or static in their name
+    local all_containers
+    all_containers=$(docker ps -a --format "{{.Names}}" | grep -E "(milou|static)" 2>/dev/null || true)
     
-    if [[ -n "$containers" ]]; then
-        echo "$containers" | while IFS= read -r container; do
+    if [[ -n "$all_containers" ]]; then
+        while IFS= read -r container; do
             if [[ -n "$container" ]]; then
+                milou_log "DEBUG" "Attempting to remove container: $container"
                 if docker rm -f "$container" 2>/dev/null; then
-                    milou_log "DEBUG" "Removed container: $container"
+                    milou_log "DEBUG" "✅ Removed container: $container"
                     ((containers_removed++))
                 fi
             fi
-        done
+        done <<< "$all_containers"
     fi
     
-    # Remove networks
+    # Remove networks - ENHANCED
     milou_log "INFO" "🗑️  Removing Milou networks..."
-    local networks
-    networks=$(docker network ls --filter "name=milou" --filter "name=static" --format "{{.Name}}" 2>/dev/null || true)
+    local networks_removed=0
     
-    if [[ -n "$networks" ]]; then
-        echo "$networks" | while IFS= read -r network; do
+    local all_networks
+    all_networks=$(docker network ls --format "{{.Name}}" | grep -E "(milou|static)" 2>/dev/null || true)
+    
+    if [[ -n "$all_networks" ]]; then
+        while IFS= read -r network; do
             if [[ -n "$network" && "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
-                docker network rm "$network" 2>/dev/null || true
+                milou_log "DEBUG" "Attempting to remove network: $network"
+                if docker network rm "$network" 2>/dev/null; then
+                    milou_log "DEBUG" "✅ Removed network: $network"
+                    ((networks_removed++))
+                fi
             fi
-        done
+        done <<< "$all_networks"
     fi
     
-    # Remove SSL certificates if requested
+    # Remove SSL certificates - FIXED for non-interactive mode
     if [[ -d "./ssl" ]]; then
-        if milou_confirm "Also remove SSL certificates? (You can regenerate them)" "Y"; then
+        # In non-interactive mode or clean mode, always remove SSL certificates
+        if [[ "${INTERACTIVE:-true}" == "false" || "${CLEAN_INSTALL:-false}" == "true" ]]; then
             rm -rf "./ssl"
-            milou_log "INFO" "🗑️  SSL certificates removed"
+            milou_log "INFO" "🗑️  SSL certificates removed (non-interactive mode)"
+        else
+            # Only ask in interactive mode
+            if milou_confirm "Also remove SSL certificates? (You can regenerate them)" "Y"; then
+                rm -rf "./ssl"
+                milou_log "INFO" "🗑️  SSL certificates removed"
+            fi
         fi
+    fi
+    
+    # Remove environment files if they exist (for test scenarios)
+    if [[ -n "${ENV_FILE:-}" ]] && [[ "$ENV_FILE" != ".env" ]] && [[ -f "$ENV_FILE" ]]; then
+        rm -f "$ENV_FILE" 2>/dev/null || true
+        milou_log "DEBUG" "Removed test environment file: $ENV_FILE"
     fi
     
     milou_log "SUCCESS" "🧹 Clean installation completed"
     milou_log "INFO" "   • Volumes removed: $volumes_removed"
+    milou_log "INFO" "   • Containers removed: $containers_removed"
+    milou_log "INFO" "   • Networks removed: $networks_removed"
     milou_log "INFO" "   • System ready for fresh installation"
     
     return 0

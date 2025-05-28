@@ -1,0 +1,7 @@
+# SSL Certificate Information
+DOMAIN=test.milou.sh
+ACTION=generated
+GENERATED_AT=2025-05-28T08:33:11Z
+GENERATED_BY=milou-cli
+VALIDITY_DAYS=365
+KEY_SIZE=2048

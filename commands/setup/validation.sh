@@ -175,20 +175,46 @@ _validate_system_readiness() {
 _setup_ssl_certificates() {
     milou_log "INFO" "🔒 SSL Certificate Setup"
     
-    local ssl_mode="${SSL_MODE:-generate}"
+    # Load SSL manager
+    if [[ -f "${SCRIPT_DIR}/lib/ssl/manager.sh" ]]; then
+        source "${SCRIPT_DIR}/lib/ssl/manager.sh" || {
+            milou_log "ERROR" "Failed to load SSL manager"
+            return 1
+        }
+    else
+        milou_log "ERROR" "SSL manager not found: ${SCRIPT_DIR}/lib/ssl/manager.sh"
+        return 1
+    fi
     
+    local ssl_mode="${SSL_MODE:-generate}"
+    local domain="${DOMAIN:-localhost}"
+    local cert_source="${SSL_CERT_SOURCE:-}"
+    local force="${FORCE:-false}"
+    
+    milou_log "DEBUG" "SSL setup: mode=$ssl_mode, domain=$domain, force=$force"
+    
+    # Use the centralized SSL setup function that handles all scenarios
     case "$ssl_mode" in
         "generate")
-            milou_log "INFO" "Generating self-signed SSL certificates..."
-            _generate_ssl_certificates || return 1
+            milou_log "INFO" "🔧 Generating self-signed SSL certificates..."
+            milou_ssl_setup "$domain" "generate" "" "$force" "false" || return 1
             ;;
         "existing")
-            milou_log "INFO" "Validating existing SSL certificates..."
-            _validate_existing_ssl_certificates || return 1
+            milou_log "INFO" "📁 Setting up existing SSL certificates..."
+            if [[ -z "$cert_source" ]]; then
+                milou_log "ERROR" "SSL_CERT_SOURCE not set for existing certificate mode"
+                return 1
+            fi
+            milou_ssl_setup "$domain" "existing" "$cert_source" "$force" "false" || return 1
             ;;
         "none")
-            milou_log "INFO" "SSL disabled - skipping certificate setup"
+            milou_log "INFO" "⚠️ SSL disabled - skipping certificate setup"
+            milou_ssl_setup "$domain" "none" "" "$force" "false" || return 1
             return 0
+            ;;
+        "auto")
+            milou_log "INFO" "🤖 Automatic SSL certificate management..."
+            milou_ssl_setup "$domain" "auto" "" "$force" "false" || return 1
             ;;
         *)
             milou_log "ERROR" "Unknown SSL mode: $ssl_mode"
@@ -196,169 +222,16 @@ _setup_ssl_certificates() {
             ;;
     esac
     
-    milou_log "SUCCESS" "✅ SSL certificate setup completed"
-    return 0
-}
-
-# Validate existing SSL certificates
-_validate_existing_ssl_certificates() {
-    local cert_path="${SSL_CERT_PATH:-}"
-    local key_path="${SSL_KEY_PATH:-}"
-    local domain="${DOMAIN:-localhost}"
-    
-    if [[ -z "$cert_path" || -z "$key_path" ]]; then
-        milou_log "ERROR" "SSL_CERT_PATH and SSL_KEY_PATH must be set for existing certificates"
-        return 1
-    fi
-    
-    # Use the consolidated SSL validation function from ssl/core.sh
-    if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
-        if milou_ssl_validate_certificates "$cert_path" "$domain" "false" "true"; then
-            milou_log "SUCCESS" "✅ Existing SSL certificates validated"
-            return 0
+    # Verify SSL setup
+    if [[ "$ssl_mode" != "none" ]]; then
+        if milou_ssl_status "$domain" "true"; then
+            milou_log "SUCCESS" "✅ SSL certificate setup completed successfully"
         else
-            milou_log "ERROR" "Existing SSL certificates validation failed"
-            return 1
-        fi
-    else
-        milou_log "ERROR" "SSL validation function not available"
-        return 1
-    fi
-}
-
-# Generate self-signed SSL certificates
-_generate_ssl_certificates() {
-    local ssl_dir="${SSL_DIR:-${SSL_CERT_PATH:-./ssl}}"
-    local domain="${DOMAIN:-localhost}"
-    
-    # Create SSL directory
-    mkdir -p "$ssl_dir"
-    
-    # Check if certificates already exist
-    if [[ -f "$ssl_dir/milou.crt" && -f "$ssl_dir/milou.key" ]]; then
-        milou_log "INFO" "SSL certificates already exist - validating..."
-        # Use the unified SSL validation function
-        if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
-            if milou_ssl_validate_certificates "$ssl_dir" "$domain" "false" "true"; then
-                milou_log "INFO" "✅ Existing certificates are valid"
-                return 0
-            else
-                milou_log "WARN" "⚠️  Existing certificates are invalid - regenerating..."
-            fi
-        else
-            milou_log "WARN" "SSL validation function not available - regenerating certificates"
-        fi
-    fi
-    
-    # Generate new certificates
-    if command -v milou_ssl_generate_certificates >/dev/null 2>&1; then
-        milou_log "DEBUG" "Using milou_ssl_generate_certificates function"
-        milou_ssl_generate_certificates "$ssl_dir" "$domain" || return 1
-    elif command -v milou_generate_ssl_certificates >/dev/null 2>&1; then
-        milou_log "DEBUG" "Using milou_generate_ssl_certificates function"
-        milou_generate_ssl_certificates "$ssl_dir" "$domain" || return 1
-    else
-        milou_log "DEBUG" "Using openssl directly for certificate generation"
-        _generate_ssl_with_openssl "$ssl_dir" "$domain" || return 1
-    fi
-    
-    # Validate generated certificates using the unified function
-    if command -v milou_ssl_validate_certificates >/dev/null 2>&1; then
-        if milou_ssl_validate_certificates "$ssl_dir" "$domain" "false" "true"; then
-            milou_log "SUCCESS" "✅ SSL certificates generated and validated"
-            return 0
-        else
-            milou_log "ERROR" "Generated SSL certificates failed validation"
-            return 1
-        fi
-    else
-        # Fallback validation - just check if files exist and are readable
-        if [[ -f "$ssl_dir/milou.crt" && -f "$ssl_dir/milou.key" ]]; then
-            if openssl x509 -in "$ssl_dir/milou.crt" -noout -text >/dev/null 2>&1 && \
-               openssl rsa -in "$ssl_dir/milou.key" -check -noout >/dev/null 2>&1; then
-                milou_log "SUCCESS" "✅ SSL certificates generated (basic validation passed)"
-                return 0
-            else
-                milou_log "ERROR" "Generated SSL certificates have format issues"
-                return 1
-            fi
-        else
-            milou_log "ERROR" "SSL certificate files were not created"
+            milou_log "ERROR" "SSL certificate setup validation failed"
             return 1
         fi
     fi
-}
-
-# Generate SSL certificates using OpenSSL directly
-_generate_ssl_with_openssl() {
-    local ssl_dir="$1"
-    local domain="$2"
     
-    if ! command -v openssl >/dev/null 2>&1; then
-        milou_log "ERROR" "OpenSSL not available for certificate generation"
-        return 1
-    fi
-    
-    milou_log "INFO" "🔧 Generating SSL certificate for domain: $domain"
-    
-    # Create SSL config file with SAN (Subject Alternative Names)
-    local ssl_config="$ssl_dir/openssl.conf"
-    cat > "$ssl_config" << EOF
-[req]
-distinguished_name = req_distinguished_name
-req_extensions = v3_req
-prompt = no
-
-[req_distinguished_name]
-C=US
-ST=State
-L=City
-O=Milou
-OU=IT Department
-CN=$domain
-
-[v3_req]
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = $domain
-DNS.2 = localhost
-DNS.3 = *.localhost
-IP.1 = 127.0.0.1
-IP.2 = ::1
-EOF
-    
-    # Add the domain to alt names if it's not localhost
-    if [[ "$domain" != "localhost" ]]; then
-        echo "DNS.4 = *.$domain" >> "$ssl_config"
-    fi
-    
-    # Generate private key
-    openssl genrsa -out "$ssl_dir/milou.key" 2048 2>/dev/null || {
-        milou_log "ERROR" "Failed to generate SSL private key"
-        rm -f "$ssl_config"
-        return 1
-    }
-    
-    # Generate certificate with SAN
-    openssl req -new -x509 -key "$ssl_dir/milou.key" -out "$ssl_dir/milou.crt" -days 365 \
-        -config "$ssl_config" -extensions v3_req 2>/dev/null || {
-        milou_log "ERROR" "Failed to generate SSL certificate"
-        rm -f "$ssl_config"
-        return 1
-    }
-    
-    # Clean up config file
-    rm -f "$ssl_config"
-    
-    # Set secure permissions
-    chmod 600 "$ssl_dir/milou.key"
-    chmod 644 "$ssl_dir/milou.crt"
-    
-    milou_log "SUCCESS" "✅ SSL certificates generated with multi-domain support"
-    milou_log "INFO" "   Valid for: $domain, localhost, 127.0.0.1"
     return 0
 }
 
@@ -1180,9 +1053,6 @@ _reset_database_volume() {
 export -f setup_final_validation
 export -f _validate_system_readiness
 export -f _setup_ssl_certificates
-export -f _generate_ssl_certificates
-export -f _generate_ssl_with_openssl
-export -f _validate_existing_ssl_certificates
 export -f _prepare_docker_environment
 export -f _start_and_validate_services
 export -f _wait_for_services_ready

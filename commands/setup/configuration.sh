@@ -551,7 +551,7 @@ _save_configuration_to_env() {
     mkdir -p "$config_dir"
     
     # CRITICAL: Check for existing installation and preserve existing credentials
-    local postgres_user postgres_password postgres_db redis_password rabbitmq_user rabbitmq_password session_secret encryption_key
+    local postgres_user postgres_password postgres_db redis_password rabbitmq_user rabbitmq_password session_secret encryption_key existing_jwt_secret
     local is_fresh_install=true
     local preserve_existing_credentials=false
     
@@ -574,7 +574,7 @@ _save_configuration_to_env() {
         # Load existing credentials
         local existing_postgres_user existing_postgres_password existing_postgres_db
         local existing_redis_password existing_rabbitmq_user existing_rabbitmq_password
-        local existing_session_secret existing_encryption_key
+        local existing_session_secret existing_encryption_key existing_jwt_secret
         
         # Extract existing credentials from environment file
         existing_postgres_user=$(grep "^POSTGRES_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
@@ -585,6 +585,7 @@ _save_configuration_to_env() {
         existing_rabbitmq_password=$(grep "^RABBITMQ_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
         existing_session_secret=$(grep "^SESSION_SECRET=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
         existing_encryption_key=$(grep "^ENCRYPTION_KEY=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
+        existing_jwt_secret=$(grep "^JWT_SECRET=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//' || echo "")
         
         # Check for existing Docker volumes (indicates data exists)
         local has_database_volume=false
@@ -659,11 +660,17 @@ _save_configuration_to_env() {
                 rabbitmq_password="$existing_rabbitmq_password"
                 session_secret="$existing_session_secret"
                 encryption_key="$existing_encryption_key"
+                
+                # Preserve JWT_SECRET if it exists, generate if missing
+                if [[ -n "$existing_jwt_secret" ]]; then
+                    JWT_SECRET="$existing_jwt_secret"
+                else
+                    JWT_SECRET="$(milou_generate_secure_random 32 "safe")"
+                fi
             else
                 milou_log "WARN" "🚨 FORCE/CLEAN mode enabled - will generate new credentials"
                 preserve_existing_credentials=false
             fi
-            
         elif [[ "${FORCE:-false}" == "true" ]]; then
             milou_log "WARN" "🚨 FORCE mode enabled - generating new credentials despite existing installation"
             milou_log "WARN" "   ⚠️  This may cause data access issues if volumes contain existing data"
@@ -738,6 +745,16 @@ _save_configuration_to_env() {
         rabbitmq_password="$(milou_generate_secure_random 32 "safe")"
         session_secret="$(milou_generate_secure_random 64 "safe")"
         encryption_key="$(milou_generate_secure_random 64 "hex")"
+        
+        # Generate JWT_SECRET if not already set
+        if [[ -z "${JWT_SECRET:-}" ]]; then
+            JWT_SECRET="$(milou_generate_secure_random 32 "safe")"
+        fi
+    else
+        # For preserved credentials, also ensure JWT_SECRET exists
+        if [[ -z "${JWT_SECRET:-}" ]]; then
+            JWT_SECRET="${existing_jwt_secret:-$(milou_generate_secure_random 32 "safe")}"
+        fi
     fi
     
     # Generate comprehensive environment file based on centralized validation requirements
@@ -811,7 +828,7 @@ RABBITMQ_ERLANG_COOKIE=milou-cookie
 # =============================================================================
 # SECURITY CONFIGURATION (Required)
 # =============================================================================
-JWT_SECRET=${JWT_SECRET}
+JWT_SECRET=$JWT_SECRET
 SESSION_SECRET=$session_secret
 ENCRYPTION_KEY=$encryption_key
 

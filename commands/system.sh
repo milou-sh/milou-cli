@@ -83,17 +83,83 @@ handle_restore() {
 
 # Update command handler
 handle_update() {
-    milou_log "INFO" "🔄 Updating to latest version..."
+    local target_version=""
+    local specific_services=""
+    local force_update=false
+    local backup_before_update=true
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --version)
+                target_version="$2"
+                shift 2
+                ;;
+            --service|--services)
+                specific_services="$2"
+                shift 2
+                ;;
+            --force)
+                force_update=true
+                shift
+                ;;
+            --no-backup)
+                backup_before_update=false
+                shift
+                ;;
+            --help|-h)
+                show_update_help
+                return 0
+                ;;
+            *)
+                milou_log "WARN" "Unknown argument: $1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Log the update request
+    if [[ -n "$target_version" ]]; then
+        milou_log "INFO" "🔄 Updating to version: $target_version"
+    else
+        milou_log "INFO" "🔄 Updating to latest version..."
+    fi
+    
+    if [[ -n "$specific_services" ]]; then
+        milou_log "INFO" "🎯 Targeting services: $specific_services"
+    fi
     
     if command -v milou_system_update >/dev/null 2>&1; then
-        milou_system_update "$@"
+        milou_system_update "$force_update" "$backup_before_update" "$target_version" "$specific_services"
     elif command -v update_milou_system >/dev/null 2>&1; then
-        update_milou_system "$@"
+        # Fallback to old function for compatibility
+        update_milou_system "$force_update" "$backup_before_update"
     else
         milou_log "ERROR" "Update function not available"
         milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize update modules"
         return 1
     fi
+}
+
+# Show update command help
+show_update_help() {
+    echo "Update command usage:"
+    echo "  ./milou.sh update [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --version VERSION     Update to specific version (e.g., test, v1.0.0, latest)"
+    echo "  --service SERVICES    Update specific services (comma-separated)"
+    echo "                       Available: frontend,backend,database,engine,nginx"
+    echo "  --force              Force update even if no changes detected"
+    echo "  --no-backup          Skip backup creation before update"
+    echo "  --token TOKEN        GitHub personal access token (or set GITHUB_TOKEN)"
+    echo "  --help, -h           Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  ./milou.sh update --version test --service frontend"
+    echo "  ./milou.sh update --version v1.2.0 --token ghp_xxxx"
+    echo "  ./milou.sh update --force --no-backup"
+    echo "  ./milou.sh update --service frontend,backend --version latest"
 }
 
 # SSL management command handler

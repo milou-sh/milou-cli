@@ -85,18 +85,73 @@ handle_detailed_status() {
 
 # Logs command handler
 handle_logs() {
-    local service="${1:-}"
-    
-    if [[ -n "$service" ]]; then
-        milou_log "INFO" "📄 Showing logs for service: $service"
+    if command -v milou_docker_logs >/dev/null 2>&1; then
+        # Check for special flags and handle them
+        local args=("$@")
+        local follow=false
+        local service=""
+        local tail_lines=""
+        
+        # Parse arguments
+        while [[ $# -gt 0 ]]; do
+            case $1 in
+                --follow|-f)
+                    follow=true
+                    shift
+                    ;;
+                --tail)
+                    tail_lines="$2"
+                    shift 2
+                    ;;
+                --tail=*)
+                    tail_lines="${1#*=}"
+                    shift
+                    ;;
+                -*)
+                    milou_log "WARN" "Unknown option: $1"
+                    shift
+                    ;;
+                *)
+                    service="$1"
+                    shift
+                    ;;
+            esac
+        done
+        
+        if [[ -n "$service" ]]; then
+            milou_log "INFO" "📄 Showing logs for service: $service"
+        else
+            milou_log "INFO" "📄 Showing logs for all services"
+        fi
+        
+        # Use Docker Compose directly for better argument handling
+        if ! command -v milou_docker_compose >/dev/null 2>&1; then
+            if ! command -v milou_docker_init >/dev/null 2>&1; then
+                milou_log "ERROR" "Docker functions not available"
+                return 1
+            fi
+            milou_docker_init
+        fi
+        
+        # Build the command
+        local cmd_args=()
+        if [[ "$follow" == "true" ]]; then
+            cmd_args+=("-f")
+        fi
+        
+        if [[ -n "$tail_lines" ]]; then
+            cmd_args+=("--tail=$tail_lines")
+        elif [[ "$follow" != "true" ]]; then
+            cmd_args+=("--tail=50")  # Default tail
+        fi
+        
+        if [[ -n "$service" ]]; then
+            cmd_args+=("$service")
+        fi
+        
+        milou_docker_compose logs "${cmd_args[@]}"
     else
-        milou_log "INFO" "📄 Showing logs for all services"
-    fi
-    
-    if command -v show_service_logs >/dev/null 2>&1; then
-        show_service_logs "$@"
-    else
-        milou_log "ERROR" "Logs function not available"
+        milou_log "ERROR" "Docker logs function not available"
         milou_log "INFO" "💡 Try running: ./milou.sh setup to initialize Docker modules"
         return 1
     fi

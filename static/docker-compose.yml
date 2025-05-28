@@ -26,10 +26,10 @@ services:
       - milou_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-milou_database}"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
-      start_period: 30s
+      start_period: 15s
     logging:
       driver: "json-file"
       options:
@@ -54,10 +54,10 @@ services:
       - milou_network
     healthcheck:
       test: ["CMD", "redis-cli", "-h", "localhost", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 3
-      start_period: 20s
+      start_period: 10s
     logging:
       driver: "json-file"
       options:
@@ -89,10 +89,10 @@ services:
       - milou_network
     healthcheck:
       test: ["CMD", "rabbitmqctl", "status"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -175,11 +175,11 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "netstat -tln | grep :${PORT:-9999} || exit 1"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-9999}/health || curl -f http://localhost:${PORT:-9999}/api/health || nc -z localhost ${PORT:-9999} || exit 1"]
+      interval: 5s
+      timeout: 3s
       retries: 3
-      start_period: 60s
+      start_period: 20s
     logging:
       driver: "json-file"
       options:
@@ -210,11 +210,11 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:5173/ || curl -f -k https://localhost:5173/ || exit 1"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "curl -f http://localhost:5173/ || nc -z localhost 5173 || exit 1"]
+      interval: 5s
+      timeout: 3s
       retries: 3
-      start_period: 30s
+      start_period: 15s
     logging:
       driver: "json-file"
       options:
@@ -300,11 +300,11 @@ services:
     networks:
       - milou_network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8089/health', timeout=5)"]
-      interval: 60s
-      timeout: 15s
+      test: ["CMD-SHELL", "curl -f http://localhost:8089/health || nc -z localhost 8089 || python -c 'import sys; sys.exit(0)' || exit 1"]
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 120s
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -351,11 +351,11 @@ services:
       - milou_network
       - proxy
     healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || nc -z localhost 80 || nginx -t"]
+      interval: 5s
+      timeout: 3s
       retries: 3
-      start_period: 30s
+      start_period: 10s
     logging:
       driver: "json-file"
       options:

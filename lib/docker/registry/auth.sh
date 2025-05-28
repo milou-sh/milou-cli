@@ -110,94 +110,8 @@ test_github_authentication() {
 # Image Tag Management
 # =============================================================================
 
-# Get available image tags from GitHub Container Registry
-get_available_image_tags() {
-    local image_name="$1"
-    local token="$2"
-    
-    milou_log "DEBUG" "Fetching available tags for $image_name..."
-    
-    # Use the GitHub Packages API to get package versions
-    local -a api_patterns=(
-        "milou%2F${image_name}"
-        "milou-${image_name}"
-        "${image_name}"
-    )
-    
-    local -a api_base_urls=(
-        "$GITHUB_API_BASE/orgs/milou-sh/packages/container"
-        "$GITHUB_API_BASE/user/packages/container"
-    )
-    
-    for api_base in "${api_base_urls[@]}"; do
-        for pattern in "${api_patterns[@]}"; do
-            local api_url="${api_base}/${pattern}/versions"
-    milou_log "DEBUG" "Trying API endpoint: $api_url"
-            
-            local response
-            if response=$(curl -s -w "\n%{http_code}" \
-                         -H "Authorization: Bearer $token" \
-                         -H "Accept: application/vnd.github.v3+json" \
-                         -H "X-GitHub-Api-Version: 2022-11-28" \
-                         "$api_url" 2>/dev/null); then
-                
-                local http_code=$(echo "$response" | tail -n1)
-                local body=$(echo "$response" | head -n -1)
-                
-    milou_log "DEBUG" "HTTP response code: $http_code for pattern: $pattern"
-                
-                if [[ "$http_code" == "200" ]]; then
-    milou_log "DEBUG" "Successfully fetched package data from: $api_url"
-                    
-                    # Try different ways to extract tags from the response
-                    local tags=""
-                    
-                    # Method 1: Extract from metadata.container.tags
-                    if command -v jq >/dev/null 2>&1; then
-                        tags=$(echo "$body" | jq -r '
-                            .[] | 
-                            select(.metadata.container.tags != null) | 
-                            .metadata.container.tags[] | 
-                            select(. != null and . != "")
-                        ' 2>/dev/null | sort -V || echo "")
-                    fi
-                    
-                    # Method 2: Try to extract from name field if metadata method failed
-                    if [[ -z "$tags" ]] && command -v jq >/dev/null 2>&1; then
-                        tags=$(echo "$body" | jq -r '.[].name // empty' 2>/dev/null | sort -V || echo "")
-                    fi
-                    
-                    # Method 3: Try simple grep if jq is not available or failed
-                    if [[ -z "$tags" ]]; then
-                        tags=$(echo "$body" | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 | sort -V || echo "")
-                    fi
-                    
-                    if [[ -n "$tags" ]]; then
-    milou_log "DEBUG" "Found tags via API: $(echo "$tags" | head -10 | tr '\n' ' ')$([ $(echo "$tags" | wc -l) -gt 10 ] && echo "...")"
-                        echo "$tags"
-                        return 0
-                    else
-    milou_log "DEBUG" "API returned data but no tags were extracted"
-    milou_log "DEBUG" "Response sample: $(echo "$body" | head -c 200)..."
-                    fi
-                elif [[ "$http_code" == "401" ]]; then
-    milou_log "DEBUG" "Authentication failed for: $api_url"
-                elif [[ "$http_code" == "403" ]]; then
-    milou_log "DEBUG" "Access forbidden for: $api_url (token may lack permissions)"
-                elif [[ "$http_code" == "404" ]]; then
-    milou_log "DEBUG" "Package not found at: $api_url (pattern: $pattern)"
-                else
-    milou_log "DEBUG" "Unexpected response ($http_code) from: $api_url"
-                fi
-            else
-    milou_log "DEBUG" "Failed to fetch from: $api_url"
-            fi
-        done
-    done
-    
-    milou_log "DEBUG" "No tags found for $image_name from any GitHub Packages API endpoint"
-    return 1
-}
+# REMOVED: get_available_image_tags() - now consolidated in lib/docker/registry/images.sh
+# Use the function from images.sh which includes Docker registry fallback
 
 # =============================================================================
 # Export Functions
@@ -205,4 +119,4 @@ get_available_image_tags() {
 
 # validate_github_token removed - use milou_validate_github_token from core/validation.sh
 export -f test_github_authentication
-export -f get_available_image_tags 
+# Removed get_available_image_tags export - use the one from images.sh 

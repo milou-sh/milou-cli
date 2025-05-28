@@ -394,10 +394,60 @@ milou_docker_stop() {
     fi
     
     if milou_docker_compose down --remove-orphans; then
-    milou_log "SUCCESS" "Services stopped successfully"
+        milou_log "SUCCESS" "Services stopped successfully"
         return 0
     else
-    milou_log "ERROR" "Failed to stop services"
+        milou_log "ERROR" "Failed to stop services"
+        return 1
+    fi
+}
+
+# Stop a specific service
+milou_docker_stop_service() {
+    local service="$1"
+    
+    if [[ -z "$service" ]]; then
+        milou_log "ERROR" "Service name is required"
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Stopping service: $service"
+    
+    if ! milou_docker_init; then
+        return 1
+    fi
+    
+    # Stop the specific service
+    if milou_docker_compose stop "$service"; then
+        milou_log "DEBUG" "Service $service stopped successfully"
+        return 0
+    else
+        milou_log "WARN" "Failed to stop service: $service"
+        return 1
+    fi
+}
+
+# Start a specific service
+milou_docker_start_service() {
+    local service="$1"
+    
+    if [[ -z "$service" ]]; then
+        milou_log "ERROR" "Service name is required"
+        return 1
+    fi
+    
+    milou_log "DEBUG" "Starting service: $service"
+    
+    if ! milou_docker_init; then
+        return 1
+    fi
+    
+    # Start the specific service
+    if milou_docker_compose up -d "$service"; then
+        milou_log "DEBUG" "Service $service started successfully"
+        return 0
+    else
+        milou_log "ERROR" "Failed to start service: $service"
         return 1
     fi
 }
@@ -828,6 +878,7 @@ start_services_with_checks() {
 # Export functions for external use
 export -f milou_docker_init milou_docker_compose milou_docker_test_config
 export -f milou_docker_start milou_docker_stop milou_docker_restart
+export -f milou_docker_stop_service milou_docker_start_service
 export -f milou_docker_status milou_docker_logs milou_docker_shell
 export -f milou_check_credentials_changed milou_store_credentials_hash
 export -f milou_cleanup_volumes_on_credential_change milou_create_networks

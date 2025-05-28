@@ -204,7 +204,31 @@ check_image_exists() {
     
     milou_log "DEBUG" "Checking if image exists: $image_name:$tag"
     
-    # Try to get the manifest for the specific tag
+    # First try GitHub API approach (more reliable for private repos)
+    if [[ -n "$token" ]]; then
+        milou_log "DEBUG" "Using GitHub API to check image existence"
+        
+        local available_tags
+        available_tags=$(get_available_image_tags "$image_name" "$token")
+        
+        if [[ -n "$available_tags" ]]; then
+            # Check if the specific tag exists in the list
+            if echo "$available_tags" | grep -q "^${tag}$"; then
+                milou_log "DEBUG" "Image exists via GitHub API: $image_name:$tag"
+                return 0
+            else
+                milou_log "DEBUG" "Tag not found in available tags: $image_name:$tag"
+                milou_log "DEBUG" "Available tags: $(echo "$available_tags" | head -3 | tr '\n' ' ')..."
+                return 1
+            fi
+        else
+            milou_log "DEBUG" "No tags found for image: $image_name"
+            return 1
+        fi
+    fi
+    
+    # Fallback: Try Docker registry manifest API (for public repos or different auth)
+    milou_log "DEBUG" "Fallback to Docker registry manifest check"
     local manifest_url="https://ghcr.io/v2/milou-sh/milou/${image_name}/manifests/${tag}"
     
     local response
@@ -214,10 +238,10 @@ check_image_exists() {
                "$manifest_url" 2>/dev/null)
     
     if [[ "$response" == "200" ]]; then
-        milou_log "DEBUG" "Image exists: $image_name:$tag"
+        milou_log "DEBUG" "Image exists via registry API: $image_name:$tag"
         return 0
     else
-        milou_log "DEBUG" "Image not found: $image_name:$tag (HTTP: $response)"
+        milou_log "DEBUG" "Image not found via registry API: $image_name:$tag (HTTP: $response)"
         return 1
     fi
 }

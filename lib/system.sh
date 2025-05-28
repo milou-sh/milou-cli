@@ -531,15 +531,34 @@ milou_system_validate_environment() {
 }
 
 # =============================================================================
-# System Update Functions (from update.sh)
+# System Update Functions (Enhanced)
 # =============================================================================
 
-# Update Milou system to latest version
+# Enhanced update Milou system with version and service selection support
 milou_system_update() {
     local force_update="${1:-false}"
     local backup_before_update="${2:-true}"
+    local target_version="${3:-}"
+    local specific_services="${4:-}"
+    local github_token="${GITHUB_TOKEN:-}"
     
     milou_log "STEP" "🔄 Updating Milou system..."
+    
+    # Validate GitHub token if provided
+    if [[ -n "$github_token" ]]; then
+        milou_log "INFO" "🔐 Testing GitHub authentication..."
+        if command -v test_github_authentication >/dev/null 2>&1; then
+            if test_github_authentication "$github_token"; then
+                milou_log "SUCCESS" "✅ GitHub authentication successful"
+            else
+                milou_log "ERROR" "❌ GitHub authentication failed"
+                milou_log "INFO" "💡 Please check your token permissions (needs read:packages)"
+                return 1
+            fi
+        fi
+    else
+        milou_log "WARN" "⚠️  No GitHub token provided - using public access"
+    fi
     
     # Create backup before update if requested
     if [[ "$backup_before_update" == "true" ]]; then
@@ -549,8 +568,8 @@ milou_system_update() {
         fi
     fi
     
-    # Check for available updates
-    if ! milou_system_check_for_updates; then
+    # Enhanced update check with version support
+    if ! milou_system_check_for_updates "$target_version" "$github_token" "$specific_services"; then
         if [[ "$force_update" != "true" ]]; then
             milou_log "INFO" "✅ System is up to date"
             return 0
@@ -559,56 +578,311 @@ milou_system_update() {
         fi
     fi
     
-    # Perform the update
-    milou_system_perform_update
+    # Perform the enhanced update
+    milou_system_perform_update "$target_version" "$specific_services" "$github_token"
     
     milou_log "SUCCESS" "✅ System update completed"
     milou_log "INFO" "📋 Run './milou.sh status' to verify the update"
 }
 
-# Check for available updates
+# Enhanced update check with version and service support
 milou_system_check_for_updates() {
+    local target_version="${1:-}"
+    local github_token="${2:-}"
+    local specific_services="${3:-}"
+    
     milou_log "DEBUG" "Checking for system updates..."
     
-    # For now, this is a placeholder - in production this would check
-    # against a version server or Git repository
-    local current_version="${MILOU_VERSION:-1.0.0}"
-    milou_log "DEBUG" "Current version: $current_version"
-    
-    # Simulate update check
-    milou_log "DEBUG" "Update check completed"
-    return 1  # No updates available (placeholder)
+    # If specific version is requested, validate its availability
+    if [[ -n "$target_version" ]]; then
+        milou_log "INFO" "🎯 Checking availability of version: $target_version"
+        
+        if [[ -n "$github_token" ]]; then
+            # Check if the requested version exists for all services
+            local -a services_to_check=()
+            if [[ -n "$specific_services" ]]; then
+                IFS=',' read -ra services_to_check <<< "$specific_services"
+            else
+                services_to_check=("frontend" "backend" "database" "engine" "nginx")
+            fi
+            
+            local version_available=true
+            for service in "${services_to_check[@]}"; do
+                milou_log "DEBUG" "Checking version $target_version for service: $service"
+                if command -v check_image_exists >/dev/null 2>&1; then
+                    if ! check_image_exists "$service" "$target_version" "$github_token"; then
+                        milou_log "WARN" "❌ Version $target_version not available for $service"
+                        version_available=false
+                    else
+                        milou_log "DEBUG" "✅ Version $target_version available for $service"
+                    fi
+                fi
+            done
+            
+            if [[ "$version_available" == "true" ]]; then
+                milou_log "SUCCESS" "✅ Target version $target_version is available"
+                return 0  # Update needed (version available)
+            else
+                milou_log "ERROR" "❌ Target version $target_version is not available for all services"
+                return 1  # No update possible
+            fi
+        else
+            milou_log "INFO" "🔄 No GitHub token provided, assuming version is available"
+            return 0  # Assume update needed
+        fi
+    else
+        # No specific version requested, check for latest
+        local current_version="${MILOU_VERSION:-1.0.0}"
+        milou_log "DEBUG" "Current version: $current_version, checking for updates..."
+        
+        # For now, assume updates are available when no specific version is requested
+        return 0
+    fi
 }
 
-# Perform system update
+# Enhanced system update with version and service selection
 milou_system_perform_update() {
+    local target_version="${1:-}"
+    local specific_services="${2:-}"
+    local github_token="${3:-}"
+    
     milou_log "INFO" "🔄 Performing system update..."
     
-    # Stop services
-    milou_log "INFO" "⏸️  Stopping services..."
+    # Parse specific services if provided
+    local -a services_to_update=()
+    if [[ -n "$specific_services" ]]; then
+        IFS=',' read -ra services_to_update <<< "$specific_services"
+        milou_log "INFO" "🎯 Updating specific services: ${services_to_update[*]}"
+    else
+        services_to_update=("frontend" "backend" "database" "engine" "nginx")
+        milou_log "INFO" "🔄 Updating all services"
+    fi
+    
+    # Preserve current environment before update
+    milou_log "INFO" "🔒 Preserving environment configuration..."
+    local env_backup="/tmp/milou_env_backup_$(date +%s)"
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+        cp "$SCRIPT_DIR/.env" "$env_backup"
+        milou_log "DEBUG" "Environment backed up to: $env_backup"
+    fi
+    
+    # Store pre-update service status for rollback
+    local pre_update_status="/tmp/milou_pre_update_status_$(date +%s)"
+    docker ps --filter "name=milou-" --format "{{.Names}}\t{{.Status}}" > "$pre_update_status" 2>/dev/null || true
+    
+    # Enhanced selective service management
+    if [[ -n "$specific_services" ]]; then
+        milou_log "INFO" "🎯 Performing selective service update..."
+        milou_system_selective_service_update "${services_to_update[@]}" "$target_version" "$github_token"
+        local update_result=$?
+    else
+        milou_log "INFO" "🔄 Performing full system update..."
+        milou_system_full_service_update "$target_version" "$github_token"
+        local update_result=$?
+    fi
+    
+    # Clean up temporary files
+    rm -f "$env_backup" "$pre_update_status"
+    
+    if [[ $update_result -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ Update completed successfully"
+        return 0
+    else
+        milou_log "ERROR" "❌ Update failed"
+        return 1
+    fi
+}
+
+# Selective service update with health monitoring
+milou_system_selective_service_update() {
+    local -a services_to_update=("$@")
+    local github_token="${!#}"  # Last argument
+    local target_version="${@: -2:1}"  # Second to last argument
+    
+    # Remove the last two arguments (version and token) from services array
+    unset 'services_to_update[-1]'
+    unset 'services_to_update[-1]'
+    
+    milou_log "INFO" "🎯 Selective update: ${services_to_update[*]} → $target_version"
+    
+    # Step 1: Update Docker images first
+    milou_log "INFO" "📥 Updating Docker images..."
+    # Convert services array to comma-separated string for compatibility
+    local services_string
+    services_string=$(IFS=','; echo "${services_to_update[*]}")
+    if ! milou_system_update_docker_images "$target_version" "$services_string" "$github_token"; then
+        milou_log "ERROR" "Failed to update Docker images"
+        return 1
+    fi
+    
+    # Step 2: Update environment tags
+    milou_log "INFO" "🏷️ Updating image tags in environment..."
+    milou_system_update_image_tags "$target_version" "$services_string"
+    
+    # Step 3: Restart services in dependency order with health monitoring
+    milou_log "INFO" "🔄 Restarting updated services..."
+    local -a restart_order=()
+    local -a dependent_services=()
+    
+    # Determine restart order based on dependencies
+    for service in "${services_to_update[@]}"; do
+        case "$service" in
+            "database"|"redis"|"rabbitmq")
+                # Infrastructure services restart first
+                restart_order+=("$service")
+                ;;
+            "backend"|"engine")
+                # Backend services need infrastructure
+                dependent_services+=("$service")
+                ;;
+            "frontend"|"nginx")
+                # Frontend services restart last
+                dependent_services+=("$service")
+                ;;
+        esac
+    done
+    
+    # Combine in proper order
+    restart_order+=("${dependent_services[@]}")
+    
+    # Restart services one by one with health checking
+    local failed_services=()
+    for service in "${restart_order[@]}"; do
+        milou_log "INFO" "🔄 Restarting service: $service"
+        
+        # Stop the service
+        if command -v milou_docker_stop_service >/dev/null 2>&1; then
+            milou_docker_stop_service "$service" || true
+        fi
+        
+        # Wait a moment
+        sleep 2
+        
+        # Start the service
+        if command -v milou_docker_start_service >/dev/null 2>&1; then
+            if milou_docker_start_service "$service"; then
+                # Wait for service to stabilize and check health
+                milou_log "INFO" "⏳ Waiting for $service to stabilize..."
+                if milou_system_wait_for_service_health "$service" 60; then
+                    milou_log "SUCCESS" "✅ Service $service restarted successfully"
+                else
+                    milou_log "WARN" "⚠️ Service $service started but health check failed"
+                    failed_services+=("$service")
+                fi
+            else
+                milou_log "ERROR" "❌ Failed to start service: $service"
+                failed_services+=("$service")
+            fi
+        fi
+    done
+    
+    # Report results
+    if [[ ${#failed_services[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ All services updated and restarted successfully"
+        return 0
+    else
+        milou_log "WARN" "⚠️ Update completed with issues in: ${failed_services[*]}"
+        milou_log "INFO" "💡 Consider running './milou.sh restart' to fix remaining issues"
+        return 0  # Don't fail completely for partial success
+    fi
+}
+
+# Full system update (existing logic with improvements)
+milou_system_full_service_update() {
+    local target_version="$1"
+    local github_token="$2"
+    
+    # Stop all services
+    milou_log "INFO" "⏸️ Stopping all services..."
     if command -v milou_docker_stop >/dev/null 2>&1; then
         milou_docker_stop
     fi
     
-    # Update Docker images
+    # Update Docker images with version and authentication support
     milou_log "INFO" "📥 Updating Docker images..."
-    milou_system_update_docker_images
+    milou_system_update_docker_images "$target_version" "" "$github_token"
+    
+    # Update environment tags
+    if [[ -n "$target_version" ]]; then
+        milou_log "DEBUG" "Updating image tags to: $target_version"
+        milou_system_update_image_tags "$target_version" ""
+    fi
     
     # Apply any configuration migrations
     milou_log "INFO" "🔧 Applying configuration updates..."
     milou_system_apply_config_updates
     
-    # Restart services
-    milou_log "INFO" "▶️  Restarting services..."
+    # Restart all services
+    milou_log "INFO" "▶️ Restarting all services..."
     if command -v milou_docker_start >/dev/null 2>&1; then
         milou_docker_start
+        return $?
+    else
+        milou_log "ERROR" "Start function not available"
+        return 1
     fi
-    
-    milou_log "SUCCESS" "✅ Update completed successfully"
 }
 
-# Update Docker images
+# Wait for a specific service to become healthy
+milou_system_wait_for_service_health() {
+    local service="$1"
+    local timeout="${2:-30}"
+    local container_name="milou-${service}"
+    
+    milou_log "DEBUG" "Waiting for $service to become healthy (timeout: ${timeout}s)"
+    
+    local elapsed=0
+    local check_interval=2
+    
+    while [[ $elapsed -lt $timeout ]]; do
+        # Check container status
+        local container_status
+        container_status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null || echo "not_found")
+        
+        case "$container_status" in
+            "running")
+                # Check health status if health checks are configured
+                local health_status
+                health_status=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no_healthcheck{{end}}' "$container_name" 2>/dev/null || echo "unknown")
+                
+                case "$health_status" in
+                    "healthy"|"no_healthcheck")
+                        milou_log "DEBUG" "✅ Service $service is healthy"
+                        return 0
+                        ;;
+                    "starting")
+                        milou_log "DEBUG" "⏳ Service $service health check starting..."
+                        ;;
+                    "unhealthy")
+                        if [[ $elapsed -gt 20 ]]; then
+                            milou_log "WARN" "⚠️ Service $service is unhealthy after ${elapsed}s"
+                            return 1
+                        fi
+                        ;;
+                esac
+                ;;
+            "not_found")
+                milou_log "DEBUG" "⏳ Container $container_name not found yet..."
+                ;;
+            "exited")
+                milou_log "ERROR" "❌ Container $container_name exited"
+                return 1
+                ;;
+        esac
+        
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+    done
+    
+    milou_log "WARN" "⚠️ Health check timeout for service $service after ${timeout}s"
+    return 1
+}
+
+# Enhanced Docker image update with authentication and version support
 milou_system_update_docker_images() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-}"
+    local github_token="${3:-}"
     local compose_file="${COMPOSE_FILE:-${SCRIPT_DIR}/static/docker-compose.yml}"
     
     if [[ ! -f "$compose_file" ]]; then
@@ -616,15 +890,79 @@ milou_system_update_docker_images() {
         return 1
     fi
     
-    milou_log "DEBUG" "Pulling latest Docker images..."
+    milou_log "DEBUG" "Updating Docker images (version: $target_version)"
     
-    if docker compose -f "$compose_file" pull; then
-        milou_log "SUCCESS" "Docker images updated"
-        return 0
+    # If GitHub token is provided, use enhanced image pulling
+    if [[ -n "$github_token" ]] && command -v pull_images >/dev/null 2>&1; then
+        milou_log "INFO" "🔐 Using authenticated GitHub Container Registry access"
+        
+        # Build list of images to pull
+        local -a images_to_pull=()
+        if [[ -n "$specific_services" ]]; then
+            IFS=',' read -ra services <<< "$specific_services"
+            for service in "${services[@]}"; do
+                images_to_pull+=("$service:$target_version")
+            done
+        else
+            # Get all Milou images
+            images_to_pull=("frontend:$target_version" "backend:$target_version" "database:$target_version" "engine:$target_version" "nginx:$target_version")
+        fi
+        
+        milou_log "INFO" "📥 Pulling images: ${images_to_pull[*]}"
+        if pull_images "$github_token" "${images_to_pull[@]}"; then
+            milou_log "SUCCESS" "✅ Images pulled successfully with authentication"
+        else
+            milou_log "WARN" "⚠️  Authenticated pull failed, falling back to docker compose pull"
+            # Fall back to standard docker compose pull
+            docker compose -f "$compose_file" pull
+        fi
     else
-        milou_log "ERROR" "Failed to update Docker images"
+        # Standard docker compose pull
+        milou_log "DEBUG" "Using standard docker compose pull"
+        if docker compose -f "$compose_file" pull; then
+            milou_log "SUCCESS" "Docker images updated"
+            return 0
+        else
+            milou_log "ERROR" "Failed to update Docker images"
+            return 1
+        fi
+    fi
+}
+
+# Update image tags in environment file
+milou_system_update_image_tags() {
+    local target_version="$1"
+    local specific_services="${2:-}"
+    local env_file="${SCRIPT_DIR}/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        milou_log "ERROR" "Environment file not found: $env_file"
         return 1
     fi
+    
+    milou_log "DEBUG" "Updating image tags to: $target_version"
+    
+    # Create backup
+    cp "$env_file" "${env_file}.tag_update.$(date +%s)"
+    
+    # Update image tags
+    if [[ -n "$specific_services" ]]; then
+        IFS=',' read -ra services <<< "$specific_services"
+        for service in "${services[@]}"; do
+            local tag_var="MILOU_${service^^}_TAG"
+            milou_log "DEBUG" "Updating $tag_var to $target_version"
+            sed -i "s/^${tag_var}=.*/${tag_var}=${target_version}/" "$env_file"
+        done
+    else
+        # Update all service tags
+        sed -i "s/^MILOU_DATABASE_TAG=.*/MILOU_DATABASE_TAG=${target_version}/" "$env_file"
+        sed -i "s/^MILOU_BACKEND_TAG=.*/MILOU_BACKEND_TAG=${target_version}/" "$env_file"
+        sed -i "s/^MILOU_FRONTEND_TAG=.*/MILOU_FRONTEND_TAG=${target_version}/" "$env_file"
+        sed -i "s/^MILOU_ENGINE_TAG=.*/MILOU_ENGINE_TAG=${target_version}/" "$env_file"
+        sed -i "s/^MILOU_NGINX_TAG=.*/MILOU_NGINX_TAG=${target_version}/" "$env_file"
+    fi
+    
+    milou_log "SUCCESS" "✅ Image tags updated to $target_version"
 }
 
 # Apply configuration updates
@@ -647,6 +985,73 @@ milou_system_apply_config_updates() {
     fi
     
     milou_log "DEBUG" "Configuration updates applied"
+}
+
+# Rollback to previous state if update fails
+milou_system_rollback_update() {
+    local backup_status_file="$1"
+    local env_backup_file="$2"
+    
+    milou_log "WARN" "🔄 Attempting to rollback to previous state..."
+    
+    if [[ -f "$env_backup_file" ]]; then
+        milou_log "INFO" "📝 Restoring previous environment configuration..."
+        cp "$env_backup_file" "$SCRIPT_DIR/.env"
+        milou_log "SUCCESS" "✅ Environment restored"
+    fi
+    
+    if [[ -f "$backup_status_file" ]]; then
+        milou_log "INFO" "🐳 Attempting to restore previous container states..."
+        
+        # Stop all current containers
+        docker ps --filter "name=milou-" --format "{{.Names}}" | while read -r container; do
+            if [[ -n "$container" ]]; then
+                milou_log "DEBUG" "Stopping $container"
+                docker stop "$container" >/dev/null 2>&1 || true
+            fi
+        done
+        
+        # Try to start services normally (they should use the restored environment)
+        milou_log "INFO" "🔄 Restarting services with restored configuration..."
+        if command -v milou_docker_start >/dev/null 2>&1; then
+            milou_docker_start
+        fi
+    fi
+    
+    milou_log "INFO" "🔍 Rollback attempt completed - check service status"
+}
+
+# Enhanced update with better error handling and rollback capability
+milou_system_update_with_rollback() {
+    local force_update="${1:-false}"
+    local backup_before_update="${2:-true}"
+    local target_version="${3:-}"
+    local specific_services="${4:-}"
+    local github_token="${GITHUB_TOKEN:-}"
+    
+    milou_log "STEP" "🔄 Enhanced system update with rollback protection..."
+    
+    # Create comprehensive backup and state tracking
+    local env_backup="/tmp/milou_env_backup_$(date +%s)"
+    local status_backup="/tmp/milou_status_backup_$(date +%s)"
+    
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+        cp "$SCRIPT_DIR/.env" "$env_backup"
+    fi
+    
+    docker ps --filter "name=milou-" --format "{{.Names}}\t{{.Status}}" > "$status_backup" 2>/dev/null || true
+    
+    # Perform the update with enhanced error handling
+    if milou_system_update "$force_update" "$backup_before_update" "$target_version" "$specific_services"; then
+        milou_log "SUCCESS" "✅ Update completed successfully"
+        rm -f "$env_backup" "$status_backup"
+        return 0
+    else
+        milou_log "ERROR" "❌ Update failed - initiating rollback..."
+        milou_system_rollback_update "$status_backup" "$env_backup"
+        rm -f "$env_backup" "$status_backup"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -676,5 +1081,11 @@ export -f milou_system_validate_environment
 export -f milou_system_update
 export -f milou_system_check_for_updates
 export -f milou_system_perform_update
+export -f milou_system_selective_service_update
+export -f milou_system_full_service_update
+export -f milou_system_wait_for_service_health
 export -f milou_system_update_docker_images
-export -f milou_system_apply_config_updates 
+export -f milou_system_update_image_tags
+export -f milou_system_apply_config_updates
+export -f milou_system_rollback_update
+export -f milou_system_update_with_rollback 

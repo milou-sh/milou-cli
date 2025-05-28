@@ -320,23 +320,26 @@ _start_and_validate_services() {
 _wait_for_services_ready() {
     milou_log "INFO" "⏳ Waiting for services to be ready..."
     
-    local max_wait=180  # Maximum wait time in seconds
-    local check_interval=10  # Check every 10 seconds
+    local max_wait=120  # Reduced from 180s to 120s
+    local check_interval=3  # Reduced from 10s to 3s for faster checking
     local elapsed=0
     local ready_services=()
     local failed_services=()
     local last_status_count=0
-    local consecutive_same_status=0  # NEW: Track consecutive same status to prevent infinite loops
+    local consecutive_same_status=0
     
     milou_log "INFO" "🔍 Monitoring service startup progress..."
     milou_log "INFO" "⏱️  Startup timeout: ${max_wait}s | Check interval: ${check_interval}s"
+    
+    # Check if any containers are already running and ready before entering main loop
+    milou_log "INFO" "🚀 Initial service status check..."
     
     while [[ $elapsed -lt $max_wait ]]; do
         ready_services=()
         failed_services=()
         local current_status_count=0
         
-        # Check each service with more detailed status
+        # Check each service with optimized status checking
         local services=(
             "milou-database:Database"
             "milou-redis:Redis" 
@@ -347,179 +350,154 @@ _wait_for_services_ready() {
             "milou-nginx:Nginx"
         )
         
-        for service_info in "${services[@]}"; do
-            local container_name="${service_info%:*}"
-            local display_name="${service_info#*:}"
+        # Batch container status checks for efficiency
+        local container_statuses
+        container_statuses=$(docker inspect --format='{{.Name}};{{.State.Status}};{{.State.Health.Status}}' \
+            milou-database milou-redis milou-rabbitmq milou-backend milou-frontend milou-engine milou-nginx 2>/dev/null || echo "")
+        
+        # Process batch results
+        while IFS=';' read -r container_name container_status health_status; do
+            if [[ -z "$container_name" ]]; then continue; fi
             
-            # Check if container is running and healthy
-            local container_status
-            container_status=$(docker inspect --format='{{.State.Status}}' "$container_name" 2>/dev/null || echo "missing")
+            # Remove leading slash from container name
+            container_name="${container_name#/}"
             
-            local health_status
-            health_status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || echo "none")
+            # Find display name
+            local display_name=""
+            for service_info in "${services[@]}"; do
+                if [[ "${service_info%:*}" == "$container_name" ]]; then
+                    display_name="${service_info#*:}"
+                    break
+                fi
+            done
+            
+            if [[ -z "$display_name" ]]; then continue; fi
             
             case "$container_status" in
                 "running")
-                    if [[ "$health_status" == "healthy" ]] || [[ "$health_status" == "none" ]]; then
+                    # For services without health checks or healthy services
+                    if [[ "$health_status" == "healthy" ]] || [[ "$health_status" == "none" ]] || [[ "$health_status" == "" ]]; then
                         ready_services+=("$display_name")
                         ((current_status_count++))
                     elif [[ "$health_status" == "starting" ]]; then
-                        # Still starting, don't count as ready yet
-                        milou_log "DEBUG" "$display_name is still starting (health: $health_status)"
+                        # Still starting, check if it's been starting too long
+                        if [[ $elapsed -gt 60 ]]; then
+                            milou_log "DEBUG" "$display_name taking long to start (health: $health_status)"
+                        fi
                     else
-                        # Health check failed
-                        failed_services+=("$display_name")
-                        milou_log "DEBUG" "$display_name health check failed: $health_status"
+                        # Health check failed, but don't fail immediately
+                        if [[ $elapsed -gt 30 ]]; then
+                            failed_services+=("$display_name")
+                        fi
                     fi
                     ;;
                 "restarting")
-                    # Container is restarting, might recover
-                    milou_log "DEBUG" "$display_name is restarting..."
+                    # Allow some time for restarts
+                    if [[ $elapsed -gt 45 ]]; then
+                        failed_services+=("$display_name")
+                    fi
                     ;;
                 "exited"|"dead")
                     failed_services+=("$display_name")
-                    milou_log "DEBUG" "$display_name has exited/died"
                     ;;
                 *)
-                    # Missing or unknown status
-                    milou_log "DEBUG" "$display_name status: $container_status"
+                    # Missing or unknown status - only fail after some time
+                    if [[ $elapsed -gt 30 ]]; then
+                        milou_log "DEBUG" "$display_name status: $container_status"
+                    fi
                     ;;
             esac
-        done
+        done <<< "$container_statuses"
         
-        # NEW: Track consecutive same status to prevent infinite loops
+        # Track progress and detect stalls
         if [[ $current_status_count -eq $last_status_count ]]; then
             ((consecutive_same_status++))
         else
             consecutive_same_status=0
         fi
         
-        # NEW: Break if we're stuck in the same state for too long
-        if [[ $consecutive_same_status -gt 6 ]]; then  # 6 * 10s = 60s of no progress
-            milou_log "WARN" "⚠️  No progress detected for 60s - services may be stuck"
-            break
-        fi
-        
-        # Progress reporting - only show updates when status changes significantly
+        # Progress reporting - more frequent but less verbose
         local total_services=${#services[@]}
         local ready_count=${#ready_services[@]}
         
-        if [[ $ready_count -ne $last_status_count ]] || [[ $((elapsed % 30)) -eq 0 ]]; then
-            milou_log "INFO" "📊 Service Status ($ready_count/$total_services ready) [${elapsed}s elapsed]:"
-            
-            # Show status with color coding
-            for service_info in "${services[@]}"; do
-                local display_name="${service_info#*:}"
-                if [[ " ${ready_services[*]} " =~ " ${display_name} " ]]; then
-                    echo "   🟢 $display_name"
-                elif [[ " ${failed_services[*]} " =~ " ${display_name} " ]]; then
-                    echo "   🔴 $display_name"
-                else
-                    echo "   🟡 $display_name"
-                fi
-            done
-            echo
+        # Show progress every 15s or when status changes
+        if [[ $ready_count -ne $last_status_count ]] || [[ $((elapsed % 15)) -eq 0 ]]; then
+            if [[ $ready_count -ne $last_status_count ]]; then
+                milou_log "INFO" "📊 Service Status: $ready_count/$total_services ready [${elapsed}s elapsed]"
+                # Only show detailed status on changes
+                for service_info in "${services[@]}"; do
+                    local display_name="${service_info#*:}"
+                    if [[ " ${ready_services[*]} " =~ " ${display_name} " ]]; then
+                        echo "   🟢 $display_name"
+                    elif [[ " ${failed_services[*]} " =~ " ${display_name} " ]]; then
+                        echo "   🔴 $display_name"
+                    else
+                        echo "   🟡 $display_name"
+                    fi
+                done
+                echo
+            else
+                # Just show a progress dot for no change
+                printf "."
+            fi
             
             last_status_count=$ready_count
         fi
         
-        # Check if all services are ready
+        # SUCCESS CRITERIA: All services ready
         if [[ $ready_count -eq $total_services ]]; then
-            milou_log "SUCCESS" "✅ All services are ready!"
+            milou_log "SUCCESS" "🎉 All services are ready! ($ready_count/$total_services)"
             return 0
         fi
         
-        # NEW: Check if we have enough services running to consider success (more lenient)
-        if [[ $ready_count -ge $((total_services - 1)) ]] && [[ $elapsed -gt 60 ]]; then
-            milou_log "SUCCESS" "✅ Most services are ready ($ready_count/$total_services)"
-            milou_log "INFO" "💡 Continuing with partial service readiness"
-            return 0
+        # EARLY SUCCESS: Most critical services ready (more aggressive)
+        if [[ $ready_count -ge 5 ]] && [[ $elapsed -gt 30 ]]; then
+            # Check if we have the core services (database, redis, backend, nginx)
+            local core_ready=0
+            for core_service in "Database" "Redis" "Backend" "Nginx"; do
+                if [[ " ${ready_services[*]} " =~ " ${core_service} " ]]; then
+                    ((core_ready++))
+                fi
+            done
+            
+            if [[ $core_ready -ge 3 ]]; then
+                milou_log "SUCCESS" "✅ Core services ready ($ready_count/$total_services) - continuing"
+                milou_log "INFO" "💡 Remaining services will continue starting in background"
+                return 0
+            fi
         fi
         
-        # Check if we have critical failures
-        if [[ ${#failed_services[@]} -gt 3 ]]; then
-            milou_log "ERROR" "❌ Too many service failures: ${failed_services[*]}"
+        # TIMEOUT for no progress
+        if [[ $consecutive_same_status -gt 10 ]]; then  # 10 * 3s = 30s of no progress
+            milou_log "WARN" "⚠️  No progress for 30s - services may be stuck"
             break
         fi
         
-        # Provide helpful tips periodically
-        if [[ $((elapsed % 60)) -eq 30 ]] && [[ $elapsed -gt 30 ]]; then
-            milou_log "INFO" "🔧 Still waiting... Common issues to check:"
-            echo "   • SSL certificate problems (nginx)"
-            echo "   • Port conflicts (check with: netstat -tuln)"
-            echo "   • Container resource limits"
-            echo "   • GitHub token authentication"
-            if [[ $elapsed -gt 90 ]]; then
-                echo "   • Check logs: docker compose logs"
-            fi
+        # EARLY FAILURE: Too many failures
+        if [[ ${#failed_services[@]} -gt 2 ]] && [[ $elapsed -gt 60 ]]; then
+            milou_log "ERROR" "❌ Multiple service failures: ${failed_services[*]}"
+            break
         fi
         
         sleep $check_interval
         elapsed=$((elapsed + check_interval))
     done
     
-    # Timeout reached or stuck detected
+    # Final status report
     local ready_count=${#ready_services[@]}
     local total_services=${#services[@]}
     
-    if [[ $ready_count -gt 0 ]]; then
-        milou_log "WARN" "⚠️  Services did not become fully ready within ${max_wait}s"
-        milou_log "INFO" "📋 Final Status: $ready_count/$total_services services ready"
+    if [[ $ready_count -ge 4 ]]; then  # At least 4 services ready is probably workable
+        milou_log "WARN" "⚠️  Partial startup completed: $ready_count/$total_services services ready"
         milou_log "INFO" "✅ Ready: ${ready_services[*]}"
         if [[ ${#failed_services[@]} -gt 0 ]]; then
             milou_log "WARN" "❌ Issues: ${failed_services[*]}"
         fi
-    else
-        milou_log "ERROR" "❌ No services became ready within ${max_wait}s"
-        milou_log "ERROR" "This indicates a serious configuration or environment issue"
-    fi
-    
-    echo
-    milou_log "INFO" "🔧 Troubleshooting Commands:"
-    echo "   • Check all logs:         docker compose logs"
-    echo "   • Check specific service: docker logs milou-<service>"
-    echo "   • Check container status: docker ps -a"
-    echo "   • Test direct access:     curl http://localhost:80"
-    echo "   • Nginx SSL logs:         docker logs milou-nginx"
-    echo "   • Check SSL certificates: ls -la ssl/ && openssl x509 -in ssl/milou.crt -text -noout"
-    
-    # Quick diagnostics
-    milou_log "INFO" "🔍 Quick Diagnostics:"
-    
-    # Check SSL certificates
-    if [[ -f "./ssl/milou.crt" && -f "./ssl/milou.key" ]]; then
-        echo "   ✅ SSL certificates exist and are readable"
-    else
-        echo "   ❌ SSL certificate issues detected"
-    fi
-    
-    # Check for port conflicts
-    local port_conflicts=0
-    local critical_ports=("80" "443" "5432" "6379")
-    for port in "${critical_ports[@]}"; do
-        if netstat -tlnp 2>/dev/null | grep -q ":$port "; then
-            ((port_conflicts++))
-        fi
-    done
-    
-    if [[ $port_conflicts -eq 0 ]]; then
-        echo "   ❌ No critical ports appear to be in use (unexpected)"
-    else
-        echo "   ✅ Critical ports are in use as expected"
-    fi
-    
-    # Check running containers
-    local running_containers
-    running_containers=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
-    echo "   📊 Running containers: $running_containers"
-    
-    echo
-    milou_log "INFO" "💡 Many services continue starting in background. Try accessing the web interface."
-    
-    # Return success if we have some core services running
-    if [[ $ready_count -ge 3 ]]; then  # At least database, redis, backend
+        milou_log "INFO" "💡 Application may still be functional - check web interface"
         return 0
     else
+        milou_log "ERROR" "❌ Insufficient services ready: $ready_count/$total_services"
+        milou_log "ERROR" "This indicates a serious configuration issue"
         return 1
     fi
 }
@@ -1081,6 +1059,7 @@ export -f _start_and_validate_services
 export -f _wait_for_services_ready
 export -f _validate_service_health
 export -f _generate_success_report
+export -f _setup_display_completion_with_credentials
 export -f _validate_credential_volume_consistency
 export -f _quick_volume_credential_check
 export -f _test_database_credentials

@@ -184,7 +184,9 @@ show_help() {
     printf "    $(basename "$0") [COMMAND] [OPTIONS]\n\n"
 
     printf "${bold}COMMANDS:${nc}\n"
-    printf "    ${cyan}setup${nc}             Interactive setup wizard (recommended for first-time setup)\n"
+    printf "    ${cyan}setup${nc}             Interactive setup wizard (recommended for first-time setup)\n\n"
+    
+    printf "    ${bold}🚀 Service Management:${nc}\n"
     printf "    ${cyan}start${nc}             Start all services\n"
     printf "    ${cyan}stop${nc}              Stop all services\n"
     printf "    ${cyan}restart${nc}           Restart all services\n"
@@ -193,26 +195,42 @@ show_help() {
     printf "    ${cyan}logs${nc} [SERVICE]    View logs for all or specific service\n"
     printf "    ${cyan}health${nc}            Run comprehensive health checks\n"
     printf "    ${cyan}health-check${nc}      Quick health check for running services\n"
+    printf "    ${cyan}shell${nc} [SERVICE]   Get shell access to a running container\n\n"
+    
+    printf "    ${bold}⚙️  System Configuration:${nc}\n"
     printf "    ${cyan}config${nc}            View current configuration\n"
     printf "    ${cyan}validate${nc}          Validate configuration and environment\n"
-    printf "    ${cyan}backup${nc}            Create system backup\n"
-    printf "    ${cyan}restore${nc} [FILE]    Restore from backup file\n"
-    printf "    ${cyan}update${nc}            Update to latest version\n"
     printf "    ${cyan}ssl${nc}               Manage SSL certificates\n"
     printf "    ${cyan}cleanup${nc}           Clean up Docker resources\n"
-    printf "    ${cyan}uninstall${nc}         Complete removal of Milou (DESTRUCTIVE)\n"
-    printf "    ${cyan}shell${nc} [SERVICE]   Get shell access to a running container\n"
-    printf "    ${cyan}debug-images${nc}      Debug Docker image availability (troubleshooting)\n"
-    printf "    ${cyan}diagnose${nc}          Run comprehensive Docker environment diagnosis\n"
+    printf "    ${cyan}uninstall${nc}         Complete removal of Milou (DESTRUCTIVE)\n\n"
+    
+    printf "    ${bold}💾 Backup & Restore:${nc}\n"
+    printf "    ${cyan}backup${nc} [TYPE]     Create system backup (full, config, data, ssl)\n"
+    printf "    ${cyan}restore${nc} [FILE]    Restore from backup file\n"
+    printf "    ${cyan}list-backups${nc}      List available backup files\n\n"
+    
+    printf "    ${bold}🔄 Updates:${nc}\n"
+    printf "    ${cyan}update${nc}            Update system to latest version\n"
+    printf "    ${cyan}update-cli${nc}        Update the CLI tool itself\n"
+    printf "    ${cyan}update-status${nc}     Check system update status\n"
+    printf "    ${cyan}rollback${nc}          Rollback last system update\n\n"
+    
+    printf "    ${bold}👤 Admin Management:${nc}\n"
+    printf "    ${cyan}admin${nc} [SUBCOMMAND] Admin management (credentials, reset, create, validate)\n\n"
+    
+    printf "    ${bold}👥 User & Security:${nc}\n"
     printf "    ${cyan}user-status${nc}       Show current user and permission status\n"
     printf "    ${cyan}create-user${nc}       Create dedicated milou user (requires sudo)\n"
     printf "    ${cyan}migrate-user${nc}      Migrate existing installation to milou user\n"
     printf "    ${cyan}security-check${nc}    Run comprehensive security assessment\n"
     printf "    ${cyan}security-harden${nc}   Apply security hardening measures (requires sudo)\n"
-    printf "    ${cyan}security-report${nc}   Generate detailed security report\n"
+    printf "    ${cyan}security-report${nc}   Generate detailed security report\n\n"
+    
+    printf "    ${bold}🛠️  Development & Debugging:${nc}\n"
+    printf "    ${cyan}debug-images${nc}      Debug Docker image availability (troubleshooting)\n"
+    printf "    ${cyan}diagnose${nc}          Run comprehensive Docker environment diagnosis\n"
     printf "    ${cyan}install-deps${nc}      Install system dependencies (Docker, tools, etc.)\n"
-    printf "    ${cyan}build-images${nc}      Build Docker images locally for development\n"
-    printf "    ${cyan}admin${nc}             Admin management (credentials, reset)\n"
+    printf "    ${cyan}build-images${nc}      Build Docker images locally for development\n\n"
 
     printf "    ${cyan}help${nc}              Show this help message\n\n"
 
@@ -451,6 +469,18 @@ main() {
     # Enhanced command routing with modular system
     milou_log "DEBUG" "Before command routing: GITHUB_TOKEN=${GITHUB_TOKEN:-NOT_SET} (length: ${#GITHUB_TOKEN})"
     
+    # Handle help commands first
+    case "$command" in
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            # Load command on-demand and execute
+            milou_load_and_execute_command "$command" "${remaining_args[@]}"
+            ;;
+    esac
+}
+
 # Load command on-demand and execute
 milou_load_and_execute_command() {
     local cmd="$1"
@@ -466,7 +496,7 @@ milou_load_and_execute_command() {
     local commands_dir="${SCRIPT_DIR}/commands"
     local handler_function="handle_${cmd//-/_}"
     
-    # Map commands to their handler files
+    # Map commands to their handler files - UPDATED WITH NEW MODULAR COMMANDS
     local handler_file=""
     case "$cmd" in
         setup)
@@ -475,7 +505,18 @@ milou_load_and_execute_command() {
         start|stop|restart|status|detailed-status|logs|health|health-check|shell|debug-images)
             handler_file="docker-services.sh"
             ;;
-        config|validate|backup|restore|update|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|build-images|admin)
+        # NEW MODULAR COMMANDS
+        backup|restore|list-backups)
+            handler_file="backup.sh"
+            ;;
+        update|update-cli|update-status|rollback)
+            handler_file="update.sh"
+            ;;
+        admin)
+            handler_file="admin.sh"
+            ;;
+        # REMAINING LEGACY COMMANDS
+        config|validate|ssl|cleanup|uninstall|cleanup-test-files|install-deps|diagnose|build-images)
             handler_file="system.sh"
             ;;
         user-status|create-user|migrate-user|security-check|security-harden|security-report)
@@ -483,6 +524,7 @@ milou_load_and_execute_command() {
             ;;
         *)
             milou_log "ERROR" "Unknown command: $cmd"
+            show_available_commands
             return 1
             ;;
     esac
@@ -508,19 +550,37 @@ milou_load_and_execute_command() {
             handle_"$cmd" "${args[@]}"
         else
             milou_log "ERROR" "No handler available for command: $cmd"
+            show_available_commands
             exit 1
         fi
     fi
 }
 
-    case "$command" in
-        help|--help|-h)
-            show_help
-            ;;
-        *)
-            milou_load_and_execute_command "$command" "${remaining_args[@]}"
-            ;;
-    esac
+# Show available commands when unknown command is used
+show_available_commands() {
+    echo ""
+    echo "📋 Available Commands:"
+    echo "======================"
+    echo ""
+    echo "🚀 Service Management:"
+    echo "  start, stop, restart, status, logs, health"
+    echo ""
+    echo "⚙️  System Management:"
+    echo "  setup, config, validate, ssl, cleanup"
+    echo ""
+    echo "💾 Backup & Restore:"
+    echo "  backup, restore, list-backups"
+    echo ""
+    echo "🔄 Updates:"
+    echo "  update, update-cli, update-status, rollback"
+    echo ""
+    echo "👤 Admin Management:"
+    echo "  admin"
+    echo ""
+    echo "👥 User Management:"
+    echo "  user-status, create-user, security-check"
+    echo ""
+    echo "💡 For help on any command: ./milou.sh [command] --help"
 }
 
 # =============================================================================

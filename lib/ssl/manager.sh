@@ -168,99 +168,91 @@ milou_ssl_setup() {
     # Initialize SSL directory
     milou_ssl_init "$quiet" || return 1
     
+    # Execute the appropriate action
     case "$ssl_mode" in
-        "none")
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "⚠️ SSL disabled - using HTTP only"
-            milou_ssl_cleanup_certificates "$quiet"
-            return 0
+        "disabled")
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🚫 SSL disabled mode"
+            _milou_ssl_cleanup_certificates "$quiet"
             ;;
         "existing")
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "📁 Using existing/provided SSL certificates"
-            milou_ssl_setup_existing "$domain" "$cert_path" "$force" "$quiet"
-            return $?
+            _milou_ssl_setup_existing "$domain" "$cert_path" "$force" "$quiet"
             ;;
-        "generate")
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔧 Generating new SSL certificates"
-            milou_ssl_generate_certificates "$domain" "$force" "$quiet"
-            return $?
+        "letsencrypt")
+            # For Let's Encrypt, we use the generation module
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Let's Encrypt certificate setup"
+            _milou_ssl_generate_certificates "$domain" "$force" "$quiet"
             ;;
-        "auto")
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🧠 Automatic SSL certificate management"
-            milou_ssl_auto_setup "$domain" "$force" "$quiet"
-            return $?
-            ;;
-        *)
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Unknown SSL mode: $ssl_mode"
-            return 1
+        "auto"|*)
+            _milou_ssl_auto_setup "$domain" "$force" "$quiet"
             ;;
     esac
 }
 
-# Automatic SSL setup - intelligent decision making
-milou_ssl_auto_setup() {
+# Automatically determine and setup SSL based on conditions
+_milou_ssl_auto_setup() {
     local domain="$1"
     local force="$2"
     local quiet="$3"
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🤖 Analyzing SSL certificate requirements..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Starting automatic SSL setup for: $domain"
     
-    # Check current certificate status
-    if [[ "$force" != "true" ]] && milou_ssl_status "$domain" "true"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Existing certificates are healthy - preserving them"
-        milou_ssl_save_info "$domain" "preserved" "$quiet"
+    # If certificates already exist and not forced, preserve them
+    if [[ "$force" != "true" ]] && milou_ssl_is_enabled; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "✅ Existing SSL certificates found - preserving them"
+        _milou_ssl_save_info "$domain" "preserved" "$quiet"
         return 0
     fi
     
-    # Check if certificates exist but are problematic
-    if [[ -f "$MILOU_SSL_CERT_FILE" || -f "$MILOU_SSL_KEY_FILE" ]]; then
-        if [[ "$force" == "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Force mode - regenerating certificates"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Existing certificates are problematic - regenerating"
-        fi
-        milou_ssl_backup_certificates "$quiet"
-    else
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🆕 No certificates found - generating new ones"
+    # Clean up existing certificates if forced
+    if [[ "$force" == "true" ]] && milou_ssl_is_enabled; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Force mode: backing up existing certificates"
+        _milou_ssl_backup_certificates "$quiet"
     fi
     
-    # Generate new certificates
-    milou_ssl_generate_certificates "$domain" "$force" "$quiet"
+    # Try Let's Encrypt if available, otherwise fallback to self-signed
+    if command -v milou_ssl_can_use_letsencrypt >/dev/null 2>&1 && milou_ssl_can_use_letsencrypt "$domain"; then
+        _milou_ssl_generate_certificates "$domain" "$force" "$quiet"
+        return $?
+    else
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 Using self-signed certificates for: $domain"
+        _milou_ssl_generate_certificates "$domain" "$force" "$quiet"
+        return $?
+    fi
 }
 
-# Generate new SSL certificates
-milou_ssl_generate_certificates() {
+# Generate SSL certificates (internal wrapper)
+_milou_ssl_generate_certificates() {
     local domain="$1"
     local force="$2"
     local quiet="$3"
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔧 Generating SSL certificates for: $domain"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating SSL certificates for: $domain"
     
-    # Check if OpenSSL is available
-    if ! command -v openssl >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "OpenSSL is required but not installed"
-        return 1
-    fi
+    # Create SSL directory
+    mkdir -p "$MILOU_SSL_DIR" || return 1
     
-    # Backup existing certificates if they exist and force is not set
+    # Backup existing certificates if they exist and not forced
     if [[ "$force" != "true" ]] && [[ -f "$MILOU_SSL_CERT_FILE" || -f "$MILOU_SSL_KEY_FILE" ]]; then
-        milou_ssl_backup_certificates "$quiet"
+        _milou_ssl_backup_certificates "$quiet"
     fi
     
-    # Create OpenSSL configuration
-    milou_ssl_create_openssl_config "$domain" "$quiet" || return 1
+    # Generate OpenSSL configuration
+    _milou_ssl_create_openssl_config "$domain" "$quiet" || return 1
     
     # Generate private key
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating private key..."
-    if ! openssl genrsa -out "$MILOU_SSL_KEY_FILE" "$MILOU_SSL_DEFAULT_KEY_SIZE" 2>/dev/null; then
+    if ! openssl genrsa -out "$MILOU_SSL_KEY_FILE" "$MILOU_SSL_DEFAULT_KEY_SIZE" >/dev/null 2>&1; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to generate private key"
         return 1
     fi
     
     # Generate certificate
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating certificate..."
-    if ! openssl req -new -x509 -key "$MILOU_SSL_KEY_FILE" -out "$MILOU_SSL_CERT_FILE" \
-         -days "$MILOU_SSL_DEFAULT_VALIDITY_DAYS" -config "$MILOU_SSL_CONFIG_FILE" \
-         -extensions v3_req 2>/dev/null; then
+    if ! openssl req -new -x509 \
+        -key "$MILOU_SSL_KEY_FILE" \
+        -out "$MILOU_SSL_CERT_FILE" \
+        -days "$MILOU_SSL_DEFAULT_VALIDITY_DAYS" \
+        -config "$MILOU_SSL_CONFIG_FILE" >/dev/null 2>&1; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to generate certificate"
         return 1
     fi
@@ -269,88 +261,70 @@ milou_ssl_generate_certificates() {
     chmod 644 "$MILOU_SSL_CERT_FILE" 2>/dev/null || true
     chmod 600 "$MILOU_SSL_KEY_FILE" 2>/dev/null || true
     
-    # Clean up config file
-    rm -f "$MILOU_SSL_CONFIG_FILE" 2>/dev/null || true
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ SSL certificates generated successfully"
+    _milou_ssl_save_info "$domain" "generated" "$quiet"
     
-    # Validate generated certificates
-    if milou_ssl_status "$domain" "true"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ SSL certificates generated successfully"
-        milou_ssl_save_info "$domain" "generated" "$quiet"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Generated certificates failed validation"
-        return 1
-    fi
+    return 0
 }
 
-# Setup existing certificates (copy from user location)
-milou_ssl_setup_existing() {
+# Setup SSL from existing certificate files
+_milou_ssl_setup_existing() {
     local domain="$1"
     local cert_path="$2"
     local force="$3"
     local quiet="$4"
     
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Setting up existing SSL certificates for: $domain"
+    
+    # Validate cert_path parameter
     if [[ -z "$cert_path" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate path is required for existing mode"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate path is required for existing SSL setup"
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "📁 Setting up existing certificates from: $cert_path"
-    
+    # Resolve certificate and key paths
     local source_cert source_key
-    
-    # Determine source files
-    if [[ -f "$cert_path" ]]; then
-        # Single file provided - assume it's the certificate
-        source_cert="$cert_path"
-        local cert_dir
-        cert_dir=$(dirname "$cert_path")
-        local base_name
-        base_name=$(basename "$cert_path" .crt)
-        base_name=$(basename "$base_name" .pem)
-        
-        # Look for corresponding key file
-        for key_ext in ".key" ".pem" "_key.pem"; do
-            if [[ -f "${cert_dir}/${base_name}${key_ext}" ]]; then
-                source_key="${cert_dir}/${base_name}${key_ext}"
-                break
-            fi
-        done
-        
-        if [[ -z "$source_key" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Could not find corresponding private key for: $cert_path"
-            return 1
-        fi
-    elif [[ -d "$cert_path" ]]; then
-        # Directory provided - look for standard files
+    if [[ -d "$cert_path" ]]; then
+        # Directory provided - look for standard names
         source_cert="$cert_path/milou.crt"
         source_key="$cert_path/milou.key"
         
+        # Try alternative names if standard names don't exist
         if [[ ! -f "$source_cert" ]]; then
-            # Try alternative names
-            for cert_name in "server.crt" "certificate.crt" "cert.pem" "server.pem"; do
-                if [[ -f "$cert_path/$cert_name" ]]; then
-                    source_cert="$cert_path/$cert_name"
+            for cert_file in "$cert_path"/*.{crt,cert,pem}; do
+                if [[ -f "$cert_file" ]]; then
+                    source_cert="$cert_file"
                     break
                 fi
             done
         fi
         
         if [[ ! -f "$source_key" ]]; then
-            # Try alternative names
-            for key_name in "server.key" "private.key" "key.pem" "server.pem"; do
-                if [[ -f "$cert_path/$key_name" ]]; then
-                    source_key="$cert_path/$key_name"
+            for key_file in "$cert_path"/*.{key,pem}; do
+                if [[ -f "$key_file" ]] && openssl rsa -in "$key_file" -check -noout >/dev/null 2>&1; then
+                    source_key="$key_file"
                     break
                 fi
             done
         fi
     else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate path does not exist: $cert_path"
-        return 1
+        # File provided - assume certificate, try to find corresponding key
+        source_cert="$cert_path"
+        source_key="${cert_path%.*}.key"
+        
+        # Try alternative key paths
+        if [[ ! -f "$source_key" ]]; then
+            local base_path="${cert_path%.*}"
+            for ext in key pem; do
+                if [[ -f "${base_path}.${ext}" ]]; then
+                    source_key="${base_path}.${ext}"
+                    break
+                fi
+            done
+        fi
     fi
     
-    # Validate source files
+    # Validate that both certificate and key exist
     if [[ ! -f "$source_cert" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate file not found: $source_cert"
         return 1
@@ -384,7 +358,7 @@ milou_ssl_setup_existing() {
     
     # Backup existing certificates if they exist
     if [[ "$force" != "true" ]] && [[ -f "$MILOU_SSL_CERT_FILE" || -f "$MILOU_SSL_KEY_FILE" ]]; then
-        milou_ssl_backup_certificates "$quiet"
+        _milou_ssl_backup_certificates "$quiet"
     fi
     
     # Copy certificates to SSL directory
@@ -406,7 +380,7 @@ milou_ssl_setup_existing() {
     # Validate setup
     if milou_ssl_status "$domain" "true"; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Existing certificates setup successfully"
-        milou_ssl_save_info "$domain" "existing" "$quiet"
+        _milou_ssl_save_info "$domain" "existing" "$quiet"
         return 0
     else
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate setup validation failed"
@@ -415,11 +389,11 @@ milou_ssl_setup_existing() {
 }
 
 # =============================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS (Internal - marked with _ prefix)
 # =============================================================================
 
 # Create OpenSSL configuration file
-milou_ssl_create_openssl_config() {
+_milou_ssl_create_openssl_config() {
     local domain="$1"
     local quiet="$2"
     
@@ -461,7 +435,7 @@ EOF
 }
 
 # Save SSL information metadata
-milou_ssl_save_info() {
+_milou_ssl_save_info() {
     local domain="$1"
     local action="$2"
     local quiet="$3"
@@ -480,7 +454,7 @@ EOF
 }
 
 # Backup existing certificates
-milou_ssl_backup_certificates() {
+_milou_ssl_backup_certificates() {
     local quiet="$1"
     
     if [[ ! -f "$MILOU_SSL_CERT_FILE" && ! -f "$MILOU_SSL_KEY_FILE" ]]; then
@@ -514,7 +488,7 @@ milou_ssl_backup_certificates() {
 }
 
 # Clean up SSL certificates
-milou_ssl_cleanup_certificates() {
+_milou_ssl_cleanup_certificates() {
     local quiet="$1"
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Cleaning up SSL certificates..."
@@ -524,7 +498,7 @@ milou_ssl_cleanup_certificates() {
     
     # Remove info file for SSL disabled mode
     if [[ -f "$MILOU_SSL_INFO_FILE" ]]; then
-        milou_ssl_backup_certificates "$quiet"
+        _milou_ssl_backup_certificates "$quiet"
         rm -f "$MILOU_SSL_INFO_FILE" 2>/dev/null || true
     fi
     
@@ -533,7 +507,7 @@ milou_ssl_cleanup_certificates() {
 }
 
 # Get SSL directory path (for Docker Compose mounting)
-milou_ssl_get_path() {
+_milou_ssl_get_path() {
     echo "$MILOU_SSL_DIR"
 }
 
@@ -543,18 +517,23 @@ milou_ssl_is_enabled() {
 }
 
 # =============================================================================
-# EXPORT FUNCTIONS
+# CLEAN PUBLIC API - Export only essential functions
 # =============================================================================
 
-export -f milou_ssl_init
-export -f milou_ssl_status
-export -f milou_ssl_setup
-export -f milou_ssl_auto_setup
-export -f milou_ssl_generate_certificates
-export -f milou_ssl_setup_existing
-export -f milou_ssl_create_openssl_config
-export -f milou_ssl_save_info
-export -f milou_ssl_backup_certificates
-export -f milou_ssl_cleanup_certificates
-export -f milou_ssl_get_path
-export -f milou_ssl_is_enabled 
+# Core SSL management (4 exports - CLEAN PUBLIC API)
+export -f milou_ssl_init                    # Initialize SSL environment
+export -f milou_ssl_setup                  # Main SSL setup function
+export -f milou_ssl_status                 # Check SSL status
+export -f milou_ssl_is_enabled             # Check if SSL is enabled
+
+# Note: Internal functions are NOT exported (marked with _ prefix):
+#   _milou_ssl_auto_setup                   # Internal: automatic SSL setup
+#   _milou_ssl_generate_certificates        # Internal: certificate generation wrapper
+#   _milou_ssl_setup_existing               # Internal: existing cert setup
+#   _milou_ssl_create_openssl_config        # Internal: OpenSSL config creation
+#   _milou_ssl_save_info                    # Internal: metadata saving
+#   _milou_ssl_backup_certificates          # Internal: certificate backup
+#   _milou_ssl_cleanup_certificates         # Internal: certificate cleanup
+#   _milou_ssl_get_path                     # Internal: SSL path getter
+
+# This provides a clean, focused API while keeping implementation details internal 

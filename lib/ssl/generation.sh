@@ -27,7 +27,7 @@ fi
 # =============================================================================
 
 # Generate localhost development certificate
-milou_ssl_generate_localhost_certificate() {
+_milou_ssl_generate_localhost_certificate() {
     local ssl_path="$1"
     local cert_file="$ssl_path/milou.crt"
     local key_file="$ssl_path/milou.key"
@@ -95,7 +95,7 @@ EOF
 }
 
 # Generate production self-signed certificate
-milou_ssl_generate_production_certificate() {
+_milou_ssl_generate_production_certificate() {
     local ssl_path="$1"
     local domain="$2"
     local cert_file="$ssl_path/milou.crt"
@@ -163,7 +163,7 @@ EOF
 }
 
 # Generate minimal fallback certificate
-milou_ssl_generate_minimal_certificate() {
+_milou_ssl_generate_minimal_certificate() {
     local ssl_path="$1"
     local domain="${2:-localhost}"
     local cert_file="$ssl_path/milou.crt"
@@ -200,9 +200,9 @@ milou_ssl_generate_self_signed_certificate() {
     local domain="${2:-localhost}"
     
     if [[ "$domain" == "localhost" ]]; then
-        milou_ssl_generate_localhost_certificate "$ssl_path"
+        _milou_ssl_generate_localhost_certificate "$ssl_path"
     else
-        milou_ssl_generate_production_certificate "$ssl_path" "$domain"
+        _milou_ssl_generate_production_certificate "$ssl_path" "$domain"
     fi
 }
 
@@ -229,7 +229,7 @@ milou_ssl_can_use_letsencrypt() {
 }
 
 # Check if port 80 is available or nginx is running
-milou_ssl_check_port_80_status() {
+_milou_ssl_check_port_80_status() {
     local port_check_result=""
     
     # Check if port 80 is occupied
@@ -271,7 +271,7 @@ milou_ssl_generate_letsencrypt_certificate() {
     
     # Check port 80 status to determine mode
     local port_status
-    milou_ssl_check_port_80_status
+    _milou_ssl_check_port_80_status
     port_status=$?
     
     local cert_success=false
@@ -282,7 +282,7 @@ milou_ssl_generate_letsencrypt_certificate() {
             # Port 80 available - use standalone mode
             milou_log "INFO" "🔧 Using standalone mode (port 80 available)"
             cert_method="standalone"
-            if milou_ssl_generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
+            if _milou_ssl_generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
                 cert_success=true
             fi
             ;;
@@ -290,7 +290,7 @@ milou_ssl_generate_letsencrypt_certificate() {
             # Nginx running - stop containers and use standalone mode
             milou_log "INFO" "🐳 Nginx detected - stopping containers for certificate generation"
             cert_method="standalone-with-stop"
-            if milou_ssl_generate_letsencrypt_with_nginx_stop "$ssl_path" "$domain" "$email"; then
+            if _milou_ssl_generate_letsencrypt_with_nginx_stop "$ssl_path" "$domain" "$email"; then
                 cert_success=true
             fi
             ;;
@@ -314,13 +314,13 @@ milou_ssl_generate_letsencrypt_certificate() {
         return 0
     else
         milou_log "ERROR" "❌ Certificate generation failed"
-        milou_ssl_show_letsencrypt_troubleshooting "$domain"
+        _milou_ssl_show_letsencrypt_troubleshooting "$domain"
         return 1
     fi
 }
 
 # Generate certificate using standalone mode
-milou_ssl_generate_letsencrypt_standalone() {
+_milou_ssl_generate_letsencrypt_standalone() {
     local ssl_path="$1"
     local domain="$2"
     local email="$3"
@@ -335,7 +335,7 @@ milou_ssl_generate_letsencrypt_standalone() {
         --domains "$domain" \
         --preferred-challenges http >/dev/null 2>&1; then
         
-        milou_ssl_copy_letsencrypt_certificates "$ssl_path" "$domain"
+        _milou_ssl_copy_letsencrypt_certificates "$ssl_path" "$domain"
         return $?
     else
         milou_log "DEBUG" "Standalone mode failed"
@@ -344,7 +344,7 @@ milou_ssl_generate_letsencrypt_standalone() {
 }
 
 # Generate certificate by temporarily stopping nginx
-milou_ssl_generate_letsencrypt_with_nginx_stop() {
+_milou_ssl_generate_letsencrypt_with_nginx_stop() {
     local ssl_path="$1"
     local domain="$2"
     local email="$3"
@@ -362,7 +362,7 @@ milou_ssl_generate_letsencrypt_with_nginx_stop() {
     
     # Generate certificate
     local cert_result=false
-    if milou_ssl_generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
+    if _milou_ssl_generate_letsencrypt_standalone "$ssl_path" "$domain" "$email"; then
         cert_result=true
     fi
     
@@ -382,7 +382,7 @@ milou_ssl_generate_letsencrypt_with_nginx_stop() {
 }
 
 # Copy Let's Encrypt certificates to our SSL path
-milou_ssl_copy_letsencrypt_certificates() {
+_milou_ssl_copy_letsencrypt_certificates() {
     local ssl_path="$1"
     local domain="$2"
     
@@ -441,7 +441,7 @@ milou_ssl_install_certbot() {
 }
 
 # Show Let's Encrypt troubleshooting information
-milou_ssl_show_letsencrypt_troubleshooting() {
+_milou_ssl_show_letsencrypt_troubleshooting() {
     local domain="$1"
     
     echo
@@ -461,21 +461,23 @@ milou_ssl_show_letsencrypt_troubleshooting() {
 }
 
 # =============================================================================
-# Module Exports
+# CLEAN PUBLIC API - Export only essential functions  
 # =============================================================================
 
-# Self-signed certificate generation
-export -f milou_ssl_generate_localhost_certificate
-export -f milou_ssl_generate_production_certificate
-export -f milou_ssl_generate_minimal_certificate
-export -f milou_ssl_generate_self_signed_certificate
+# Core SSL certificate generation (4 exports - CLEAN PUBLIC API)
+export -f milou_ssl_generate_self_signed_certificate    # Generate self-signed certificate
+export -f milou_ssl_generate_letsencrypt_certificate    # Generate Let's Encrypt certificate  
+export -f milou_ssl_can_use_letsencrypt                 # Check Let's Encrypt availability
+export -f milou_ssl_install_certbot                     # Install certbot dependency
 
-# Let's Encrypt functions
-export -f milou_ssl_can_use_letsencrypt
-export -f milou_ssl_check_port_80_status
-export -f milou_ssl_generate_letsencrypt_certificate
-export -f milou_ssl_generate_letsencrypt_standalone
-export -f milou_ssl_generate_letsencrypt_with_nginx_stop
-export -f milou_ssl_copy_letsencrypt_certificates
-export -f milou_ssl_install_certbot
-export -f milou_ssl_show_letsencrypt_troubleshooting 
+# Note: Internal functions are NOT exported (marked with _ prefix):
+#   _milou_ssl_generate_localhost_certificate    # Internal: localhost cert generation
+#   _milou_ssl_generate_production_certificate   # Internal: production cert generation  
+#   _milou_ssl_generate_minimal_certificate      # Internal: minimal cert generation
+#   _milou_ssl_check_port_80_status              # Internal: port 80 availability check
+#   _milou_ssl_generate_letsencrypt_standalone   # Internal: standalone mode implementation
+#   _milou_ssl_generate_letsencrypt_with_nginx_stop # Internal: nginx stop implementation
+#   _milou_ssl_copy_letsencrypt_certificates     # Internal: certificate copy helper
+#   _milou_ssl_show_letsencrypt_troubleshooting  # Internal: troubleshooting helper
+
+# This provides a clean, focused API while keeping implementation details internal 

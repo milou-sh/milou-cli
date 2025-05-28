@@ -1,4 +1,4 @@
-# Milou CLI - Enterprise Management Tool
+# Milou CLI - Powerfull Docker Management Tool
 
 **Version 3.1.0** - Production-Ready with Critical Fixes
 

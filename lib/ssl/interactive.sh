@@ -629,23 +629,25 @@ milou_ssl_show_help() {
 }
 
 # =============================================================================
-# Module Exports
+# CLEAN PUBLIC API - Export only essential functions
 # =============================================================================
 
-# Main interactive functions
-export -f milou_ssl_setup_interactive_enhanced
-export -f milou_ssl_setup_wizard
-export -f milou_ssl_certificate_type_wizard
-export -f milou_ssl_setup_letsencrypt
-export -f milou_ssl_setup_self_signed
-export -f milou_ssl_setup_import_existing
-export -f milou_ssl_setup_complete
+# Core SSL interactive functions (4 exports - CLEAN PUBLIC API)
+export -f milou_ssl_setup_interactive_enhanced    # Main interactive SSL setup
+export -f milou_ssl_validate_enhanced             # Enhanced SSL validation
+export -f milou_ssl_backup_container_enhanced     # Container backup with validation
+export -f milou_ssl_show_help                     # SSL help system
 
-# Utility functions
-export -f milou_ssl_get_appropriate_ssl_path
-export -f milou_ssl_validate_enhanced
-export -f milou_ssl_backup_container_enhanced
-export -f milou_ssl_inject_enhanced
-export -f milou_ssl_show_container_status
-export -f milou_ssl_restart_nginx
-export -f milou_ssl_show_help 
+# Note: Internal functions are NOT exported (marked with _ prefix):
+#   _milou_ssl_setup_wizard                       # Internal: setup wizard implementation
+#   _milou_ssl_certificate_type_wizard            # Internal: certificate type selection
+#   _milou_ssl_setup_letsencrypt                  # Internal: Let's Encrypt setup
+#   _milou_ssl_setup_self_signed                  # Internal: self-signed setup
+#   _milou_ssl_setup_import_existing              # Internal: existing cert import
+#   _milou_ssl_setup_complete                     # Internal: setup completion
+#   _milou_ssl_get_appropriate_ssl_path           # Internal: SSL path resolution
+#   _milou_ssl_inject_enhanced                    # Internal: certificate injection
+#   _milou_ssl_show_container_status              # Internal: container status display
+#   _milou_ssl_restart_nginx                      # Internal: nginx restart helper
+
+# This provides a clean, focused API while keeping implementation details internal 

@@ -384,18 +384,18 @@ milou_ssl_backup_certificates() {
 }
 
 # =============================================================================
-# Module Exports
+# CLEAN PUBLIC API - Export only essential functions
 # =============================================================================
 
-# SSL validation functions
-export -f milou_ssl_validate_certificates
-export -f milou_ssl_validate_cert_key_pair
-export -f milou_ssl_check_expiration
-export -f milou_ssl_validate_certificate_domain
+# Core SSL validation and utility functions (3 exports - CLEAN PUBLIC API)
+export -f milou_ssl_validate_certificates          # Validate SSL certificates
+export -f milou_ssl_show_info                      # Show SSL certificate information
+export -f milou_ssl_check_expiration               # Check certificate expiration
 
-# SSL information functions
-export -f milou_ssl_show_info
-export -f milou_ssl_show_certificate_info
+# Note: Internal functions are NOT exported (marked with _ prefix):
+#   _milou_ssl_validate_cert_key_pair               # Internal: cert/key pair validation
+#   _milou_ssl_validate_certificate_domain         # Internal: domain validation
+#   _milou_ssl_show_certificate_info                # Internal: detailed cert info display  
+#   _milou_ssl_backup_certificates                  # Internal: backup functionality
 
-# SSL backup functions
-export -f milou_ssl_backup_certificates 
+# This provides a clean, focused API while keeping implementation details internal 

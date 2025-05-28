@@ -23,6 +23,22 @@ if ! command -v milou_log >/dev/null 2>&1; then
 fi
 
 # =============================================================================
+# CLEAN PUBLIC API - Export only essential functions
+# =============================================================================
+
+# Essential system environment functions (4 exports - CLEAN PUBLIC API)
+export -f milou_system_load_environment      # Load system environment
+export -f milou_system_setup_environment     # Setup system environment  
+export -f milou_system_cleanup_environment   # Cleanup system environment
+export -f milou_system_validate_environment  # Validate system environment
+
+# Note: Backup functions are now handled by lib/backup/core.sh and lib/restore/core.sh
+# Note: Update functions are now handled by lib/update/core.sh
+# Legacy functions remain in this file for backward compatibility but are NOT exported
+# This prevents namespace pollution while maintaining compatibility
+# Internal functions are marked with _ prefix and NOT exported
+
+# =============================================================================
 # System Backup Functions (from backup.sh)
 # =============================================================================
 
@@ -1052,40 +1068,4 @@ milou_system_update_with_rollback() {
         rm -f "$env_backup" "$status_backup"
         return 1
     fi
-}
-
-# =============================================================================
-# Module Exports
-# =============================================================================
-
-# Backup functions
-export -f milou_system_create_backup
-export -f milou_system_backup_configuration
-export -f milou_system_backup_ssl_certificates
-export -f milou_system_backup_docker_data
-export -f milou_system_backup_database
-export -f milou_system_backup_volumes
-export -f milou_system_create_backup_manifest
-export -f milou_system_restore_backup
-export -f milou_system_restore_configuration
-export -f milou_system_restore_ssl_certificates
-export -f milou_system_restore_data
-
-# Environment functions
-export -f milou_system_load_environment
-export -f milou_system_setup_environment
-export -f milou_system_cleanup_environment
-export -f milou_system_validate_environment
-
-# Update functions
-export -f milou_system_update
-export -f milou_system_check_for_updates
-export -f milou_system_perform_update
-export -f milou_system_selective_service_update
-export -f milou_system_full_service_update
-export -f milou_system_wait_for_service_health
-export -f milou_system_update_docker_images
-export -f milou_system_update_image_tags
-export -f milou_system_apply_config_updates
-export -f milou_system_rollback_update
-export -f milou_system_update_with_rollback 
+} 

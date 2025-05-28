@@ -1,6 +1,6 @@
 # =============================================================================
 # Milou Application Docker Compose Configuration
-# Enhanced version with dynamic image tags and improved configuration
+# Enhanced version with FIXED credential synchronization and improved configuration
 # =============================================================================
 
 services:
@@ -14,7 +14,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-milou}
+      POSTGRES_DB: ${POSTGRES_DB:-milou_database}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8"
     volumes:
       - pgdata:/var/lib/postgresql/data:rw
@@ -25,7 +25,7 @@ services:
     networks:
       - milou_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-milou_database}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,19 +43,13 @@ services:
     image: redis:${REDIS_VERSION:-7-alpine}
     container_name: milou-redis
     restart: unless-stopped
-    command: >
-      redis-server 
-      --requirepass ${REDIS_PASSWORD}
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory ${REDIS_MAX_MEMORY:-256mb}
-      --maxmemory-policy allkeys-lru
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data:rw
-    expose:
-      - "6379"
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-6379}:6379"
     networks:
       - milou_network
     healthcheck:
@@ -71,7 +65,7 @@ services:
         max-file: "3"
 
   # ==========================================================================
-  # RabbitMQ Service (Message Queue)
+  # RabbitMQ Service (Message Queue) - FIXED CREDENTIALS
   # ==========================================================================
   rabbitmq:
     image: rabbitmq:${RABBITMQ_VERSION:-3-alpine}
@@ -79,10 +73,13 @@ services:
     restart: unless-stopped
     hostname: milou-rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      # CRITICAL: Use generated credentials, not defaults
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
       RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-milou-cookie}
+      # Disable guest user for security
+      RABBITMQ_GUEST_USER_ENABLED: "false"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq:rw
       - rabbitmq_logs:/var/log/rabbitmq:rw
@@ -121,7 +118,10 @@ services:
       - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME:-milou}
+      - DB_NAME=${DB_NAME:-milou_database}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-milou_database}
       
       # Redis Configuration
       - REDIS_URL=${REDIS_URL}
@@ -129,12 +129,13 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       
-      # RabbitMQ Configuration
+      # RabbitMQ Configuration - CRITICAL: Fixed credential passing
       - RABBITMQ_URL=${RABBITMQ_URL}
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
       - RABBITMQ_USER=${RABBITMQ_USER}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      - RABBITMQ_VHOST=${RABBITMQ_VHOST:-/}
       
       # Security Configuration
       - SESSION_SECRET=${SESSION_SECRET}
@@ -157,6 +158,7 @@ services:
       # Admin Configuration
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
     expose:
       - "${PORT:-9999}"
     volumes:
@@ -196,6 +198,10 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - VITE_APP_TITLE=${VITE_APP_TITLE:-Milou}
       - VITE_APP_VERSION=${MILOU_VERSION:-3.0.0}
+      # Domain configuration for frontend
+      - VITE_DOMAIN=${DOMAIN}
+      - VITE_FRONTEND_URL=${FRONTEND_URL}
+      - VITE_BACKEND_URL=${BACKEND_URL}
     expose:
       - "5173"
     depends_on:
@@ -216,7 +222,7 @@ services:
         max-file: "3"
 
   # ==========================================================================
-  # Engine Service (AI Processing)
+  # Engine Service (AI Processing) - CRITICAL: Fixed RabbitMQ credentials
   # ==========================================================================
   engine:
     image: ghcr.io/milou-sh/milou/engine:${MILOU_ENGINE_TAG:-v1.0.0}
@@ -231,14 +237,24 @@ services:
       - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME:-milou}
+      - DB_NAME=${DB_NAME:-milou_database}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-milou_database}
       
-      # RabbitMQ Configuration
+      # RabbitMQ Configuration - CRITICAL: Fixed credential passing
       - RABBITMQ_URL=${RABBITMQ_URL}
       - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
       - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
       - RABBITMQ_USER=${RABBITMQ_USER}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      - RABBITMQ_VHOST=${RABBITMQ_VHOST:-/}
+      # Additional formats some Python clients expect
+      - RABBITMQ_USERNAME=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+      - AMQP_URL=${RABBITMQ_URL}
+      - CELERY_BROKER_URL=${RABBITMQ_URL}
       
       # Redis Configuration
       - REDIS_URL=${REDIS_URL}
@@ -250,6 +266,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SSO_CONFIG_ENCRYPTION_KEY=${SSO_CONFIG_ENCRYPTION_KEY}
       - JWT_SECRET=${JWT_SECRET}
+      - SESSION_SECRET=${SESSION_SECRET}
       
       # Python Configuration
       - PYTHONUNBUFFERED=1
@@ -263,6 +280,10 @@ services:
       # Monitoring
       - ENABLE_METRICS=${ENABLE_MONITORING:-true}
       - METRICS_PORT=${METRICS_PORT:-8080}
+      
+      # Application Configuration
+      - NODE_ENV=${NODE_ENV:-production}
+      - DOMAIN=${DOMAIN}
     volumes:
       - engine_logs:/app/logs:rw
       - engine_cache:/app/cache:rw
@@ -291,7 +312,7 @@ services:
         max-file: "5"
 
   # ==========================================================================
-  # Nginx Service (Reverse Proxy & Load Balancer)
+  # Nginx Service (Reverse Proxy & Load Balancer) - FIXED SSL MOUNT
   # ==========================================================================
   nginx:
     image: ghcr.io/milou-sh/milou/nginx:${MILOU_NGINX_TAG:-v1.0.0}
@@ -301,7 +322,11 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - SERVER_NAME=${SERVER_NAME:-localhost}
       - CUSTOMER_DOMAIN_NAME=${CUSTOMER_DOMAIN_NAME:-localhost}
-      - SSL_CERT_PATH=${SSL_CERT_PATH:-./ssl}
+      - DOMAIN=${DOMAIN}
+      - SSL_CERT_PATH=/etc/ssl
+      - SSL_CERT_FILE=/etc/ssl/milou.crt
+      - SSL_KEY_FILE=/etc/ssl/milou.key
+      - SSL_MODE=${SSL_MODE:-generate}
       - BACKEND_HOST=backend
       - BACKEND_PORT=${PORT:-9999}
       - FRONTEND_HOST=frontend
@@ -309,11 +334,14 @@ services:
       - FRONTEND_PROTOCOL=${FRONTEND_PROTOCOL:-http}
       - ENABLE_COMPRESSION=${ENABLE_COMPRESSION:-true}
       - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+      - HTTP_PORT=${HTTP_PORT:-80}
+      - HTTPS_PORT=${HTTPS_PORT:-443}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     volumes:
-      - ${SSL_CERT_PATH:-./ssl}:/etc/ssl:rw
+      # CRITICAL: Fixed SSL certificate mount with proper permissions
+      - ${SSL_CERT_PATH:-./ssl}:/etc/ssl:ro
       - nginx_logs:/var/log/nginx:rw
       - nginx_cache:/var/cache/nginx:rw
     depends_on:

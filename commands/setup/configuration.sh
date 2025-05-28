@@ -723,6 +723,10 @@ REDIS_SESSION_TTL=86400
 RABBITMQ_USER=$rabbitmq_user
 RABBITMQ_PASSWORD=$rabbitmq_password
 RABBITMQ_URL=amqp://$rabbitmq_user:$rabbitmq_password@rabbitmq:5672/
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_VHOST=/
+RABBITMQ_ERLANG_COOKIE=milou-cookie
 
 # =============================================================================
 # SECURITY CONFIGURATION (Required)

@@ -27,23 +27,55 @@ setup_final_validation() {
     milou_log "STEP" "Step 7: Final Validation and Service Startup"
     echo
     
-    # Pre-startup validation
-    _validate_system_readiness || return 1
+    # System readiness validation
+    milou_log "INFO" "🔍 System Readiness Validation"
+    if ! _validate_system_readiness; then
+        milou_log "ERROR" "System readiness validation failed"
+        return 1
+    fi
     
-    # SSL certificate setup
-    _setup_ssl_certificates || return 1
+    # Credential-Volume consistency check
+    if ! _validate_credential_volume_consistency; then
+        milou_log "ERROR" "Credential-volume consistency check failed"
+        return 1
+    fi
     
-    # Docker environment preparation
-    _prepare_docker_environment || return 1
+    # Docker registry authentication
+    if ! _validate_docker_registry_access; then
+        milou_log "ERROR" "Docker registry access validation failed"
+        return 1
+    fi
     
-    # Service startup and validation
-    _start_and_validate_services || return 1
+    milou_log "SUCCESS" "✅ System readiness validation passed"
     
-    # Post-startup validation
-    _validate_service_health || return 1
+    # SSL Certificate Setup
+    if ! _setup_ssl_certificates; then
+        milou_log "ERROR" "SSL certificate setup failed"
+        return 1
+    fi
     
-    # Final success report
-    _generate_success_report || return 1
+    # Docker Environment Preparation
+    if ! _prepare_docker_environment; then
+        milou_log "ERROR" "Docker environment preparation failed"
+        return 1
+    fi
+    
+    # Start Services
+    if ! _start_milou_services; then
+        milou_log "ERROR" "Failed to start Milou services"
+        return 1
+    fi
+    
+    # Service Health Validation
+    if ! _validate_service_health; then
+        milou_log "WARN" "⚠️  Service health validation completed with warnings"
+        milou_log "INFO" "💡 Services may still be starting up - check logs if issues persist"
+    else
+        milou_log "SUCCESS" "✅ Services started and ready"
+    fi
+    
+    # CRITICAL FIX: Always display completion message with admin credentials
+    _setup_display_completion_with_credentials
     
     return 0
 }

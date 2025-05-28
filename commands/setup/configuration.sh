@@ -42,25 +42,90 @@ setup_run_configuration_wizard() {
     milou_log "STEP" "Step 6: Configuration Wizard"
     echo
     
-    case "$setup_mode" in
-        interactive)
-            _run_interactive_configuration_wizard
-            ;;
-        non-interactive)
-            _run_non_interactive_configuration
-            ;;
-        auto)
-            _run_automatic_configuration
-            ;;
-        smart)
-            # Smart mode: automated with prompts only when needed
-            _run_smart_configuration
-            ;;
-        *)
-            milou_log "ERROR" "Unknown setup mode: $setup_mode"
+    if [[ "$setup_mode" == "interactive" ]]; then
+        milou_log "INFO" "🧙 Starting interactive configuration wizard"
+        echo
+        
+        # Domain configuration
+        milou_log "INFO" "📋 Basic Configuration"
+        local domain
+        if [[ -n "${DOMAIN:-}" ]]; then
+            domain="$DOMAIN"
+            milou_log "INFO" "Using provided domain: $domain"
+        else
+            read -p "Enter domain name (default: localhost): " domain
+            domain=${domain:-localhost}
+        fi
+        
+        # Admin email configuration
+        local admin_email
+        if [[ -n "${ADMIN_EMAIL:-}" ]]; then
+            admin_email="$ADMIN_EMAIL"
+            milou_log "INFO" "Using provided admin email: $admin_email"
+        else
+            read -p "Enter admin email (default: admin@localhost): " admin_email
+            admin_email=${admin_email:-admin@localhost}
+        fi
+        
+        # SSL configuration
+        local ssl_mode ssl_path
+        if [[ -n "${SSL_PATH:-}" ]]; then
+            ssl_path="$SSL_PATH"
+            ssl_mode="existing"
+            milou_log "INFO" "Using provided SSL path: $ssl_path"
+        else
+            _setup_configure_ssl_interactive "$domain" ssl_mode ssl_path
+        fi
+        
+        # Security configuration
+        _setup_configure_security_interactive
+        
+        # CRITICAL FIX: Pass USE_LATEST_IMAGES to configuration generation
+        local use_latest_param="${USE_LATEST_IMAGES:-true}"
+        milou_log "DEBUG" "Using image versioning: latest=$use_latest_param"
+        
+        # Generate configuration with proper parameters
+        if command -v generate_config_with_preservation >/dev/null 2>&1; then
+            if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto" "$use_latest_param"; then
+                milou_log "SUCCESS" "✅ Interactive configuration completed"
+            else
+                milou_log "ERROR" "Failed to generate configuration"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "Configuration generation function not available"
             return 1
-            ;;
-    esac
+        fi
+        
+    else
+        # Non-interactive mode
+        milou_log "INFO" "🤖 Running in non-interactive mode with defaults"
+        
+        local domain="${DOMAIN:-localhost}"
+        local admin_email="${ADMIN_EMAIL:-admin@localhost}"
+        local ssl_path="${SSL_PATH:-./ssl}"
+        local use_latest_param="${USE_LATEST_IMAGES:-true}"
+        
+        milou_log "INFO" "Domain: $domain"
+        milou_log "INFO" "Admin Email: $admin_email"
+        milou_log "INFO" "SSL Path: $ssl_path"
+        milou_log "INFO" "Use Latest Images: $use_latest_param"
+        
+        # Generate configuration
+        if command -v generate_config_with_preservation >/dev/null 2>&1; then
+            if generate_config_with_preservation "$domain" "$ssl_path" "$admin_email" "auto" "$use_latest_param"; then
+                milou_log "SUCCESS" "✅ Non-interactive configuration completed"
+            else
+                milou_log "ERROR" "Failed to generate configuration"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "Configuration generation function not available"
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 
 # Interactive configuration wizard

@@ -1,418 +1,379 @@
 #!/bin/bash
 
 # =============================================================================
-# Core Utilities Module for Milou CLI
-# Contains unique utility functions not covered by other modules
+# Milou CLI Core Utilities - Consolidated Edition
+# Centralized utility functions to eliminate code duplication
 # =============================================================================
 
-# Module guard to prevent multiple loading
-if [[ "${MILOU_UTILITIES_LOADED:-}" == "true" ]]; then
-    return 0
-fi
-readonly MILOU_UTILITIES_LOADED="true"
-
-# Ensure logging is available
-if ! command -v milou_log >/dev/null 2>&1; then
-    source "${SCRIPT_DIR}/lib/core/logging.sh" 2>/dev/null || {
-        echo "ERROR: Cannot load logging module" >&2
-        exit 1
-    }
+# Ensure this script is sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: This script should be sourced, not executed directly" >&2
+    exit 1
 fi
 
-# Constants - Use declare -g instead of readonly to prevent conflicts during module reloading
-declare -g MIN_DOCKER_VERSION="20.10.0"
-declare -g MIN_DOCKER_COMPOSE_VERSION="2.0.0"
-declare -g MIN_DISK_SPACE_GB=2
-declare -g MIN_RAM_MB=2048
-
 # =============================================================================
-# Secure Random Generation
+# RANDOM GENERATION UTILITIES (Consolidated from multiple files)
 # =============================================================================
 
-# Generate secure random strings with multiple methods
-milou_generate_secure_random() {
+# Generate secure random string with specified format
+generate_secure_random() {
     local length="${1:-32}"
-    local charset="${2:-alphanumeric}"
-    local exclude_ambiguous="${3:-true}"
+    local format="${2:-safe}"  # safe, alphanumeric, hex, numeric
     
-    local chars=""
-    case "$charset" in
-        "alphanumeric")
-            chars="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-            # Exclude ambiguous characters if requested
-            if [[ "$exclude_ambiguous" == true ]]; then
-                chars="abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-            fi
+    case "$format" in
+        safe)
+            # Safe characters for passwords (excluding ambiguous ones)
+            LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9!@#$%^&*()_+-=' </dev/urandom | head -c "$length"
             ;;
-        "alpha")
-            chars="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            if [[ "$exclude_ambiguous" == true ]]; then
-                chars="abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
-            fi
+        alphanumeric)
+            # Only letters and numbers
+            LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length"
             ;;
-        "numeric") 
-            chars="0123456789"
-            if [[ "$exclude_ambiguous" == true ]]; then
-                chars="23456789"
-            fi
+        hex)
+            # Hexadecimal characters
+            LC_ALL=C tr -dc 'a-f0-9' </dev/urandom | head -c "$length"
             ;;
-        "hex") 
-            chars="0123456789abcdef"
+        numeric)
+            # Only numbers
+            LC_ALL=C tr -dc '0-9' </dev/urandom | head -c "$length"
             ;;
-        "base64")
-            chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-            ;;
-        "safe")
-            # URL-safe characters only
-            chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        *)
+            milou_log "ERROR" "Unknown format: $format"
+            return 1
             ;;
     esac
-    
-    milou_log "TRACE" "Generating secure random string: length=$length, charset=$charset"
-    
-    # Try multiple methods for secure randomness (in order of preference)
-    local result=""
-    
-    # Method 1: OpenSSL (most secure)
-    if command -v openssl >/dev/null 2>&1; then
-        case "$charset" in
-            "hex") 
-                result=$(openssl rand -hex "$((length / 2))" 2>/dev/null | cut -c1-"$length")
-                ;;
-            "base64")
-                result=$(openssl rand -base64 "$((length * 3 / 4))" 2>/dev/null | tr -d "=\n" | cut -c1-"$length")
-                ;;
-            *)
-                local base64_output
-                base64_output=$(openssl rand -base64 "$((length * 2))" 2>/dev/null | tr -d "=+/\n")
-                if [[ -n "$base64_output" ]]; then
-                    result=""
-                    for ((i=0; i<${#base64_output} && ${#result}<length; i++)); do
-                        local char="${base64_output:$i:1}"
-                        if [[ "$chars" == *"$char"* ]]; then
-                            result+="$char"
-                        fi
-                    done
-                fi
-                ;;
-        esac
+}
+
+# Generate UUID (consolidated from multiple implementations)
+generate_uuid() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen
+    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        # Fallback UUID generation
+        printf '%08x-%04x-%04x-%04x-%012x' \
+            $((RANDOM * RANDOM)) \
+            $((RANDOM)) \
+            $((RANDOM | 0x4000)) \
+            $((RANDOM | 0x8000)) \
+            $((RANDOM * RANDOM * RANDOM))
     fi
-    
-    # Method 2: /dev/urandom (good security)
-    if [[ -z "$result" && -c /dev/urandom ]]; then
-        local random_bytes
-        random_bytes=$(head -c "$((length * 3))" /dev/urandom 2>/dev/null | base64 | tr -d "=+/\n")
-        if [[ -n "$random_bytes" ]]; then
-            result=""
-            for ((i=0; i<${#random_bytes} && ${#result}<length; i++)); do
-                local char="${random_bytes:$i:1}"
-                if [[ "$chars" == *"$char"* ]]; then
-                    result+="$char"
-                fi
-            done
-        fi
-    fi
-    
-    # Method 3: BASH RANDOM (fallback, less secure)
-    if [[ -z "$result" ]]; then
-        milou_log "WARN" "Using fallback random generation method (less secure)"
-        result=""
-        for ((i=0; i<length; i++)); do
-            result+="${chars:$((RANDOM % ${#chars})):1}"
-        done
-    fi
-    
-    # Ensure we have the requested length
-    if [[ ${#result} -lt $length ]]; then
-        milou_log "WARN" "Generated string shorter than requested, padding with additional entropy"
-        while [[ ${#result} -lt $length ]]; do
-            result+="${chars:$((RANDOM % ${#chars})):1}"
-        done
-    fi
-    
-    # Trim to exact length
-    result="${result:0:$length}"
-    
-    milou_log "TRACE" "Generated secure random string of length ${#result}"
-    echo "$result"
 }
 
 # =============================================================================
-# System Requirements and Health Checks
+# VALIDATION UTILITIES (Consolidated)
 # =============================================================================
 
-# Check system requirements comprehensively
-milou_check_system_requirements() {
-    milou_log "STEP" "Checking system requirements..."
-    
-    local errors=0
-    local warnings=0
-    
-    # Check if running as root
-    if [[ $EUID -eq 0 ]]; then
-        milou_log "WARN" "Running as root - not recommended for security reasons"
-        milou_log "INFO" "💡 Consider using dedicated user for better security"
-        
-        # If user management is available, offer to create milou user
-        if command -v milou_user_exists >/dev/null 2>&1; then
-            if ! milou_user_exists; then
-                milou_log "INFO" "💡 Run: $0 create-user to create dedicated milou user"
-            else
-                milou_log "INFO" "💡 Run: sudo -u milou $0 [command] to use existing milou user"
-            fi
-        else
-            milou_log "INFO" "💡 Create a non-root user: sudo adduser milou && sudo usermod -aG docker milou"
-        fi
-        
-        ((warnings++))
+# Validate email address
+validate_email() {
+    local email="$1"
+    if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        return 0
     else
-        milou_log "SUCCESS" "Running as non-root user: $(whoami)"
+        return 1
     fi
-    
-    # Check operating system compatibility
-    local os_info=""
-    if [[ -f /etc/os-release ]]; then
-        os_info=$(. /etc/os-release && echo "$NAME $VERSION")
-        milou_log "DEBUG" "Operating System: $os_info"
+}
+
+# Validate domain name
+validate_domain() {
+    local domain="$1"
+    # Allow localhost and IP addresses for development
+    if [[ "$domain" == "localhost" ]] || [[ "$domain" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 0
     fi
-    
-    # Check Docker installation and version
+    # Validate FQDN
+    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Validate port number
+validate_port() {
+    local port="$1"
+    if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# =============================================================================
+# DOCKER UTILITIES (Consolidated)
+# =============================================================================
+
+# Check if Docker is available and running
+check_docker_available() {
     if ! command -v docker >/dev/null 2>&1; then
         milou_log "ERROR" "Docker is not installed"
-        milou_log "INFO" "💡 Install automatically: $0 setup --auto-install-deps"
-        milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
-        milou_log "INFO" "💡 Quick install: curl -fsSL https://get.docker.com | sh"
-        ((errors++))
-    else
-        local docker_version
-        docker_version=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-        if [[ -n "$docker_version" ]]; then
-            milou_log "DEBUG" "Found Docker version: $docker_version"
-            
-            if command -v milou_version_compare >/dev/null 2>&1; then
-                if ! milou_version_compare "$docker_version" "$MIN_DOCKER_VERSION" "ge"; then
-                    milou_log "ERROR" "Docker version $docker_version is too old (minimum: $MIN_DOCKER_VERSION)"
-                    milou_log "INFO" "💡 Update Docker: https://docs.docker.com/engine/install/"
-                    ((errors++))
-                else
-                    milou_log "SUCCESS" "Docker version $docker_version meets requirements"
-                fi
-            else
-                milou_log "SUCCESS" "Docker version $docker_version found"
-            fi
-        else
-            milou_log "WARN" "Could not determine Docker version"
-            ((warnings++))
-        fi
-    fi
-    
-    # Check Docker Compose
-    if ! docker compose version >/dev/null 2>&1; then
-        milou_log "ERROR" "Docker Compose plugin is not installed"
-        milou_log "INFO" "💡 Install automatically: $0 setup --auto-install-deps"
-        milou_log "INFO" "💡 Install Docker Compose: https://docs.docker.com/compose/install/"
-        milou_log "INFO" "💡 Or update Docker to get the compose plugin"
-        ((errors++))
-    else
-        local compose_version
-        compose_version=$(docker compose version --short 2>/dev/null | head -1)
-        if [[ -n "$compose_version" ]]; then
-            milou_log "DEBUG" "Found Docker Compose version: $compose_version"
-            
-            if command -v milou_version_compare >/dev/null 2>&1; then
-                if ! milou_version_compare "$compose_version" "$MIN_DOCKER_COMPOSE_VERSION" "ge"; then
-                    milou_log "WARN" "Docker Compose version $compose_version might be too old (recommended: $MIN_DOCKER_COMPOSE_VERSION+)"
-                    ((warnings++))
-                else
-                    milou_log "SUCCESS" "Docker Compose version $compose_version meets requirements"
-                fi
-            else
-                milou_log "SUCCESS" "Docker Compose version $compose_version found"
-            fi
-        else
-            milou_log "WARN" "Could not determine Docker Compose version"
-            ((warnings++))
-        fi
-    fi
-    
-    # Check Docker daemon accessibility
-    if ! docker info >/dev/null 2>&1; then
-        milou_log "ERROR" "Cannot access Docker daemon"
-        milou_log "INFO" "💡 Start Docker daemon: sudo systemctl start docker"
-        milou_log "INFO" "💡 Add user to docker group: sudo usermod -aG docker \$USER && newgrp docker"
-        ((errors++))
-    else
-        milou_log "SUCCESS" "Docker daemon is accessible"
-    fi
-    
-    # Check available disk space
-    local available_space_gb
-    available_space_gb=$(df . | awk 'NR==2 {printf "%.1f", $4/1024/1024}')
-    if [[ -n "$available_space_gb" ]]; then
-        if (( $(echo "$available_space_gb < $MIN_DISK_SPACE_GB" | bc -l 2>/dev/null || echo "0") )); then
-            milou_log "WARN" "Low disk space: ${available_space_gb}GB available (recommended: ${MIN_DISK_SPACE_GB}GB+)"
-            ((warnings++))
-        else
-            milou_log "SUCCESS" "Sufficient disk space: ${available_space_gb}GB available"
-        fi
-    fi
-    
-    # Check available memory
-    local available_ram_mb
-    if [[ -f /proc/meminfo ]]; then
-        available_ram_mb=$(awk '/MemAvailable/ {printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null)
-        if [[ -n "$available_ram_mb" && "$available_ram_mb" -gt 0 ]]; then
-            if [[ "$available_ram_mb" -lt "$MIN_RAM_MB" ]]; then
-                milou_log "WARN" "Low available memory: ${available_ram_mb}MB (recommended: ${MIN_RAM_MB}MB+)"
-                ((warnings++))
-            else
-                milou_log "SUCCESS" "Sufficient memory: ${available_ram_mb}MB available"
-            fi
-        fi
-    fi
-    
-    # Summary
-    if [[ $errors -gt 0 ]]; then
-        milou_log "ERROR" "System requirements check failed: $errors error(s), $warnings warning(s)"
         return 1
-    elif [[ $warnings -gt 0 ]]; then
-        milou_log "WARN" "System requirements check completed with warnings: $warnings warning(s)"
+    fi
+    
+    if ! docker version >/dev/null 2>&1; then
+        milou_log "ERROR" "Docker is not running or not accessible"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Check if Docker Compose is available
+check_docker_compose_available() {
+    if docker compose version >/dev/null 2>&1; then
+        return 0
+    elif command -v docker-compose >/dev/null 2>&1; then
         return 0
     else
-        milou_log "SUCCESS" "All system requirements met"
+        milou_log "ERROR" "Docker Compose is not available"
+        return 1
+    fi
+}
+
+# Get Docker Compose command (handles both 'docker compose' and 'docker-compose')
+get_docker_compose_cmd() {
+    if docker compose version >/dev/null 2>&1; then
+        echo "docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        echo "docker-compose"
+    else
+        echo ""
+        return 1
+    fi
+}
+
+# Pull Docker image with retry logic
+pull_docker_image_with_retry() {
+    local image="$1"
+    local max_retries="${2:-3}"
+    local delay="${3:-5}"
+    
+    for ((i=1; i<=max_retries; i++)); do
+        milou_log "INFO" "Pulling $image (attempt $i/$max_retries)"
+        if docker pull "$image"; then
+            milou_log "SUCCESS" "Successfully pulled $image"
+            return 0
+        else
+            if [[ $i -lt $max_retries ]]; then
+                milou_log "WARN" "Failed to pull $image, retrying in ${delay}s..."
+                sleep "$delay"
+            else
+                milou_log "ERROR" "Failed to pull $image after $max_retries attempts"
+                return 1
+            fi
+        fi
+    done
+}
+
+# =============================================================================
+# FILE SYSTEM UTILITIES (Consolidated)
+# =============================================================================
+
+# Ensure directory exists with proper permissions
+ensure_directory() {
+    local dir_path="$1"
+    local permissions="${2:-755}"
+    local owner="${3:-}"
+    
+    if [[ ! -d "$dir_path" ]]; then
+        if mkdir -p "$dir_path"; then
+            milou_log "DEBUG" "Created directory: $dir_path"
+        else
+            milou_log "ERROR" "Failed to create directory: $dir_path"
+            return 1
+        fi
+    fi
+    
+    # Set permissions
+    if chmod "$permissions" "$dir_path"; then
+        milou_log "DEBUG" "Set permissions $permissions on $dir_path"
+    else
+        milou_log "WARN" "Failed to set permissions on $dir_path"
+    fi
+    
+    # Set ownership if specified and running as root
+    if [[ -n "$owner" && $EUID -eq 0 ]]; then
+        if chown "$owner" "$dir_path"; then
+            milou_log "DEBUG" "Set ownership $owner on $dir_path"
+        else
+            milou_log "WARN" "Failed to set ownership on $dir_path"
+        fi
+    fi
+    
+    return 0
+}
+
+# Check if file exists and is readable
+check_file_readable() {
+    local file_path="$1"
+    if [[ -f "$file_path" && -r "$file_path" ]]; then
         return 0
+    else
+        return 1
+    fi
+}
+
+# Create backup of file with timestamp
+backup_file() {
+    local file_path="$1"
+    local backup_dir="${2:-$(dirname "$file_path")}"
+    
+    if [[ ! -f "$file_path" ]]; then
+        milou_log "ERROR" "File does not exist: $file_path"
+        return 1
+    fi
+    
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local filename=$(basename "$file_path")
+    local backup_path="${backup_dir}/${filename}.backup.${timestamp}"
+    
+    if cp "$file_path" "$backup_path"; then
+        milou_log "INFO" "Created backup: $backup_path"
+        echo "$backup_path"
+        return 0
+    else
+        milou_log "ERROR" "Failed to create backup of $file_path"
+        return 1
     fi
 }
 
 # =============================================================================
-# System Information
+# NETWORK UTILITIES (Consolidated)
 # =============================================================================
 
-# Get comprehensive system information
-milou_get_system_info() {
-    local info_type="${1:-all}"
+# Check if port is in use
+check_port_in_use() {
+    local port="$1"
+    local protocol="${2:-tcp}"
     
-    case "$info_type" in
-        "os"|"all")
-            if [[ -f /etc/os-release ]]; then
-                . /etc/os-release
-                echo "OS: $NAME $VERSION"
-            elif [[ -f /etc/redhat-release ]]; then
-                echo "OS: $(cat /etc/redhat-release)"
-            else
-                echo "OS: $(uname -s) $(uname -r)"
-            fi
-            [[ "$info_type" != "all" ]] && return
-            ;;
-    esac
-    
-    case "$info_type" in
-        "kernel"|"all")
-            echo "Kernel: $(uname -r)"
-            [[ "$info_type" != "all" ]] && return
-            ;;
-    esac
-    
-    case "$info_type" in
-        "arch"|"all")
-            echo "Architecture: $(uname -m)"
-            [[ "$info_type" != "all" ]] && return
-            ;;
-    esac
-    
-    case "$info_type" in
-        "memory"|"all")
-            if [[ -f /proc/meminfo ]]; then
-                local total_ram_gb
-                total_ram_gb=$(awk '/MemTotal/ {printf "%.1f", $2/1024/1024}' /proc/meminfo)
-                echo "Memory: ${total_ram_gb}GB"
-            fi
-            [[ "$info_type" != "all" ]] && return
-            ;;
-    esac
-    
-    case "$info_type" in
-        "disk"|"all")
-            local disk_space_gb
-            disk_space_gb=$(df -h . | awk 'NR==2 {print $4}')
-            echo "Available disk space: $disk_space_gb"
-            [[ "$info_type" != "all" ]] && return
-            ;;
-    esac
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -tlnp 2>/dev/null | grep -q ":${port} "
+    elif command -v ss >/dev/null 2>&1; then
+        ss -tlnp 2>/dev/null | grep -q ":${port} "
+    else
+        # Fallback: try to bind to the port
+        if timeout 1 bash -c "echo >/dev/tcp/localhost/$port" 2>/dev/null; then
+            return 0  # Port is in use
+        else
+            return 1  # Port is free
+        fi
+    fi
 }
 
-# =============================================================================
-# Cleanup and Maintenance
-# =============================================================================
-
-# Clean up temporary files
-milou_cleanup_temp() {
-    local temp_patterns=(
-        "/tmp/milou_*"
-        "/tmp/.milou_*"
-        "${TMPDIR:-/tmp}/milou_*"
-        "${CONFIG_DIR:-$HOME/.milou}/tmp/*"
-    )
+# Get available port starting from a given port
+get_available_port() {
+    local start_port="${1:-8080}"
+    local max_attempts="${2:-100}"
     
-    milou_log "DEBUG" "Cleaning up temporary files..."
-    
-    local cleaned_count=0
-    for pattern in "${temp_patterns[@]}"; do
-        # Use find to safely handle patterns
-        if find "$(dirname "$pattern")" -maxdepth 1 -name "$(basename "$pattern")" -type f -mtime +1 2>/dev/null | while read -r file; do
-            if rm -f "$file" 2>/dev/null; then
-                ((cleaned_count++))
-                milou_log "TRACE" "Removed temporary file: $file"
-            fi
-        done; then
-            continue
+    for ((i=0; i<max_attempts; i++)); do
+        local port=$((start_port + i))
+        if ! check_port_in_use "$port"; then
+            echo "$port"
+            return 0
         fi
     done
     
-    if [[ $cleaned_count -gt 0 ]]; then
-        milou_log "DEBUG" "Cleaned up $cleaned_count temporary files"
-    else
-        milou_log "TRACE" "No temporary files to clean up"
-    fi
+    milou_log "ERROR" "Could not find available port starting from $start_port"
+    return 1
 }
 
-# Create timestamped backup
-milou_create_timestamped_backup() {
-    local source_file="$1"
-    local backup_dir="${2:-$(dirname "$source_file")}"
-    local prefix="${3:-backup_}"
+# =============================================================================
+# USER INTERFACE UTILITIES (Consolidated)
+# =============================================================================
+
+# Prompt user for confirmation with timeout
+prompt_confirmation() {
+    local message="$1"
+    local default="${2:-y}"
+    local timeout="${3:-30}"
     
-    if [[ ! -f "$source_file" ]]; then
-        milou_log "ERROR" "Source file does not exist: $source_file"
-        return 1
+    local prompt_suffix
+    if [[ "$default" == "y" ]]; then
+        prompt_suffix="[Y/n]"
+    else
+        prompt_suffix="[y/N]"
     fi
     
-    # Create backup directory if it doesn't exist
-    if ! mkdir -p "$backup_dir" 2>/dev/null; then
-        milou_log "ERROR" "Cannot create backup directory: $backup_dir"
-        return 1
-    fi
+    echo -n "$message $prompt_suffix: "
     
-    local timestamp
-    timestamp=$(date '+%Y%m%d_%H%M%S')
-    local filename
-    filename=$(basename "$source_file")
-    local backup_file="${backup_dir}/${prefix}${filename}.${timestamp}"
-    
-    if cp "$source_file" "$backup_file" 2>/dev/null; then
-        milou_log "DEBUG" "Created backup: $backup_file"
-        echo "$backup_file"
+    if [[ "${INTERACTIVE:-true}" != "true" ]]; then
+        echo "$default"
         return 0
+    fi
+    
+    local response
+    if read -t "$timeout" -r response; then
+        case "${response,,}" in
+            y|yes) return 0 ;;
+            n|no) return 1 ;;
+            "") [[ "$default" == "y" ]] && return 0 || return 1 ;;
+            *) return 1 ;;
+        esac
     else
-        milou_log "ERROR" "Failed to create backup of: $source_file"
-        return 1
+        echo
+        milou_log "WARN" "No response received within ${timeout}s, using default: $default"
+        [[ "$default" == "y" ]] && return 0 || return 1
+    fi
+}
+
+# Display progress bar
+display_progress() {
+    local current="$1"
+    local total="$2"
+    local message="${3:-Processing}"
+    local width=50
+    
+    local percentage=$((current * 100 / total))
+    local filled=$((width * current / total))
+    local empty=$((width - filled))
+    
+    printf "\r%s [" "$message"
+    printf "%*s" "$filled" | tr ' ' '='
+    printf "%*s" "$empty" | tr ' ' '-'
+    printf "] %d%%" "$percentage"
+    
+    if [[ $current -eq $total ]]; then
+        echo
     fi
 }
 
 # =============================================================================
-# Module Exports
+# STRING UTILITIES (Consolidated)
 # =============================================================================
 
-# Export functions for external use
-export -f milou_generate_secure_random milou_check_system_requirements
-export -f milou_get_system_info milou_cleanup_temp milou_create_timestamped_backup 
+# Sanitize string for use in filenames
+sanitize_filename() {
+    local input="$1"
+    echo "$input" | tr -cd '[:alnum:]._-' | head -c 200
+}
+
+# Convert string to lowercase
+to_lowercase() {
+    echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Convert string to uppercase
+to_uppercase() {
+    echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+# Trim whitespace from string
+trim_whitespace() {
+    local input="$1"
+    echo "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# =============================================================================
+# EXPORT FUNCTIONS
+# =============================================================================
+
+# Export all utility functions
+export -f generate_secure_random generate_uuid
+export -f validate_email validate_domain validate_port
+export -f check_docker_available check_docker_compose_available get_docker_compose_cmd
+export -f pull_docker_image_with_retry
+export -f ensure_directory check_file_readable backup_file
+export -f check_port_in_use get_available_port
+export -f prompt_confirmation display_progress
+export -f sanitize_filename to_lowercase to_uppercase trim_whitespace 

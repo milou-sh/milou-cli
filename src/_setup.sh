@@ -112,12 +112,18 @@ setup_run() {
     local preserve_creds="${4:-auto}"
     
     # Ensure interactive mode is properly set for setup wizard
-    # Override any non-interactive settings from the install script or environment
-    if [[ -t 0 && -t 1 ]]; then
+    # Respect environment variables set by installer, but fall back to TTY detection
+    if [[ "${MILOU_INTERACTIVE:-}" == "true" ]] || [[ "${INTERACTIVE:-}" == "true" ]]; then
+        export MILOU_INTERACTIVE=true
+        export INTERACTIVE=true
+        milou_log "DEBUG" "Setup running in interactive mode (forced by environment)"
+    elif [[ -t 0 && -t 1 ]]; then
         export MILOU_INTERACTIVE=true
         export INTERACTIVE=true
         milou_log "DEBUG" "Setup running in interactive mode (stdin/stdout available)"
     else
+        export MILOU_INTERACTIVE=false
+        export INTERACTIVE=false
         milou_log "WARN" "Setup detected non-interactive environment"
     fi
     

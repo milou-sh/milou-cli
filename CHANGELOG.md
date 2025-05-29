@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.3] - 2024-12-19
+
+### 🏠 **Installation Directory Improvements**
+- **Smart Directory Detection**: Installation now defaults to /home/ instead of /root/
+- **Multi-user Support**: When running as root, detects first regular user and installs to their home
+- **Interactive Directory Selection**: Users can choose custom installation directories with recommendations
+- **Proper Ownership**: Automatically sets correct file ownership for multi-user scenarios
+
+### 🎯 **Enhanced Error Handling**
+- **Interactive Recovery**: When errors occur, users get actionable choices (retry, exit, continue)
+- **Contextual Suggestions**: Each error includes specific solutions based on the problem type
+- **Multi-package Manager Support**: Automatic detection and instructions for apt, yum, dnf, brew, pacman
+- **Graceful Fallbacks**: Non-interactive mode handles errors appropriately for automation
+
+### 🔧 **Installation Script Enhancements**
+- **User-Friendly Prompts**: Clear recommendations for different installation scenarios
+- **Cross-Shell Support**: Improved shell integration for bash, zsh, fish with proper ownership
+- **Better Documentation**: Enhanced help text with directory selection guidance
+- **Development Support**: Special handling for development installations
+
+## [3.1.2] - 2024-12-19
+
+### 🎯 **Major User Experience Improvements**
+- **Fixed BASH_SOURCE Error**: Resolved "unbound variable" error in install.sh when run via curl | bash
+- **Fixed Email Validation Loop**: Resolved infinite loop in setup wizard when entering localhost emails
+- **Compact ASCII Art**: Replaced large ASCII art with terminal-friendly version across all components
+- **Enhanced Installation Flow**: Dramatically improved user experience from discovery to production
+
+### 🐛 **Critical Bug Fixes**
+- **Email Validation**: Fixed infinite loop in setup wizard caused by overly strict email regex
+- **Localhost Support**: Email validation now properly accepts admin@localhost and similar local emails
+- **Script Execution**: Fixed BASH_SOURCE unbound variable error in curl | bash execution
+- **Core Validation**: Improved email validation function to handle development scenarios
+
+### ✨ **Installation Script Enhancements**
+- **Better Error Handling**: Improved error messages with clear solutions and troubleshooting guidance
+- **Professional Formatting**: Clean, colored output with progress indicators and status messages
+- **Validation Improvements**: Comprehensive checks with helpful error recovery suggestions
+- **User Experience**: Streamlined flow from download to running setup
+
+### 📚 **Documentation**
+- **User Experience Guide**: Added comprehensive docs/USER_EXPERIENCE.md with detailed setup flows
+- **Installation Examples**: Real-world scenarios with screenshots and step-by-step instructions
+- **Troubleshooting Guide**: Common issues and solutions for different environments
+
+### 🔧 **Technical Improvements**
+- **Modular Architecture**: Consolidated codebase with clean separation of concerns
+- **Enhanced Logging**: Better debug output and user-friendly messages
+- **Cross-platform**: Improved compatibility across different Linux distributions
+- **Error Recovery**: Robust error handling with user choice prompts
+
 ## [3.1.1] - 2024-12-19
 
 ### 🚀 Added

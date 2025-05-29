@@ -247,10 +247,12 @@ validate_email() {
     
     # Allow localhost emails for development
     if [[ "$allow_localhost" == "true" ]]; then
-        if [[ "$email" =~ ^[A-Za-z0-9._%+-]+@(localhost|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$ ]]; then
+        # More flexible pattern for local development: allows localhost and local hostnames
+        if [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]]; then
             return 0
         fi
     else
+        # Standard email validation requiring proper TLD
         if [[ "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
             return 0
         fi

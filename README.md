@@ -30,7 +30,24 @@
 
 ## 📋 **Quick Start**
 
-### **Installation**
+### **One-Line Installation** ⭐
+
+The fastest way to get started with Milou CLI:
+
+```bash
+# One-line installation with automatic setup
+curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+```
+
+This will:
+- ✅ Download and install Milou CLI
+- ✅ Set up shell integration 
+- ✅ Automatically start the interactive setup wizard
+- ✅ Guide you through the complete configuration
+
+### **Manual Installation**
+
+If you prefer manual installation:
 
 ```bash
 # Clone the repository
@@ -74,6 +91,24 @@ nano .env
 # Backup and restore
 ./milou.sh backup             # Create system backup
 ./milou.sh restore            # Restore from backup
+```
+
+### **Installation Options**
+
+Customize your one-line installation:
+
+```bash
+# Install to specific directory
+MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+
+# Install specific branch (e.g., development version)
+MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+
+# Quiet installation (minimal output)
+curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --quiet
+
+# Install without starting setup automatically
+curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --no-start
 ```
 
 ## 🏗️ **Architecture**
@@ -213,7 +248,7 @@ done
 - **[Development Guide](docs/DEVELOPMENT.md)**: Contributor documentation
 - **[Contributing Guidelines](CONTRIBUTING.md)**: How to contribute
 
-## 🤝 **Contributing**
+## �� **Contributing**
 
 We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 

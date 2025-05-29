@@ -590,7 +590,7 @@ main() {
     check_interactive_mode
     
     # Parse arguments if running as script
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
         parse_args "$@"
     fi
     
@@ -633,8 +633,9 @@ main() {
 }
 
 # Handle script being piped from curl
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Running as script
+# Use a safer check that works with curl | bash
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
+    # Running as script or via curl | bash
     main "$@"
 else
     # Being sourced (shouldn't happen with curl | bash)

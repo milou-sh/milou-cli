@@ -551,6 +551,7 @@ show_completion() {
 
 # Start interactive setup if requested
 start_setup() {
+    # Always prompt - no automatic countdown or launch
     if [[ "$AUTO_START" == "true" ]]; then
         echo
         echo -e "${BOLD}${GREEN}🚀 Ready to Start Setup!${NC}"
@@ -562,16 +563,22 @@ start_setup() {
         echo -e "   • Start your Docker services"
         echo
         
+        # Always prompt user - no countdown
         local choice
-        choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")
+        choice=$(prompt_user "Start setup wizard now? (Y/n)" "n")
         
         if [[ "$choice" =~ ^[Yy]$ ]]; then
             echo
             step "Launching Milou setup wizard..."
             cd "$INSTALL_DIR"
             
-            # Unset install script variables that might interfere with setup interactivity
-            unset INTERACTIVE FORCE QUIET
+            # Ensure setup runs in interactive mode regardless of install context
+            export INTERACTIVE=true
+            export MILOU_INTERACTIVE=true
+            # Enable debug mode to diagnose interactivity issues
+            export MILOU_DEBUG=true
+            # Unset variables that might interfere with setup interactivity
+            unset FORCE QUIET
             
             exec ./milou.sh setup
         else

@@ -457,6 +457,11 @@ confirm() {
     local default="${2:-N}"
     local timeout="${3:-0}"
     
+    # Debug logging to help diagnose interactivity issues
+    milou_log "DEBUG" "confirm() called with prompt: '$prompt', default: '$default', timeout: '$timeout'"
+    milou_log "DEBUG" "MILOU_FORCE: '${MILOU_FORCE:-unset}', MILOU_INTERACTIVE: '${MILOU_INTERACTIVE:-unset}'"
+    milou_log "DEBUG" "Terminal check: stdin=$(test -t 0 && echo 'tty' || echo 'not-tty'), stdout=$(test -t 1 && echo 'tty' || echo 'not-tty')"
+    
     # Force mode bypasses confirmation
     if [[ "$MILOU_FORCE" == "true" ]]; then
         milou_log "DEBUG" "Force mode: auto-confirming '$prompt'"

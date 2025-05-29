@@ -111,6 +111,16 @@ setup_run() {
     local skip_validation="${3:-false}"
     local preserve_creds="${4:-auto}"
     
+    # Ensure interactive mode is properly set for setup wizard
+    # Override any non-interactive settings from the install script or environment
+    if [[ -t 0 && -t 1 ]]; then
+        export MILOU_INTERACTIVE=true
+        export INTERACTIVE=true
+        milou_log "DEBUG" "Setup running in interactive mode (stdin/stdout available)"
+    else
+        milou_log "WARN" "Setup detected non-interactive environment"
+    fi
+    
     # Show Milou logo
     setup_show_logo
     

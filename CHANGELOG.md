@@ -6,8 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### 🎯 **Major User Experience Improvements**
 - **Fixed BASH_SOURCE Error**: Resolved "unbound variable" error in install.sh when run via curl | bash
+- **Fixed Email Validation Loop**: Resolved infinite loop in setup wizard when entering localhost emails
 - **Compact ASCII Art**: Replaced large ASCII art with terminal-friendly version across all components
 - **Enhanced Installation Flow**: Dramatically improved user experience from discovery to production
+
+### 🐛 **Critical Bug Fixes**
+- **Email Validation**: Fixed infinite loop in setup wizard caused by overly strict email regex
+- **Localhost Support**: Email validation now properly accepts admin@localhost and similar local emails
+- **Script Execution**: Fixed BASH_SOURCE unbound variable error in curl | bash execution
+- **Core Validation**: Improved email validation function to handle development scenarios
 
 ### ✨ **Installation Script Enhancements**
 - **Better Error Handling**: Improved error messages with clear solutions and troubleshooting guidance

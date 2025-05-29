@@ -801,12 +801,13 @@ setup_generate_configuration_interactive() {
             email="admin@$domain"
         fi
         
-        # Basic email validation
-        if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        # Use core validation function that properly handles localhost
+        if validate_email "$email" "true"; then
             echo -e "   ${GREEN}✓${NC:-} Email: ${BOLD}$email${NC:-}"
             break
         else
             echo -e "   ${RED}✗${NC:-} Invalid email format. Please try again."
+            echo -e "   ${DIM}Examples: admin@yourdomain.com, admin@localhost, user@example.org${NC:-}"
             echo
         fi
     done

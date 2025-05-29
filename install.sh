@@ -332,6 +332,12 @@ check_prerequisites() {
 # Check if installation directory exists
 check_existing_installation() {
     if [[ -d "$INSTALL_DIR" ]]; then
+        # Check if this is an existing Milou installation
+        local is_milou_installation=false
+        if [[ -f "$INSTALL_DIR/milou.sh" ]] && [[ -f "$INSTALL_DIR/.env.example" ]]; then
+            is_milou_installation=true
+        fi
+        
         if [[ "$FORCE" == "true" ]]; then
             warn "Installation directory exists, removing due to --force flag"
             if ! rm -rf "$INSTALL_DIR"; then
@@ -342,11 +348,53 @@ check_existing_installation() {
                              "Run as root/sudo if necessary"
                 return 1
             fi
+        elif [[ "$is_milou_installation" == "true" ]]; then
+            # This is an existing Milou installation - handle as update
+            warn "Existing Milou CLI installation detected at $INSTALL_DIR"
+            log "This appears to be an update/reinstall of Milou CLI"
+            
+            # If running non-interactively, backup and proceed
+            if [[ "$INTERACTIVE" == "false" ]] || [[ "$QUIET" == "true" ]]; then
+                local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+                log "Creating backup of existing installation..."
+                if mv "$INSTALL_DIR" "$backup_dir"; then
+                    log "✅ Backup created: $backup_dir"
+                    log "Proceeding with installation update..."
+                else
+                    handle_error "Failed to backup existing installation" \
+                                 "Could not move $INSTALL_DIR to $backup_dir" \
+                                 "Check directory permissions" \
+                                 "Run with sudo if needed"
+                    return 1
+                fi
+            else
+                # Interactive mode - let user choose
+                local choice
+                choice=$(prompt_user "Update existing installation? (Y/n)" "y")
+                if [[ "$choice" =~ ^[Yy]$ ]]; then
+                    local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+                    log "Creating backup of existing installation..."
+                    if mv "$INSTALL_DIR" "$backup_dir"; then
+                        log "✅ Backup created: $backup_dir"
+                        log "Proceeding with installation update..."
+                    else
+                        handle_error "Failed to backup existing installation" \
+                                     "Could not move $INSTALL_DIR to $backup_dir" \
+                                     "Check directory permissions" \
+                                     "Run with sudo if needed"
+                        return 1
+                    fi
+                else
+                    echo -e "${RED}Installation cancelled by user.${NC}"
+                    exit 1
+                fi
+            fi
         else
+            # Not a Milou installation - show error with suggestions
             local suggestions=(
-                "Use --force flag: curl -fsSL ... | bash -s -- --force"
+                "Use --force flag: curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --force"
                 "Remove manually: rm -rf '$INSTALL_DIR'"
-                "Choose different directory: MILOU_INSTALL_DIR=/opt/milou curl -fsSL ... | bash"
+                "Choose different directory: MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash"
                 "Continue with existing installation (if it's a previous Milou installation)"
             )
             

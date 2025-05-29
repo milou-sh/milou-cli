@@ -88,12 +88,12 @@ setup_show_logo() {
                                   @@@@@@@@@@@@@@@@@@@@@@@@                               
                                   @@@@@@@@@@@@@@@@@@@@@@@@                                                                                                                 
 EOF
-    ┌─────────────────────────────────────┐
-    │  Milou CLI - Docker Management      │
-    │  Professional • Secure • Simple    │
-    └─────────────────────────────────────┘
-EOF
         echo -e "${NC:-}"
+        echo -e "    ┌─────────────────────────────────────┐"
+        echo -e "    │  Milou CLI - Docker Management      │"
+        echo -e "    │  Professional • Secure • Simple    │"
+        echo -e "    └─────────────────────────────────────┘"
+        echo
         echo -e "${BOLD:-}${CYAN:-}Welcome to the Milou CLI Setup Wizard${NC:-}"
         echo -e "${CYAN:-}Setting up your professional Docker environment...${NC:-}"
         echo

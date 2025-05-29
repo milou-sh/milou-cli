@@ -436,13 +436,32 @@ function main() {
     # Load core modules first
     load_core_modules
     
-    # Parse global options first
+    # First pass: look for commands and help combinations
+    local has_command=false
+    local temp_args=("$@")
+    for arg in "${temp_args[@]}"; do
+        case $arg in
+            setup|status|start|stop|restart|logs|backup|restore|update|self-update|admin|config|user|ssl|health|shell|help)
+                has_command=true
+                break
+                ;;
+        esac
+    done
+    
+    # Parse global options first, before command identification
+    local args=()
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
-                show_header
-                show_help
-                exit 0
+                if [[ "$has_command" == "false" ]]; then
+                    show_header
+                    show_help
+                    exit 0
+                else
+                    # Pass help to the command handler
+                    args+=("$1")
+                    shift
+                fi
                 ;;
             --version)
                 show_version
@@ -470,15 +489,16 @@ function main() {
                 export FORCE=true
                 shift
                 ;;
-            -*)
-                echo -e "${RED}ERROR: Unknown option: $1${NC}" >&2
-                exit 1
-                ;;
             *)
-                break
+                # This is a command, command argument, or command-specific option, save it
+                args+=("$1")
+                shift
                 ;;
         esac
     done
+    
+    # Restore the non-global arguments
+    set -- "${args[@]}"
     
     # Show header for interactive sessions
     if [[ $# -eq 0 ]]; then

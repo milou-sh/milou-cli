@@ -69,21 +69,19 @@ setup_run() {
     local skip_validation="${3:-false}"
     local preserve_creds="${4:-auto}"
     
+    # Display header
     milou_log "STEP" "🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION:-latest}"
     echo "═══════════════════════════════════════════════════"
-    echo
+    echo ""
     
-    # Step 1: System Analysis and Detection
+    # Step 1: System Analysis (always succeeds, just gathers information)
     if ! setup_analyze_system; then
         milou_log "ERROR" "System analysis failed"
         return 1
     fi
     
-    # Step 2: Prerequisites Assessment
-    if ! setup_assess_prerequisites; then
-        milou_log "ERROR" "Prerequisites assessment failed"
-        return 1
-    fi
+    # Step 2: Prerequisites Assessment (reports status, doesn't fail setup)
+    setup_assess_prerequisites || true  # Always continue regardless of result
     
     # Step 3: Setup Mode Determination
     if ! setup_determine_mode "$mode"; then
@@ -91,7 +89,7 @@ setup_run() {
         return 1
     fi
     
-    # Step 4: Dependencies Installation
+    # Step 4: Dependencies Installation (only if needed)
     if [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
         if ! setup_install_dependencies; then
             milou_log "ERROR" "Dependencies installation failed"
@@ -99,7 +97,7 @@ setup_run() {
         fi
     fi
     
-    # Step 5: User Management
+    # Step 5: User Management (only if needed)
     if [[ "$SETUP_NEEDS_USER" == "true" ]]; then
         if ! setup_manage_user; then
             milou_log "ERROR" "User management failed"
@@ -368,11 +366,16 @@ setup_assess_prerequisites() {
         milou_log "SUCCESS" "✅ All critical prerequisites satisfied"
         if [[ ${#optional_missing[@]} -gt 0 ]]; then
             milou_log "WARN" "📦 Optional tools missing: ${optional_missing[*]}"
+            milou_log "INFO" "💡 These will be installed if needed during setup"
         fi
         return 0
     else
-        milou_log "WARN" "❌ Critical prerequisites missing: ${critical_missing[*]}"
-        return 1
+        milou_log "INFO" "📦 Critical prerequisites to be installed: ${critical_missing[*]}"
+        if [[ ${#optional_missing[@]} -gt 0 ]]; then
+            milou_log "INFO" "📦 Optional tools to be installed: ${optional_missing[*]}"
+        fi
+        milou_log "INFO" "🚀 Don't worry - setup will install these automatically"
+        return 1  # Still return 1 to indicate missing deps, but setup continues
     fi
 }
 
@@ -713,23 +716,40 @@ setup_generate_configuration_interactive() {
     local preserve_creds="${1:-auto}"
     
     milou_log "INFO" "🧙 Interactive Configuration Generation"
+    echo ""
     
-    # Get domain
+    # Get domain with proper prompting
     local domain
-    domain=$(prompt_user "Enter domain name" "localhost")
+    echo -ne "Enter domain name (default: localhost): "
+    read -r domain
+    if [[ -z "$domain" ]]; then
+        domain="localhost"
+    fi
+    echo ""
     
-    # Get admin email
+    # Get admin email with proper prompting
     local email
-    email=$(prompt_user "Enter admin email" "admin@localhost")
+    echo -ne "Enter admin email (default: admin@localhost): "
+    read -r email
+    if [[ -z "$email" ]]; then
+        email="admin@localhost"
+    fi
+    echo ""
     
     # Get SSL mode
     echo "Select SSL mode:"
     echo "1) Generate self-signed certificates (recommended for development)"
     echo "2) Use existing certificates"
     echo "3) No SSL (not recommended)"
+    echo ""
     
     local ssl_choice
-    ssl_choice=$(prompt_user "Choose SSL mode [1-3]" "1")
+    echo -ne "Choose SSL mode [1-3] (default: 1): "
+    read -r ssl_choice
+    if [[ -z "$ssl_choice" ]]; then
+        ssl_choice="1"
+    fi
+    echo ""
     
     local ssl_mode
     case "$ssl_choice" in
@@ -999,16 +1019,66 @@ setup_prepare_docker_environment() {
 setup_start_services() {
     milou_log "INFO" "🚀 Starting Milou services..."
     
-    local compose_file="${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml"
-    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
+    # Check if GitHub token is available for private images
+    local github_token="${GITHUB_TOKEN:-}"
     
-    if [[ ! -f "$compose_file" ]]; then
-        milou_log "ERROR" "Docker Compose file not found: $compose_file"
-        return 1
+    # If no token and we're in interactive mode, prompt for it
+    if [[ -z "$github_token" && "$SETUP_CURRENT_MODE" == "$SETUP_MODE_INTERACTIVE" ]]; then
+        echo ""
+        echo "🔐 GITHUB CONTAINER REGISTRY ACCESS"
+        echo "===================================="
+        echo ""
+        echo "Milou uses private Docker images from GitHub Container Registry."
+        echo "To access these images, you need a GitHub Personal Access Token."
+        echo ""
+        echo "You can either:"
+        echo "1) Enter your GitHub token now (recommended)"
+        echo "2) Skip and set it later in the .env file"
+        echo ""
+        
+        if confirm "Do you have a GitHub Personal Access Token?" "Y"; then
+            echo ""
+            echo "Enter your GitHub Personal Access Token:"
+            echo "(You can create one at: https://github.com/settings/tokens)"
+            echo "Required scopes: read:packages"
+            echo ""
+            echo -ne "GitHub Token: "
+            read -rs github_token
+            echo
+            echo ""
+            
+            if [[ -n "$github_token" ]]; then
+                # Validate the token
+                if validate_github_token "$github_token" "false"; then
+                    milou_log "SUCCESS" "✅ GitHub token validated"
+                    # Update the .env file with the token
+                    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+                        if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
+                            sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "${SCRIPT_DIR:-$(pwd)}/.env"
+                        else
+                            echo "GITHUB_TOKEN=$github_token" >> "${SCRIPT_DIR:-$(pwd)}/.env"
+                        fi
+                        milou_log "INFO" "Token saved to .env file"
+                    fi
+                else
+                    milou_log "WARN" "⚠️  Token validation failed, but continuing with provided token"
+                fi
+            else
+                milou_log "INFO" "No token provided, continuing without authentication"
+            fi
+        else
+            milou_log "INFO" "Skipping GitHub token setup"
+            echo ""
+            echo "💡 To set up authentication later:"
+            echo "  1. Get a token from: https://github.com/settings/tokens"
+            echo "  2. Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
+            echo "  3. Restart services: ./milou.sh restart"
+            echo ""
+        fi
     fi
     
-    # Start services
-    if docker compose --env-file "$env_file" -f "$compose_file" up -d; then
+    # Use the Docker module's start function which handles authentication
+    if docker_start "$github_token" "false" "false"; then
         milou_log "SUCCESS" "✅ Services started successfully"
         
         # Wait for services to be ready
@@ -1018,6 +1088,24 @@ setup_start_services() {
         return 0
     else
         milou_log "ERROR" "Failed to start services"
+        
+        # If authentication failed and we don't have a token, provide guidance
+        if [[ -z "$github_token" ]]; then
+            echo ""
+            echo "🔐 AUTHENTICATION MAY BE REQUIRED"
+            echo "=================================="
+            echo ""
+            echo "If the error above mentions 'unauthorized' or authentication,"
+            echo "you need a GitHub Personal Access Token to access private images."
+            echo ""
+            echo "🔧 GET A GITHUB TOKEN:"
+            echo "  1. Go to: https://github.com/settings/tokens"
+            echo "  2. Create a token with 'read:packages' scope"
+            echo "  3. Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
+            echo "  4. Run setup again: ./milou.sh setup"
+            echo ""
+        fi
+        
         return 1
     fi
 }

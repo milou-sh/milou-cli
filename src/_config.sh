@@ -278,9 +278,15 @@ config_create_env_file() {
             postgres_db="${line#POSTGRES_DB=}"
         elif [[ "$line" =~ ^REDIS_PASSWORD= ]]; then
             redis_password="${line#REDIS_PASSWORD=}"
+        elif [[ "$line" =~ ^RABBITMQ_USER= ]]; then
+            rabbitmq_user="${line#RABBITMQ_USER=}"
+        elif [[ "$line" =~ ^RABBITMQ_PASSWORD= ]]; then
+            rabbitmq_password="${line#RABBITMQ_PASSWORD=}"
         elif [[ "$line" =~ ^RABBITMQ_DEFAULT_USER= ]]; then
+            # Backward compatibility
             rabbitmq_user="${line#RABBITMQ_DEFAULT_USER=}"
         elif [[ "$line" =~ ^RABBITMQ_DEFAULT_PASS= ]]; then
+            # Backward compatibility
             rabbitmq_password="${line#RABBITMQ_DEFAULT_PASS=}"
         elif [[ "$line" =~ ^SESSION_SECRET= ]]; then
             session_secret="${line#SESSION_SECRET=}"
@@ -383,6 +389,8 @@ REDIS_SESSION_TTL=86400
 # =============================================================================
 # RABBITMQ CONFIGURATION
 # =============================================================================
+RABBITMQ_USER=$rabbitmq_user
+RABBITMQ_PASSWORD=$rabbitmq_password
 RABBITMQ_DEFAULT_USER=$rabbitmq_user
 RABBITMQ_DEFAULT_PASS=$rabbitmq_password
 RABBITMQ_URL=amqp://$rabbitmq_user:$rabbitmq_password@rabbitmq:5672/
@@ -404,7 +412,7 @@ API_KEY=$api_key
 # ADMIN CONFIGURATION
 # =============================================================================
 ADMIN_EMAIL=$admin_email
-ADMIN_USERNAME=${MILOU_DEFAULT_USERNAME}
+ADMIN_USERNAME=admin
 ADMIN_PASSWORD=$admin_password
 
 # =============================================================================
@@ -936,8 +944,8 @@ config_preserve_existing_credentials() {
     preserved_creds[ENCRYPTION_KEY]=$(grep "^ENCRYPTION_KEY=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
     
     # RabbitMQ credentials
-    preserved_creds[RABBITMQ_DEFAULT_USER]=$(grep "^RABBITMQ_DEFAULT_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
-    preserved_creds[RABBITMQ_DEFAULT_PASS]=$(grep "^RABBITMQ_DEFAULT_PASS=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
+    preserved_creds[RABBITMQ_USER]=$(grep "^RABBITMQ_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
+    preserved_creds[RABBITMQ_PASSWORD]=$(grep "^RABBITMQ_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
     
     # Redis credentials
     preserved_creds[REDIS_PASSWORD]=$(grep "^REDIS_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2- | sed 's/^"//' | sed 's/"$//')
@@ -1089,10 +1097,10 @@ config_generate_credentials_with_preservation() {
     redis_password=$(config_get_credential "REDIS_PASSWORD" "$(generate_secure_random 32 "safe")")
     
     local rabbitmq_user
-    rabbitmq_user=$(config_get_credential "RABBITMQ_DEFAULT_USER" "milou_rabbit_$(generate_secure_random 6 "alphanumeric")")
+    rabbitmq_user=$(config_get_credential "RABBITMQ_USER" "milou_rabbit_$(generate_secure_random 6 "alphanumeric")")
     
     local rabbitmq_password
-    rabbitmq_password=$(config_get_credential "RABBITMQ_DEFAULT_PASS" "$(generate_secure_random 32 "safe")")
+    rabbitmq_password=$(config_get_credential "RABBITMQ_PASSWORD" "$(generate_secure_random 32 "safe")")
     
     local session_secret
     session_secret=$(config_get_credential "SESSION_SECRET" "$(generate_secure_random 64 "safe")")
@@ -1115,8 +1123,8 @@ POSTGRES_USER=$postgres_user
 POSTGRES_PASSWORD=$postgres_password
 POSTGRES_DB=$postgres_db
 REDIS_PASSWORD=$redis_password
-RABBITMQ_DEFAULT_USER=$rabbitmq_user
-RABBITMQ_DEFAULT_PASS=$rabbitmq_password
+RABBITMQ_USER=$rabbitmq_user
+RABBITMQ_PASSWORD=$rabbitmq_password
 SESSION_SECRET=$session_secret
 ENCRYPTION_KEY=$encryption_key
 JWT_SECRET=$jwt_secret

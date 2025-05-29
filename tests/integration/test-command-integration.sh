@@ -215,14 +215,26 @@ test_new_self_update_commands() {
 test_command_module_loading() {
     test_log "INFO" "Testing command module loading..."
     
-    # Test that command modules can be loaded
-    test_load_module "commands/admin.sh" || return 1
-    test_load_module "commands/backup.sh" || return 1
-    test_load_module "commands/update.sh" || return 1
+    # Test that the main modules can be loaded
+    if ! source "$PROJECT_ROOT/src/_admin.sh"; then
+        test_log "ERROR" "Failed to load admin module"
+        return 1
+    fi
+    
+    if ! source "$PROJECT_ROOT/src/_backup.sh"; then
+        test_log "ERROR" "Failed to load backup module"
+        return 1
+    fi
+    
+    if ! source "$PROJECT_ROOT/src/_update.sh"; then
+        test_log "ERROR" "Failed to load update module"
+        return 1
+    fi
     
     # Test that command handlers are available after loading
     assert_function_exists "handle_admin" "Admin command handler should be available"
     assert_function_exists "handle_backup" "Backup command handler should be available"
+    assert_function_exists "handle_update" "Update command handler should be available"
     
     test_log "SUCCESS" "Command module loading tests passed"
     return 0
@@ -252,18 +264,20 @@ test_error_handling_integration() {
 test_export_cleanup_validation() {
     test_log "INFO" "Testing export cleanup validation..."
     
-    # Load all command modules
-    test_load_module "commands/admin.sh" || return 1
-    test_load_module "commands/backup.sh" || return 1
-    test_load_module "commands/update.sh" || return 1
+    # Load all main modules
+    source "$PROJECT_ROOT/src/_admin.sh" || return 1
+    source "$PROJECT_ROOT/src/_backup.sh" || return 1
+    source "$PROJECT_ROOT/src/_update.sh" || return 1
+    source "$PROJECT_ROOT/src/_config.sh" || return 1
+    source "$PROJECT_ROOT/src/_ssl.sh" || return 1
     
-    # Count total exported functions from command modules
+    # Count total exported functions from all modules
     local total_exports
-    total_exports=$(declare -F | grep -E "(handle_|milou_)" | wc -l)
+    total_exports=$(declare -F | grep -E "(handle_|milou_|config_|ssl_)" | wc -l)
     
-    # Should have a reasonable number of exports (not excessive)
-    if [[ $total_exports -gt 50 ]]; then
-        test_log "ERROR" "Too many exported functions: $total_exports (should be < 50)"
+    # Should have a reasonable number of exports (updated expectation for modular system)
+    if [[ $total_exports -gt 100 ]]; then
+        test_log "ERROR" "Too many exported functions: $total_exports (should be < 100)"
         return 1
     fi
     

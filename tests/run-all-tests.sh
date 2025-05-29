@@ -136,7 +136,7 @@ run_regression_tests() {
     
     # Test 2: Module loading doesn't break
     test_log "INFO" "Testing core module loading..."
-    if bash -c "cd '$PROJECT_ROOT' && source lib/core/logging.sh && echo 'Module loading works'" >/dev/null 2>&1; then
+    if bash -c "cd '$PROJECT_ROOT' && source src/_core.sh && echo 'Module loading works'" >/dev/null 2>&1; then
         test_log "SUCCESS" "✅ Core modules load successfully"
         ((regression_passed++))
     else
@@ -146,7 +146,7 @@ run_regression_tests() {
     
     # Test 3: Command modules can be sourced
     test_log "INFO" "Testing command module loading..."
-    if bash -c "cd '$PROJECT_ROOT' && source commands/admin.sh && echo 'Command loading works'" >/dev/null 2>&1; then
+    if bash -c "cd '$PROJECT_ROOT' && source src/_admin.sh && echo 'Command loading works'" >/dev/null 2>&1; then
         test_log "SUCCESS" "✅ Command modules load successfully"
         ((regression_passed++))
     else
@@ -159,9 +159,9 @@ run_regression_tests() {
     local total_exports
     total_exports=$(bash -c "
         cd '$PROJECT_ROOT'
-        source lib/backup/core.sh 2>/dev/null || true
-        source lib/update/self-update.sh 2>/dev/null || true
-        source commands/admin.sh 2>/dev/null || true
+        source src/_backup.sh 2>/dev/null || true
+        source src/_update.sh 2>/dev/null || true
+        source src/_admin.sh 2>/dev/null || true
         declare -F | grep 'milou\|handle_' | wc -l
     " 2>/dev/null || echo "0")
     
@@ -213,10 +213,10 @@ run_performance_tests() {
     
     if bash -c "
         cd '$PROJECT_ROOT'
-        source lib/core/logging.sh
-        source lib/backup/core.sh
-        source lib/update/self-update.sh
-        source commands/admin.sh
+        source src/_core.sh
+        source src/_backup.sh
+        source src/_update.sh
+        source src/_admin.sh
         echo 'Modules loaded'
     " >/dev/null 2>&1; then
         end_time=$(date +%s%N)
@@ -253,7 +253,7 @@ run_security_tests() {
     local secrets_found=false
     
     for pattern in "${secret_patterns[@]}"; do
-        if grep -r -i "$pattern" "$PROJECT_ROOT/lib" "$PROJECT_ROOT/commands" 2>/dev/null | grep -v "test" | grep -v "#" >/dev/null; then
+        if grep -r -i "$pattern" "$PROJECT_ROOT/src" 2>/dev/null | grep -v "test" | grep -v "#" >/dev/null; then
             secrets_found=true
             break
         fi
@@ -294,7 +294,7 @@ run_security_tests() {
     local dangerous_practices=false
     
     # Check for eval usage (can be dangerous)
-    if grep -r "eval " "$PROJECT_ROOT/lib" "$PROJECT_ROOT/commands" 2>/dev/null | grep -v "test" >/dev/null; then
+    if grep -r "eval " "$PROJECT_ROOT/src" 2>/dev/null | grep -v "test" >/dev/null; then
         dangerous_practices=true
     fi
     

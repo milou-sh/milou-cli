@@ -613,7 +613,7 @@ start_setup() {
         
         # Always prompt user - no countdown
         local choice
-        choice=$(prompt_user "Start setup wizard now? (Y/n)" "n")
+        choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")
         
         if [[ "$choice" =~ ^[Yy]$ ]]; then
             echo

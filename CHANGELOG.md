@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.3] - 2024-12-19
+
+### 🏠 **Installation Directory Improvements**
+- **Smart Directory Detection**: Installation now defaults to /home/ instead of /root/
+- **Multi-user Support**: When running as root, detects first regular user and installs to their home
+- **Interactive Directory Selection**: Users can choose custom installation directories with recommendations
+- **Proper Ownership**: Automatically sets correct file ownership for multi-user scenarios
+
+### 🎯 **Enhanced Error Handling**
+- **Interactive Recovery**: When errors occur, users get actionable choices (retry, exit, continue)
+- **Contextual Suggestions**: Each error includes specific solutions based on the problem type
+- **Multi-package Manager Support**: Automatic detection and instructions for apt, yum, dnf, brew, pacman
+- **Graceful Fallbacks**: Non-interactive mode handles errors appropriately for automation
+
+### 🔧 **Installation Script Enhancements**
+- **User-Friendly Prompts**: Clear recommendations for different installation scenarios
+- **Cross-Shell Support**: Improved shell integration for bash, zsh, fish with proper ownership
+- **Better Documentation**: Enhanced help text with directory selection guidance
+- **Development Support**: Special handling for development installations
+
 ## [3.1.2] - 2024-12-19
 
 ### 🎯 **Major User Experience Improvements**
@@ -18,61 +38,20 @@ All notable changes to this project will be documented in this file.
 
 ### ✨ **Installation Script Enhancements**
 - **Better Error Handling**: Improved error messages with clear solutions and troubleshooting guidance
-- **Progress Indication**: Enhanced visual feedback during download and installation steps
-- **Smart Detection**: Better script execution detection for curl vs direct execution
-- **Professional Branding**: Consistent, compact ASCII logo across installer and CLI
-- **Clearer Messaging**: Improved step descriptions and completion messages
+- **Professional Formatting**: Clean, colored output with progress indicators and status messages
+- **Validation Improvements**: Comprehensive checks with helpful error recovery suggestions
+- **User Experience**: Streamlined flow from download to running setup
 
-### 🚀 **User Experience Optimizations**
-- **Streamlined Flow**: Zero-to-running in under 5 minutes with clear progression
-- **Visual Consistency**: Unified color coding and typography across all components
-- **Better Guidance**: Enhanced next steps and troubleshooting information
-- **Installation Options**: Comprehensive examples for different installation scenarios
-- **Progress Clarity**: Users always know what's happening and what's next
+### 📚 **Documentation**
+- **User Experience Guide**: Added comprehensive docs/USER_EXPERIENCE.md with detailed setup flows
+- **Installation Examples**: Real-world scenarios with screenshots and step-by-step instructions
+- **Troubleshooting Guide**: Common issues and solutions for different environments
 
 ### 🔧 **Technical Improvements**
-- **`install.sh`**: Fixed BASH_SOURCE unbound variable error for curl | bash execution
-- **`src/milou`**: Updated ASCII art to compact, terminal-friendly version
-- **`src/_setup.sh`**: Consistent branding and improved wizard experience
-- **`README.md`**: Enhanced quick start with better examples and flow description
-- **`docs/USER_EXPERIENCE.md`**: New comprehensive UX guide with complete user journey
-
-### 📚 **Documentation Enhancements**
-- **User Experience Guide**: Complete documentation of user journey from discovery to production
-- **Installation Examples**: Comprehensive examples for all installation scenarios
-- **Visual Design Guide**: Documented color coding, typography, and layout principles
-- **UX Metrics**: Defined success criteria and monitoring points for continuous improvement
-
-### 🎨 **Visual Design Improvements**
-- **Compact Logo**: ASCII art optimized for terminal display (10 lines vs 23 lines)
-- **Color Consistency**: Standardized color coding across all components
-- **Better Layout**: Improved spacing and visual hierarchy
-- **Professional Appearance**: Enterprise-quality visual experience
-
-### 📋 **Installation Experience**
-```bash
-# Before: Large ASCII art + unclear progress
-# After: Compact branding + clear step-by-step progress
-
-# Before: Generic error messages
-# After: Specific errors with solutions
-
-# Before: Silent operations
-# After: Clear progress indication with emojis and descriptions
-```
-
-### 🔄 **Migration Notes**
-- Existing installations continue to work unchanged
-- New installations benefit from improved experience
-- All components now use consistent ASCII art
-- Better error recovery and user guidance
-
-### 🏆 **User Experience Goals Achieved**
-- ✅ **Zero-to-Running**: Complete setup in under 5 minutes
-- ✅ **Clear Progress**: User always knows current state and next steps
-- ✅ **Professional Quality**: Enterprise-grade visual experience
-- ✅ **Error Recovery**: Helpful guidance when issues occur
-- ✅ **Consistent Branding**: Unified experience across all components
+- **Modular Architecture**: Consolidated codebase with clean separation of concerns
+- **Enhanced Logging**: Better debug output and user-friendly messages
+- **Cross-platform**: Improved compatibility across different Linux distributions
+- **Error Recovery**: Robust error handling with user choice prompts
 
 ## [3.1.1] - 2024-12-19
 

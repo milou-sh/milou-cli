@@ -628,7 +628,15 @@ start_setup() {
             # Unset variables that might interfere with setup interactivity
             unset FORCE QUIET
             
-            exec ./milou.sh setup
+            # For curl | bash, redirect stdin to terminal so setup can read user input
+            if [[ ! -t 0 ]]; then
+                # stdin is not a terminal (probably curl | bash)
+                # Redirect to terminal for interactive setup
+                exec ./milou.sh setup < /dev/tty
+            else
+                # stdin is already a terminal
+                exec ./milou.sh setup
+            fi
         else
             echo
             echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"

@@ -39,19 +39,44 @@ The fastest way to get started with Milou CLI:
 curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
-This will:
-- ✅ Download and install Milou CLI
-- ✅ Set up shell integration 
-- ✅ Automatically start the interactive setup wizard
-- ✅ Guide you through the complete configuration
+**✨ What happens automatically:**
+- ✅ Downloads and installs Milou CLI 
+- ✅ Sets up shell integration (`milou` command)
+- ✅ Launches interactive setup wizard
+- ✅ Guides you through complete configuration
+- ✅ Starts services and validates everything works
 
-### **Manual Installation**
+### **Installation Options**
 
-If you prefer manual installation:
+Customize your installation:
+
+```bash
+# Basic installation (recommended)
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
+
+# Custom installation directory
+MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
+
+# Install development version
+MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
+
+# Quiet installation (minimal output)
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --quiet
+
+# Manual setup (don't auto-start wizard)
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --no-start
+
+# Force overwrite existing installation
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --force
+```
+
+### **Manual Installation** (Advanced Users)
+
+If you prefer manual control:
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/milou-sh/milou-cli.git
 cd milou-cli
 
 # Make executable
@@ -60,55 +85,66 @@ chmod +x milou.sh
 # Copy configuration template
 cp .env.example .env
 
-# Edit configuration
+# Edit configuration (optional)
 nano .env
 
-# Run setup
+# Run interactive setup
 ./milou.sh setup
 ```
 
 ### **Basic Usage**
 
 ```bash
-# Interactive setup wizard
-./milou.sh setup
+# After installation, these commands are available:
+
+# Interactive setup wizard (first time)
+milou setup                    # Or: ./milou.sh setup
 
 # Service management
-./milou.sh start              # Start all services
-./milou.sh stop               # Stop all services
-./milou.sh status             # Check service status
-./milou.sh restart            # Restart all services
+milou start                    # Start all services
+milou stop                     # Stop all services  
+milou status                   # Check service status
+milou restart                  # Restart all services
 
-# Monitoring and logs
-./milou.sh logs               # View service logs
-./milou.sh health             # Health check
-./milou.sh diagnose          # System diagnosis
+# Monitoring and diagnostics
+milou logs                     # View service logs
+milou health                   # Comprehensive health check
+milou shell [service]          # Access service shell
 
 # Admin operations
-./milou.sh admin credentials  # Show admin credentials
-./milou.sh admin reset        # Reset admin password
+milou admin credentials        # Show admin credentials
+milou admin reset-password     # Reset admin password
 
-# Backup and restore
-./milou.sh backup             # Create system backup
-./milou.sh restore            # Restore from backup
+# Data management
+milou backup                   # Create system backup
+milou restore [backup_file]    # Restore from backup
+
+# Updates
+milou self-update             # Update Milou CLI
+milou update                  # Update services
+
+# Help
+milou --help                  # Show all commands
+milou [command] --help        # Command-specific help
 ```
 
-### **Installation Options**
+### **🚀 Quick Demo**
 
-Customize your one-line installation:
+Want to see it in action? Here's a complete setup in under 2 minutes:
 
 ```bash
-# Install to specific directory
-MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
+# 1. One-line install (30 seconds)
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
-# Install specific branch (e.g., development version)
-MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
+# 2. Setup will start automatically and ask for:
+#    - Domain name (e.g., localhost, yourdomain.com)
+#    - Admin email 
+#    - SSL certificate preferences
 
-# Quiet installation (minimal output)
-curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --quiet
-
-# Install without starting setup automatically
-curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --no-start
+# 3. Access your instance
+#    - HTTPS: https://yourdomain.com (or https://localhost)
+#    - Login with generated admin credentials
+#    - Start managing your containers!
 ```
 
 ## 🏗️ **Architecture**
@@ -248,7 +284,7 @@ done
 - **[Development Guide](docs/DEVELOPMENT.md)**: Contributor documentation
 - **[Contributing Guidelines](CONTRIBUTING.md)**: How to contribute
 
-## �� **Contributing**
+## 🤝 **Contributing**
 
 We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 

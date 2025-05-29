@@ -53,7 +53,7 @@ step() {
     echo -e "${BLUE}[STEP]${NC} $*"
 }
 
-# Show Milou ASCII art
+# Show Milou ASCII art - Compact version for better UX
 show_milou_logo() {
     echo -e "${PURPLE}"
     cat << 'EOF'
@@ -168,17 +168,24 @@ check_prerequisites() {
     
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         error "Missing required dependencies: ${missing_deps[*]}"
-        echo "Please install missing dependencies and try again."
+        echo
+        echo -e "${CYAN}💡 Quick Fix:${NC}"
         
         # Provide installation hints based on OS
         if command -v apt-get &> /dev/null; then
-            echo "Try: sudo apt-get update && sudo apt-get install ${missing_deps[*]}"
+            echo "   sudo apt-get update && sudo apt-get install -y ${missing_deps[*]}"
         elif command -v yum &> /dev/null; then
-            echo "Try: sudo yum install ${missing_deps[*]}"
+            echo "   sudo yum install -y ${missing_deps[*]}"
+        elif command -v dnf &> /dev/null; then
+            echo "   sudo dnf install -y ${missing_deps[*]}"
         elif command -v brew &> /dev/null; then
-            echo "Try: brew install ${missing_deps[*]}"
+            echo "   brew install ${missing_deps[*]}"
+        else
+            echo "   Please install: ${missing_deps[*]}"
         fi
         
+        echo
+        echo "Then run the installation command again."
         exit 1
     fi
     
@@ -192,9 +199,14 @@ check_existing_installation() {
             warn "Installation directory exists, removing due to --force flag"
             rm -rf "$INSTALL_DIR"
         else
+            echo
             error "Installation directory already exists: $INSTALL_DIR"
-            echo "Use --force to overwrite or choose a different directory with --install-dir"
-            echo "Or run: rm -rf '$INSTALL_DIR' && curl -fsSL ... | bash"
+            echo
+            echo -e "${CYAN}💡 Options:${NC}"
+            echo "   • Use --force to overwrite: curl ... | bash -s -- --force"
+            echo "   • Choose different directory: MILOU_INSTALL_DIR=/opt/milou curl ... | bash"
+            echo "   • Remove manually: rm -rf '$INSTALL_DIR' && curl ... | bash"
+            echo
             exit 1
         fi
     fi
@@ -213,19 +225,24 @@ install_milou() {
         mkdir -p "$parent_dir"
     fi
     
-    # Clone the repository
+    # Clone the repository with progress indication
     log "⬇️  Downloading Milou CLI from GitHub..."
     echo -e "   ${DIM}Repository: $REPO_URL${NC}"
     echo -e "   ${DIM}Branch: $BRANCH${NC}"
     echo
     
-    if ! git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>&1 | grep -E "(Cloning|Receiving|Resolving)" | sed 's/^/   /' ; then
+    # Show progress for git clone
+    if git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>&1 | \
+       sed 's/^/   /' | grep -E "(Cloning|Receiving|Resolving|done)"; then
+        log "✅ Download completed successfully"
+    else
         error "Failed to download repository"
         echo
-        echo -e "${YELLOW}💡 Troubleshooting:${NC}"
+        echo -e "${YELLOW}🔍 Troubleshooting:${NC}"
         echo "   • Check internet connection"
         echo "   • Verify repository exists: $REPO_URL"
         echo "   • Try a different branch: MILOU_BRANCH=main curl ... | bash"
+        echo "   • Check GitHub status: https://status.github.com"
         exit 1
     fi
     
@@ -240,9 +257,9 @@ install_milou() {
     
     # Verify installation
     if [[ -f "$INSTALL_DIR/milou.sh" ]]; then
-        success "✅ Milou CLI downloaded and configured successfully"
+        success "✅ Milou CLI installed successfully"
     else
-        error "Installation verification failed"
+        error "Installation verification failed - main script not found"
         exit 1
     fi
 }
@@ -252,7 +269,7 @@ setup_shell_integration() {
     step "Setting up shell integration..."
     
     local shell_rc=""
-    case "$SHELL" in
+    case "${SHELL:-/bin/bash}" in
         */bash)
             shell_rc="$HOME/.bashrc"
             ;;
@@ -263,7 +280,7 @@ setup_shell_integration() {
             shell_rc="$HOME/.config/fish/config.fish"
             ;;
         *)
-            warn "Unknown shell: $SHELL, skipping shell integration"
+            warn "Unknown shell: ${SHELL:-unknown}, skipping shell integration"
             return 0
             ;;
     esac
@@ -275,9 +292,9 @@ setup_shell_integration() {
             echo "" >> "$shell_rc"
             echo "# Milou CLI alias" >> "$shell_rc"
             echo "$alias_line" >> "$shell_rc"
-            log "Added milou alias to $shell_rc"
+            log "✅ Added milou alias to $shell_rc"
         else
-            log "Milou alias already exists in $shell_rc"
+            log "✅ Milou alias already exists in $shell_rc"
         fi
     fi
     
@@ -289,23 +306,24 @@ show_completion() {
     echo
     success "🎉 Milou CLI installation completed!"
     echo
-    echo -e "${BOLD}${BLUE}┌──────────────────────────────────────────────┐${NC}"
-    echo -e "${BOLD}${BLUE}│             INSTALLATION COMPLETE!          │${NC}"
-    echo -e "${BOLD}${BLUE}└──────────────────────────────────────────────┘${NC}"
+    echo -e "${BOLD}${GREEN}┌─────────────────────────────────────────────┐${NC}"
+    echo -e "${BOLD}${GREEN}│            INSTALLATION COMPLETE!          │${NC}"
+    echo -e "${BOLD}${GREEN}└─────────────────────────────────────────────┘${NC}"
     echo
     echo -e "${CYAN}📍 Installation Details:${NC}"
     echo -e "   Location: ${BOLD}$INSTALL_DIR${NC}"
     echo -e "   Version:  ${BOLD}Latest from $BRANCH branch${NC}"
-    echo -e "   Command:  ${BOLD}milou${NC} (available after shell restart)"
+    echo -e "   Alias:    ${BOLD}milou${NC} (available after shell restart)"
     echo
     echo -e "${GREEN}🚀 Quick Start Commands:${NC}"
-    echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
-    echo -e "   ${BOLD}./milou.sh setup${NC}      # Start interactive setup"
-    echo -e "   ${BOLD}./milou.sh --help${NC}     # View all commands"
+    echo -e "   ${BOLD}cd $INSTALL_DIR && ./milou.sh setup${NC}   # Start interactive setup"
+    echo -e "   ${BOLD}cd $INSTALL_DIR && ./milou.sh --help${NC}  # View all commands"
     echo
-    echo -e "${YELLOW}💡 Shell Integration:${NC}"
-    echo -e "   Restart your terminal or run: ${BOLD}source ~/.bashrc${NC}"
-    echo -e "   Then you can use: ${BOLD}milou setup${NC}"
+    echo -e "${YELLOW}💡 Next Steps:${NC}"
+    echo -e "   1. The setup wizard will start automatically"
+    echo -e "   2. Configure your domain and admin credentials"
+    echo -e "   3. Choose SSL certificate options"
+    echo -e "   4. Access your Milou instance"
     echo
 }
 
@@ -313,13 +331,14 @@ show_completion() {
 start_setup() {
     if [[ "$AUTO_START" == "true" ]]; then
         echo
-        echo -e "${BOLD}${GREEN}🚀 Ready to Start Setup!${NC}"
+        echo -e "${BOLD}${GREEN}🚀 Ready to Start Setup Wizard!${NC}"
         echo
-        echo -e "${CYAN}The interactive setup wizard will:${NC}"
-        echo -e "   • Guide you through configuration"
-        echo -e "   • Set up SSL certificates"
-        echo -e "   • Configure admin credentials"
-        echo -e "   • Start your Docker services"
+        echo -e "${CYAN}The interactive setup will:${NC}"
+        echo -e "   ✅ Guide you through configuration"
+        echo -e "   ✅ Set up SSL certificates"
+        echo -e "   ✅ Configure admin credentials"
+        echo -e "   ✅ Start your Docker services"
+        echo -e "   ✅ Validate everything works"
         echo
         
         echo -e "${YELLOW}Starting in 3 seconds... (Press Ctrl+C to cancel)${NC}"
@@ -341,13 +360,23 @@ start_setup() {
         echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
         echo -e "   ${BOLD}./milou.sh setup${NC}"
         echo
+        echo -e "${DIM}You can also restart your terminal and use: ${BOLD}milou setup${NC}"
+        echo
     fi
 }
 
 # Main installation function
 main() {
-    # Parse arguments if running as script
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Detect if we're running directly or via curl
+    local script_source="direct"
+    if [[ -p /dev/stdin ]] || [[ ! -t 0 ]]; then
+        script_source="curl"
+    fi
+    
+    # Parse arguments safely
+    if [[ "$script_source" == "direct" && "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
+        parse_args "$@"
+    elif [[ "$script_source" == "curl" ]]; then
         parse_args "$@"
     fi
     
@@ -358,11 +387,22 @@ main() {
     
     step "Starting Milou CLI installation..."
     
-    # Run installation steps
-    check_prerequisites
-    check_existing_installation
-    install_milou
-    setup_shell_integration
+    # Run installation steps with improved error handling
+    if ! check_prerequisites; then
+        exit 1
+    fi
+    
+    if ! check_existing_installation; then
+        exit 1
+    fi
+    
+    if ! install_milou; then
+        exit 1
+    fi
+    
+    if ! setup_shell_integration; then
+        warn "Shell integration failed, but installation succeeded"
+    fi
     
     # Show completion message
     if [[ "$QUIET" != "true" ]]; then
@@ -373,11 +413,11 @@ main() {
     start_setup
 }
 
-# Handle script being piped from curl
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Enhanced script execution detection
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0:-}" ]]; then
     # Running as script
     main "$@"
 else
-    # Being sourced (shouldn't happen with curl | bash)
+    # Being sourced (edge case)
     main "$@"
 fi 

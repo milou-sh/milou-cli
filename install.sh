@@ -189,28 +189,46 @@ prompt_installation_directory() {
         return 0  # Use default directory
     fi
     
-    echo -e "${CYAN}📁 Installation Directory Selection${NC}"
     echo
-    echo -e "Default installation directory: ${BOLD}$INSTALL_DIR${NC}"
+    echo -e "${CYAN}📁 Installation Directory Configuration${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════${NC}"
     echo
-    echo -e "${YELLOW}💡 Recommendations:${NC}"
-    echo -e "   • ${BOLD}/home/username/milou-cli${NC} - Recommended for personal use"
-    echo -e "   • ${BOLD}/opt/milou${NC} - Good for system-wide installation"
-    echo -e "   • ${BOLD}/usr/local/milou${NC} - Alternative system-wide location"
+    echo -e "Current default: ${BOLD}$INSTALL_DIR${NC}"
+    echo
+    echo -e "${YELLOW}💡 Recommended Installation Locations:${NC}"
+    echo -e "   ${GREEN}1.${NC} ${BOLD}Personal Use:${NC} /home/$(whoami)/milou-cli ${DIM}(recommended)${NC}"
+    echo -e "   ${GREEN}2.${NC} ${BOLD}System-wide:${NC}  /opt/milou ${DIM}(requires sudo)${NC}"
+    echo -e "   ${GREEN}3.${NC} ${BOLD}Alternative:${NC}  /usr/local/milou ${DIM}(requires sudo)${NC}"
+    echo -e "   ${GREEN}4.${NC} ${BOLD}Custom path${NC}"
     echo
     
     local choice
-    choice=$(prompt_user "Use default directory? (y/N)" "y")
+    choice=$(prompt_user "Choose installation type [1-4]" "1")
     
-    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
-        local custom_dir
-        custom_dir=$(prompt_user "Enter custom installation directory" "/opt/milou")
-        
-        if [[ -n "$custom_dir" ]]; then
-            INSTALL_DIR="$custom_dir"
-            log "Installation directory changed to: $INSTALL_DIR"
-        fi
-    fi
+    case "$choice" in
+        1)
+            INSTALL_DIR="/home/$(whoami)/milou-cli"
+            ;;
+        2)
+            INSTALL_DIR="/opt/milou"
+            ;;
+        3)
+            INSTALL_DIR="/usr/local/milou"
+            ;;
+        4)
+            local custom_dir
+            custom_dir=$(prompt_user "Enter custom installation directory" "$INSTALL_DIR")
+            if [[ -n "$custom_dir" ]]; then
+                INSTALL_DIR="$custom_dir"
+            fi
+            ;;
+        *)
+            log "Using default directory: $INSTALL_DIR"
+            ;;
+    esac
+    
+    echo -e "${GREEN}✅ Installation directory set to:${NC} ${BOLD}$INSTALL_DIR${NC}"
+    echo
 }
 
 # Parse command line arguments
@@ -343,47 +361,128 @@ check_existing_installation() {
                 return 1
             fi
         else
-            local suggestions=(
-                "Use --force flag: curl -fsSL ... | bash -s -- --force"
-                "Remove manually: rm -rf '$INSTALL_DIR'"
-                "Choose different directory: MILOU_INSTALL_DIR=/opt/milou curl -fsSL ... | bash"
-                "Continue with existing installation (if it's a previous Milou installation)"
-            )
+            echo
+            echo -e "${YELLOW}⚠️  Directory Already Exists${NC}"
+            echo -e "${BLUE}═══════════════════════════════${NC}"
+            echo
+            echo -e "${CYAN}Installation directory already exists:${NC} ${BOLD}$INSTALL_DIR${NC}"
+            echo
             
-            handle_error "Installation directory already exists: $INSTALL_DIR" \
-                         "Cannot install over existing directory without --force flag" \
-                         "${suggestions[@]}"
-            
-            # Let user decide what to do
-            local choice
-            choice=$(prompt_user "Remove existing directory and continue? (y/N)" "n")
-            if [[ "$choice" =~ ^[Yy]$ ]]; then
-                warn "Removing existing installation directory..."
-                if ! rm -rf "$INSTALL_DIR"; then
-                    handle_error "Failed to remove existing directory" \
-                                 "Could not delete $INSTALL_DIR" \
-                                 "Check permissions and try again" \
-                                 "Run with sudo if needed"
-                    exit 1
-                fi
+            # Check if it looks like a Milou installation
+            local is_milou_install=false
+            if [[ -f "$INSTALL_DIR/milou.sh" ]] || [[ -f "$INSTALL_DIR/src/milou" ]]; then
+                is_milou_install=true
+                echo -e "${GREEN}📋 Detected existing Milou CLI installation${NC}"
             else
-                echo -e "${RED}Installation cancelled by user.${NC}"
-                exit 1
+                echo -e "${YELLOW}📋 Directory contains other files${NC}"
+                if [[ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
+                    echo -e "${DIM}   Contents: $(ls -1 "$INSTALL_DIR" | head -3 | tr '\n' ' ')$([ $(ls -1 "$INSTALL_DIR" | wc -l) -gt 3 ] && echo "...")${NC}"
+                fi
             fi
+            echo
+            
+            echo -e "${CYAN}What would you like to do?${NC}"
+            if [[ "$is_milou_install" == "true" ]]; then
+                echo -e "   ${GREEN}1.${NC} ${BOLD}Update existing installation${NC} ${DIM}(recommended for Milou)${NC}"
+                echo -e "   ${GREEN}2.${NC} ${BOLD}Remove and reinstall${NC} ${DIM}(fresh start)${NC}"
+                echo -e "   ${GREEN}3.${NC} ${BOLD}Choose different directory${NC}"
+                echo -e "   ${GREEN}4.${NC} ${BOLD}Cancel installation${NC}"
+            else
+                echo -e "   ${GREEN}1.${NC} ${BOLD}Remove and install${NC} ${DIM}(will delete existing files)${NC}"
+                echo -e "   ${GREEN}2.${NC} ${BOLD}Choose different directory${NC} ${DIM}(recommended)${NC}"
+                echo -e "   ${GREEN}3.${NC} ${BOLD}Cancel installation${NC}"
+            fi
+            echo
+            
+            local choice
+            if [[ "$is_milou_install" == "true" ]]; then
+                choice=$(prompt_user "Choose option [1-4]" "1")
+            else
+                choice=$(prompt_user "Choose option [1-3]" "2")
+            fi
+            
+            case "$choice" in
+                1)
+                    if [[ "$is_milou_install" == "true" ]]; then
+                        log "Updating existing Milou installation..."
+                        # Remove but preserve any important configs if they exist
+                        if [[ -f "$INSTALL_DIR/.env" ]]; then
+                            log "Backing up existing configuration..."
+                            cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup" 2>/dev/null || true
+                        fi
+                    else
+                        warn "Removing existing directory and all contents..."
+                    fi
+                    
+                    if ! rm -rf "$INSTALL_DIR"; then
+                        handle_error "Failed to remove existing directory" \
+                                     "Could not delete $INSTALL_DIR" \
+                                     "Check permissions and try again" \
+                                     "Run with sudo if needed" \
+                                     "Choose a different directory"
+                        exit 1
+                    fi
+                    ;;
+                2)
+                    if [[ "$is_milou_install" == "true" ]]; then
+                        warn "Removing existing installation for fresh start..."
+                        if ! rm -rf "$INSTALL_DIR"; then
+                            handle_error "Failed to remove existing directory" \
+                                         "Could not delete $INSTALL_DIR" \
+                                         "Check permissions and try again" \
+                                         "Run with sudo if needed"
+                            exit 1
+                        fi
+                    else
+                        # Choose different directory
+                        echo
+                        echo -e "${CYAN}📁 Choose New Installation Directory${NC}"
+                        echo -e "${BLUE}═══════════════════════════════════════${NC}"
+                        echo
+                        prompt_installation_directory
+                        # Recursively check the new directory
+                        check_existing_installation
+                        return $?
+                    fi
+                    ;;
+                3)
+                    if [[ "$is_milou_install" == "true" ]]; then
+                        # Choose different directory
+                        echo
+                        echo -e "${CYAN}📁 Choose New Installation Directory${NC}"
+                        echo -e "${BLUE}═══════════════════════════════════════${NC}"
+                        echo
+                        prompt_installation_directory
+                        # Recursively check the new directory
+                        check_existing_installation
+                        return $?
+                    else
+                        echo -e "${RED}Installation cancelled by user.${NC}"
+                        exit 1
+                    fi
+                    ;;
+                4|*)
+                    echo -e "${RED}Installation cancelled by user.${NC}"
+                    exit 1
+                    ;;
+            esac
         fi
     fi
 }
 
 # Download and install Milou CLI
 install_milou() {
-    step "Installing Milou CLI to $INSTALL_DIR..."
+    echo
+    echo -e "${CYAN}📦 Installing Milou CLI${NC}"
+    echo -e "${BLUE}══════════════════════${NC}"
+    echo -e "Target directory: ${BOLD}$INSTALL_DIR${NC}"
     echo
     
     # Create parent directory if needed
     local parent_dir
     parent_dir="$(dirname "$INSTALL_DIR")"
     if [[ ! -d "$parent_dir" ]]; then
-        log "📁 Creating installation directory..."
+        log "📁 Creating parent directory: $parent_dir"
         if ! mkdir -p "$parent_dir"; then
             handle_error "Failed to create installation directory" \
                          "Could not create $parent_dir" \
@@ -438,7 +537,7 @@ install_milou() {
     
     # Verify installation
     if [[ -f "$INSTALL_DIR/milou.sh" ]]; then
-        success "✅ Milou CLI downloaded and configured successfully"
+        success "✅ Milou CLI installed successfully"
     else
         handle_error "Installation verification failed" \
                      "milou.sh script not found after installation" \
@@ -458,6 +557,8 @@ install_milou() {
                 warn "Could not set ownership, but installation can continue"
         fi
     fi
+    
+    echo
 }
 
 # Set up PATH and shell integration
@@ -601,12 +702,13 @@ main() {
     
     step "Starting Milou CLI installation..."
     
-    # Prompt for installation directory (if interactive and not overridden)
+    # Prompt for installation directory early in the process (if interactive and not overridden)
     if [[ -z "${MILOU_INSTALL_DIR:-}" ]]; then
         prompt_installation_directory
     fi
     
-    log "Installation directory: $INSTALL_DIR"
+    log "Installation target: $INSTALL_DIR"
+    echo
     
     # Run installation steps with error handling
     if ! check_prerequisites; then

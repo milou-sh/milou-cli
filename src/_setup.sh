@@ -67,53 +67,20 @@ setup_show_logo() {
     if tty -s && [[ "${QUIET:-false}" != "true" ]]; then
         echo -e "${PURPLE:-}"
         cat << 'EOF'
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
+    ████ ████ ██ ██      ███████ ██ ██
+    ██ ███ ██ ██ ██      ██  ██  ██ ██
+    ██  █  ██ ██ ██      ██  ██  ██ ██
+    ██     ██ ██ ██████  ██  ██  ██ ██
+    ██     ██ ██ ██████  ██████  ██ ██
+    
+    ┌─────────────────────────────────────┐
+    │  Milou CLI - Docker Management      │
+    │  Professional • Secure • Simple    │
+    └─────────────────────────────────────┘
 EOF
         echo -e "${NC:-}"
-        echo -e "${BOLD:-}${CYAN:-}Milou CLI - Professional Docker Management${NC:-}"
-        echo -e "${CYAN:-}            Interactive Setup Wizard${NC:-}"
+        echo -e "${BOLD:-}${CYAN:-}Welcome to the Milou CLI Setup Wizard${NC:-}"
+        echo -e "${CYAN:-}Setting up your professional Docker environment...${NC:-}"
         echo
     fi
 }
@@ -778,49 +745,115 @@ setup_generate_configuration() {
 setup_generate_configuration_interactive() {
     local preserve_creds="${1:-auto}"
     
-    milou_log "INFO" "🧙 Interactive Configuration Generation"
-    echo ""
+    milou_log "INFO" "🧙 Interactive Configuration Setup"
+    echo
+    echo -e "${CYAN}Let's configure your Milou environment...${NC:-}"
+    echo
     
-    # Get domain with proper prompting
+    # Get domain with better prompting and validation
     local domain
-    echo -ne "Enter domain name (default: localhost): "
-    read -r domain
-    if [[ -z "$domain" ]]; then
-        domain="localhost"
-    fi
-    echo ""
+    while true; do
+        echo -e "${BOLD}${BLUE}🌐 Domain Configuration${NC:-}"
+        echo -e "${DIM}Enter the domain where Milou will be accessible${NC:-}"
+        echo -e "${DIM}Examples: localhost, yourdomain.com, server.company.com${NC:-}"
+        echo
+        echo -ne "${GREEN}Domain name${NC:-} [${BOLD}localhost${NC:-}]: "
+        read -r domain
+        if [[ -z "$domain" ]]; then
+            domain="localhost"
+        fi
+        
+        # Basic domain validation
+        if [[ "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]] || [[ "$domain" == "localhost" ]]; then
+            echo -e "   ${GREEN}✓${NC:-} Domain: ${BOLD}$domain${NC:-}"
+            break
+        else
+            echo -e "   ${RED}✗${NC:-} Invalid domain format. Please try again."
+            echo
+        fi
+    done
+    echo
     
-    # Get admin email with proper prompting
+    # Get admin email with validation
     local email
-    echo -ne "Enter admin email (default: admin@localhost): "
-    read -r email
-    if [[ -z "$email" ]]; then
-        email="admin@localhost"
-    fi
-    echo ""
+    while true; do
+        echo -e "${BOLD}${BLUE}📧 Admin Email Configuration${NC:-}"
+        echo -e "${DIM}This email will be used for admin notifications and SSL certificates${NC:-}"
+        echo
+        echo -ne "${GREEN}Admin email${NC:-} [${BOLD}admin@$domain${NC:-}]: "
+        read -r email
+        if [[ -z "$email" ]]; then
+            email="admin@$domain"
+        fi
+        
+        # Basic email validation
+        if [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+            echo -e "   ${GREEN}✓${NC:-} Email: ${BOLD}$email${NC:-}"
+            break
+        else
+            echo -e "   ${RED}✗${NC:-} Invalid email format. Please try again."
+            echo
+        fi
+    done
+    echo
     
-    # Get SSL mode
-    echo "Select SSL mode:"
-    echo "1) Generate self-signed certificates (recommended for development)"
-    echo "2) Use existing certificates"
-    echo "3) No SSL (not recommended)"
-    echo ""
+    # Get SSL mode with better explanation
+    echo -e "${BOLD}${BLUE}🔒 SSL Certificate Configuration${NC:-}"
+    echo -e "${DIM}Choose how to handle SSL certificates for secure HTTPS access${NC:-}"
+    echo
+    echo -e "${BOLD}Available options:${NC:-}"
+    echo -e "   ${GREEN}1)${NC:-} ${BOLD}Generate self-signed certificates${NC:-} ${DIM}(Recommended for development)${NC:-}"
+    echo -e "      ${DIM}• Quick setup, works immediately${NC:-}"
+    echo -e "      ${DIM}• Browser will show security warning (normal)${NC:-}"
+    echo -e "      ${DIM}• Perfect for testing and local development${NC:-}"
+    echo
+    echo -e "   ${YELLOW}2)${NC:-} ${BOLD}Use existing certificates${NC:-} ${DIM}(For production with your own certs)${NC:-}"
+    echo -e "      ${DIM}• Place your certificates in ssl/ directory${NC:-}"
+    echo -e "      ${DIM}• Required files: certificate.crt, private.key${NC:-}"
+    echo
+    echo -e "   ${RED}3)${NC:-} ${BOLD}No SSL${NC:-} ${DIM}(Not recommended, HTTP only)${NC:-}"
+    echo -e "      ${DIM}• Unencrypted connection${NC:-}"
+    echo -e "      ${DIM}• Only use for development or trusted networks${NC:-}"
+    echo
     
     local ssl_choice
-    echo -ne "Choose SSL mode [1-3] (default: 1): "
-    read -r ssl_choice
-    if [[ -z "$ssl_choice" ]]; then
-        ssl_choice="1"
-    fi
-    echo ""
+    while true; do
+        echo -ne "${GREEN}Choose SSL option${NC:-} [${BOLD}1-3${NC:-}] (default: ${BOLD}1${NC:-}): "
+        read -r ssl_choice
+        if [[ -z "$ssl_choice" ]]; then
+            ssl_choice="1"
+        fi
+        
+        case "$ssl_choice" in
+            1) 
+                ssl_mode="generate"
+                echo -e "   ${GREEN}✓${NC:-} SSL: ${BOLD}Self-signed certificates${NC:-}"
+                break
+                ;;
+            2) 
+                ssl_mode="existing"
+                echo -e "   ${YELLOW}✓${NC:-} SSL: ${BOLD}Existing certificates${NC:-}"
+                echo -e "   ${DIM}Make sure to place your certificates in ssl/ directory${NC:-}"
+                break
+                ;;
+            3) 
+                ssl_mode="none"
+                echo -e "   ${RED}✓${NC:-} SSL: ${BOLD}Disabled${NC:-} ${DIM}(HTTP only)${NC:-}"
+                break
+                ;;
+            *) 
+                echo -e "   ${RED}✗${NC:-} Please choose 1, 2, or 3"
+                ;;
+        esac
+    done
+    echo
     
-    local ssl_mode
-    case "$ssl_choice" in
-        1) ssl_mode="generate" ;;
-        2) ssl_mode="existing" ;;
-        3) ssl_mode="none" ;;
-        *) ssl_mode="generate" ;;
-    esac
+    # Summary of choices
+    echo -e "${BOLD}${PURPLE}📋 Configuration Summary${NC:-}"
+    echo -e "   ${CYAN}Domain:${NC:-}     ${BOLD}$domain${NC:-}"
+    echo -e "   ${CYAN}Email:${NC:-}      ${BOLD}$email${NC:-}"
+    echo -e "   ${CYAN}SSL Mode:${NC:-}   ${BOLD}$ssl_mode${NC:-}"
+    echo
     
     # Generate configuration using consolidated config module with credential preservation
     if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
@@ -1221,9 +1254,9 @@ setup_validate_service_health() {
 setup_display_completion_report() {
     milou_log "SUCCESS" "🎉 Milou Setup Completed Successfully!"
     echo
-    echo "═══════════════════════════════════════════════════"
-    echo "            MILOU SETUP COMPLETE! 🚀"
-    echo "═══════════════════════════════════════════════════"
+    echo -e "${BOLD}${GREEN}┌────────────────────────────────────────────────────┐${NC:-}"
+    echo -e "${BOLD}${GREEN}│               SETUP COMPLETE! 🚀                  │${NC:-}"
+    echo -e "${BOLD}${GREEN}└────────────────────────────────────────────────────┘${NC:-}"
     echo
     
     # Load configuration for display
@@ -1236,45 +1269,70 @@ setup_display_completion_report() {
     local https_port="${HTTPS_PORT:-443}"
     local http_port="${HTTP_PORT:-80}"
     
-    echo "📍 Access Information:"
+    echo -e "${BOLD}${CYAN}🌐 Access Information${NC:-}"
     if [[ "${SSL_MODE:-}" != "none" ]]; then
         if [[ "$https_port" == "443" ]]; then
-            echo "  🌐 Web Interface: https://$domain"
+            echo -e "   ${GREEN}Primary URL:${NC:-}    ${BOLD}https://$domain${NC:-}"
         else
-            echo "  🌐 Web Interface: https://$domain:$https_port"
+            echo -e "   ${GREEN}Primary URL:${NC:-}    ${BOLD}https://$domain:$https_port${NC:-}"
         fi
+        echo -e "   ${DIM}• Secure HTTPS connection with SSL certificates${NC:-}"
     fi
     
     if [[ "$http_port" == "80" ]]; then
-        echo "  🌐 HTTP Redirect: http://$domain"
+        echo -e "   ${YELLOW}HTTP Redirect:${NC:-} ${BOLD}http://$domain${NC:-} ${DIM}(redirects to HTTPS)${NC:-}"
     else
-        echo "  🌐 HTTP Redirect: http://$domain:$http_port"
+        echo -e "   ${YELLOW}HTTP Redirect:${NC:-} ${BOLD}http://$domain:$http_port${NC:-} ${DIM}(redirects to HTTPS)${NC:-}"
     fi
     echo
     
-    # Admin credentials
-    echo "🔑 Admin Credentials:"
-    echo "  Username: ${ADMIN_USERNAME:-admin}"
-    echo "  Password: ${ADMIN_PASSWORD:-[check .env file]}"
-    echo "  Email: ${ADMIN_EMAIL:-admin@localhost}"
+    # Admin credentials with security notice
+    echo -e "${BOLD}${PURPLE}🔑 Admin Credentials${NC:-}"
+    echo -e "   ${GREEN}Username:${NC:-} ${BOLD}${ADMIN_USERNAME:-admin}${NC:-}"
+    echo -e "   ${GREEN}Password:${NC:-} ${BOLD}${ADMIN_PASSWORD:-[check .env file]}${NC:-}"
+    echo -e "   ${GREEN}Email:${NC:-}    ${BOLD}${ADMIN_EMAIL:-admin@localhost}${NC:-}"
     echo
-    echo "⚠️ IMPORTANT: Save these credentials securely!"
+    echo -e "   ${RED}⚠️  IMPORTANT SECURITY NOTICE:${NC:-}"
+    echo -e "   ${DIM}• Save these credentials in a secure password manager${NC:-}"
+    echo -e "   ${DIM}• Change the default password after first login${NC:-}"
+    echo -e "   ${DIM}• Never share credentials via email or chat${NC:-}"
     echo
     
     # Management commands
-    echo "⚙️ Management Commands:"
-    echo "  Status:  ./milou.sh status"
-    echo "  Logs:    ./milou.sh logs [service]"
-    echo "  Stop:    ./milou.sh stop"
-    echo "  Restart: ./milou.sh restart"
+    echo -e "${BOLD}${BLUE}⚙️  Management Commands${NC:-}"
+    echo -e "   ${GREEN}Check Status:${NC:-}    ${BOLD}./milou.sh status${NC:-}"
+    echo -e "   ${GREEN}View Logs:${NC:-}       ${BOLD}./milou.sh logs${NC:-} ${DIM}[service]${NC:-}"
+    echo -e "   ${GREEN}Stop Services:${NC:-}   ${BOLD}./milou.sh stop${NC:-}"
+    echo -e "   ${GREEN}Restart All:${NC:-}     ${BOLD}./milou.sh restart${NC:-}"
+    echo -e "   ${GREEN}Create Backup:${NC:-}   ${BOLD}./milou.sh backup${NC:-}"
+    echo -e "   ${GREEN}Get Help:${NC:-}        ${BOLD}./milou.sh --help${NC:-}"
     echo
     
-    # Next steps
-    echo "💡 Next Steps:"
-    echo "  1. 🌐 Access the web interface using the URL above"
-    echo "  2. 🔑 Log in with the admin credentials"
-    echo "  3. 🧙 Complete the initial setup wizard"
-    echo "  4. 🔒 Review and configure security settings"
+    # Next steps with priorities
+    echo -e "${BOLD}${YELLOW}💡 Next Steps (Recommended)${NC:-}"
+    echo -e "   ${BOLD}1.${NC:-} ${GREEN}Access the web interface${NC:-}"
+    echo -e "      ${DIM}• Open your browser and go to the URL above${NC:-}"
+    echo -e "      ${DIM}• Accept the SSL certificate if using self-signed${NC:-}"
+    echo
+    echo -e "   ${BOLD}2.${NC:-} ${GREEN}Complete initial login${NC:-}"
+    echo -e "      ${DIM}• Use the admin credentials shown above${NC:-}"
+    echo -e "      ${DIM}• Change the default password immediately${NC:-}"
+    echo
+    echo -e "   ${BOLD}3.${NC:-} ${GREEN}Create your first backup${NC:-}"
+    echo -e "      ${DIM}• Run: ./milou.sh backup${NC:-}"
+    echo -e "      ${DIM}• Secure your configuration and data${NC:-}"
+    echo
+    echo -e "   ${BOLD}4.${NC:-} ${GREEN}Explore the documentation${NC:-}"
+    echo -e "      ${DIM}• Check docs/USER_GUIDE.md for detailed instructions${NC:-}"
+    echo -e "      ${DIM}• Learn about advanced features and administration${NC:-}"
+    echo
+    
+    # Troubleshooting help
+    echo -e "${BOLD}${RED}🚨 Having Issues?${NC:-}"
+    echo -e "   ${DIM}• Services not starting: ./milou.sh logs${NC:-}"
+    echo -e "   ${DIM}• Can't access web interface: ./milou.sh status${NC:-}"
+    echo -e "   ${DIM}• Need help: ./milou.sh --help${NC:-}"
+    echo -e "   ${DIM}• Health check: ./milou.sh health${NC:-}"
     echo
     
     return 0

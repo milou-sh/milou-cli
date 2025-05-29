@@ -23,6 +23,7 @@ readonly PURPLE='\033[0;35m'
 readonly CYAN='\033[0;36m'
 readonly BOLD='\033[1m'
 readonly NC='\033[0m' # No Color
+readonly DIM='\033[2m'
 
 # Global variables
 QUIET=false
@@ -56,49 +57,29 @@ step() {
 show_milou_logo() {
     echo -e "${PURPLE}"
     cat << 'EOF'
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                                        @@@@@@@@@@@@@@@@@@@@                                        
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                            
+                     @@@@@@@@@@@                     
+                     @@@@@@@@@@@                     
+                     @@@@@@@@@@@                     
+                     @@@@@@@@@@@                     
+                     @@@@@@@@@@@                     
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@@   @@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@    @@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@@@@@                               
+@@@@@@@@@@@@@@@@@@@@@@                               
+@@@@@@@@@@@@@@@@@@@@@@                               
+@@@@@@@@@@@@@@@@@@@@@@                               
+@@@@@@@@@@@@@@@@@@@@@@                                                                                                                 
 EOF
     echo -e "${NC}"
     echo -e "${BOLD}${CYAN}             Milou CLI - Professional Docker Management${NC}"
@@ -222,23 +203,34 @@ check_existing_installation() {
 # Download and install Milou CLI
 install_milou() {
     step "Installing Milou CLI to $INSTALL_DIR..."
+    echo
     
     # Create parent directory if needed
     local parent_dir
     parent_dir="$(dirname "$INSTALL_DIR")"
     if [[ ! -d "$parent_dir" ]]; then
+        log "📁 Creating installation directory..."
         mkdir -p "$parent_dir"
     fi
     
     # Clone the repository
-    log "Cloning repository from $REPO_URL..."
-    if ! git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"; then
-        error "Failed to clone repository"
+    log "⬇️  Downloading Milou CLI from GitHub..."
+    echo -e "   ${DIM}Repository: $REPO_URL${NC}"
+    echo -e "   ${DIM}Branch: $BRANCH${NC}"
+    echo
+    
+    if ! git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>&1 | grep -E "(Cloning|Receiving|Resolving)" | sed 's/^/   /' ; then
+        error "Failed to download repository"
+        echo
+        echo -e "${YELLOW}💡 Troubleshooting:${NC}"
+        echo "   • Check internet connection"
+        echo "   • Verify repository exists: $REPO_URL"
+        echo "   • Try a different branch: MILOU_BRANCH=main curl ... | bash"
         exit 1
     fi
     
     # Make scripts executable
-    log "Setting up permissions..."
+    log "🔧 Setting up permissions..."
     chmod +x "$INSTALL_DIR/milou.sh"
     
     # Make main script executable if it exists
@@ -246,7 +238,13 @@ install_milou() {
         chmod +x "$INSTALL_DIR/src/milou"
     fi
     
-    success "Milou CLI installed successfully"
+    # Verify installation
+    if [[ -f "$INSTALL_DIR/milou.sh" ]]; then
+        success "✅ Milou CLI downloaded and configured successfully"
+    else
+        error "Installation verification failed"
+        exit 1
+    fi
 }
 
 # Set up PATH and shell integration
@@ -291,46 +289,58 @@ show_completion() {
     echo
     success "🎉 Milou CLI installation completed!"
     echo
-    echo "═══════════════════════════════════════════════════"
-    echo -e "            ${BOLD}${GREEN}INSTALLATION COMPLETE!${NC}"
-    echo "═══════════════════════════════════════════════════"
+    echo -e "${BOLD}${BLUE}┌──────────────────────────────────────────────┐${NC}"
+    echo -e "${BOLD}${BLUE}│             INSTALLATION COMPLETE!          │${NC}"
+    echo -e "${BOLD}${BLUE}└──────────────────────────────────────────────┘${NC}"
     echo
-    echo "📍 Installation Location:"
-    echo "  $INSTALL_DIR"
+    echo -e "${CYAN}📍 Installation Details:${NC}"
+    echo -e "   Location: ${BOLD}$INSTALL_DIR${NC}"
+    echo -e "   Version:  ${BOLD}Latest from $BRANCH branch${NC}"
+    echo -e "   Command:  ${BOLD}milou${NC} (available after shell restart)"
     echo
-    echo "🚀 Quick Start:"
-    echo "  cd $INSTALL_DIR"
-    echo "  ./milou.sh setup"
+    echo -e "${GREEN}🚀 Quick Start Commands:${NC}"
+    echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
+    echo -e "   ${BOLD}./milou.sh setup${NC}      # Start interactive setup"
+    echo -e "   ${BOLD}./milou.sh --help${NC}     # View all commands"
     echo
-    echo "💡 Or if you restart your shell:"
-    echo "  milou setup"
-    echo
-    echo "📚 Documentation:"
-    echo "  README.md         - Overview and quick start"
-    echo "  docs/USER_GUIDE.md - Complete setup guide"
-    echo "  ./milou.sh --help - All available commands"
-    echo
-    echo "🔗 Useful Commands:"
-    echo "  ./milou.sh status    - Check system status"
-    echo "  ./milou.sh logs      - View service logs"
-    echo "  ./milou.sh backup    - Create system backup"
+    echo -e "${YELLOW}💡 Shell Integration:${NC}"
+    echo -e "   Restart your terminal or run: ${BOLD}source ~/.bashrc${NC}"
+    echo -e "   Then you can use: ${BOLD}milou setup${NC}"
     echo
 }
 
 # Start interactive setup if requested
 start_setup() {
     if [[ "$AUTO_START" == "true" ]]; then
-        echo -e "${YELLOW}Starting interactive setup in 3 seconds...${NC}"
-        echo -e "${YELLOW}Press Ctrl+C to cancel${NC}"
-        sleep 3
-        
         echo
-        step "Starting Milou setup..."
+        echo -e "${BOLD}${GREEN}🚀 Ready to Start Setup!${NC}"
+        echo
+        echo -e "${CYAN}The interactive setup wizard will:${NC}"
+        echo -e "   • Guide you through configuration"
+        echo -e "   • Set up SSL certificates"
+        echo -e "   • Configure admin credentials"
+        echo -e "   • Start your Docker services"
+        echo
+        
+        echo -e "${YELLOW}Starting in 3 seconds... (Press Ctrl+C to cancel)${NC}"
+        
+        for i in 3 2 1; do
+            echo -ne "\r${YELLOW}Starting in $i seconds... (Press Ctrl+C to cancel)${NC}"
+            sleep 1
+        done
+        echo -ne "\r${GREEN}Starting setup now!                                ${NC}\n"
+        echo
+        
+        step "Launching Milou setup wizard..."
         cd "$INSTALL_DIR"
         exec ./milou.sh setup
     else
-        echo "To start setup manually:"
-        echo "  cd $INSTALL_DIR && ./milou.sh setup"
+        echo
+        echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"
+        echo -e "${CYAN}To start setup when ready:${NC}"
+        echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
+        echo -e "   ${BOLD}./milou.sh setup${NC}"
+        echo
     fi
 }
 

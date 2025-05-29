@@ -26,7 +26,7 @@ The fastest and easiest way to get Milou CLI up and running:
 
 ```bash
 # One-line installation with automatic setup
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
 **What this does:**
@@ -39,16 +39,16 @@ curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh 
 **Installation Options:**
 ```bash
 # Install to specific directory
-MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
 # Install development version
-MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
 # Quiet installation
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --quiet
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --quiet
 
 # Install without auto-starting setup
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --no-start
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --no-start
 ```
 
 **🎯 Skip to [Setup Scenarios](#quick-start-setup-scenarios) after installation completes!**
@@ -79,7 +79,7 @@ Before installing Milou CLI, ensure your system meets the requirements:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/milou-cli.git
+git clone https://github.com/milou-sh/milou-cli.git
 cd milou-cli
 
 # Make the main script executable
@@ -1770,7 +1770,7 @@ tar -tzf backup.tar.gz > /dev/null && echo "Backup OK" || echo "Backup corrupted
 
 ```bash
 # 1. Fresh installation
-git clone https://github.com/your-org/milou-cli.git
+git clone https://github.com/milou-sh/milou-cli.git
 cd milou-cli
 chmod +x milou.sh
 

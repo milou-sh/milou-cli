@@ -3,14 +3,14 @@
 # =============================================================================
 # Milou CLI - One-Line Installer
 # Easy installation script for Milou CLI
-# Usage: curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 # =============================================================================
 
 set -euo pipefail
 
 # Configuration
-readonly REPO_URL="https://github.com/YOUR_ORG/milou-cli"
-readonly REPO_RAW_URL="https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main"
+readonly REPO_URL="https://github.com/milou-sh/milou-cli"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
 readonly INSTALL_DIR="${MILOU_INSTALL_DIR:-$HOME/milou-cli}"
 readonly BRANCH="${MILOU_BRANCH:-main}"
 
@@ -146,7 +146,7 @@ parse_args() {
 show_help() {
     echo "Milou CLI Installer"
     echo
-    echo "Usage: curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash"
+    echo "Usage: curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash"
     echo "   or: bash install.sh [OPTIONS]"
     echo
     echo "Options:"
@@ -163,7 +163,7 @@ show_help() {
     echo
     echo "Examples:"
     echo "  # Basic installation"
-    echo "  curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash"
+    echo "  curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash"
     echo
     echo "  # Install to specific directory"
     echo "  MILOU_INSTALL_DIR=/opt/milou curl -fsSL ... | bash"

@@ -36,7 +36,7 @@ The fastest way to get started with Milou CLI:
 
 ```bash
 # One-line installation with automatic setup
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
 This will:
@@ -99,16 +99,16 @@ Customize your one-line installation:
 
 ```bash
 # Install to specific directory
-MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+MILOU_INSTALL_DIR=/opt/milou curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
 # Install specific branch (e.g., development version)
-MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+MILOU_BRANCH=develop curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
 # Quiet installation (minimal output)
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --quiet
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --quiet
 
 # Install without starting setup automatically
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash -s -- --no-start
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash -s -- --no-start
 ```
 
 ## 🏗️ **Architecture**

@@ -11,21 +11,21 @@ Replace all placeholder URLs in the following files:
 #### `install.sh`
 ```bash
 # Update these lines
-readonly REPO_URL="https://github.com/YOUR_ORG/milou-cli"
-readonly REPO_RAW_URL="https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main"
+readonly REPO_URL="https://github.com/milou-sh/milou-cli"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
 
 # Change to your actual repository
-readonly REPO_URL="https://github.com/your-org/milou-cli"
-readonly REPO_RAW_URL="https://raw.githubusercontent.com/your-org/milou-cli/main"
+readonly REPO_URL="https://github.com/milou-sh/milou-cli"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
 ```
 
 #### `README.md`
 ```bash
 # Update installation URL in multiple places
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
 # Change to:
-curl -fsSL https://raw.githubusercontent.com/your-org/milou-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
 #### Help documentation
@@ -55,7 +55,7 @@ The ASCII logo is already updated. If you want to customize further:
 ```bash
 # Create new repository on GitHub
 # Clone and push your code
-git remote add origin https://github.com/your-org/milou-cli.git
+git remote add origin https://github.com/milou-sh/milou-cli.git
 git branch -M main
 git push -u origin main
 ```
@@ -83,7 +83,7 @@ Test your one-liner installation:
 
 ```bash
 # Test from your repository
-curl -fsSL https://raw.githubusercontent.com/your-org/milou-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
 ## 🔒 Security Considerations
@@ -118,7 +118,7 @@ If using private images:
 Search and replace in all documentation:
 ```bash
 # Find all instances
-grep -r "YOUR_ORG" .
+grep -r "milou-sh" .
 grep -r "raw.githubusercontent.com" .
 
 # Update systematically

@@ -1,0 +1,1142 @@
+#!/bin/bash
+
+# =============================================================================
+# Milou CLI - Setup Management Module
+# Consolidated setup operations to eliminate massive code duplication
+# Version: 3.1.0 - Refactored Edition
+# =============================================================================
+
+# Ensure this script is sourced, not executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: This script should be sourced, not executed directly" >&2
+    exit 1
+fi
+
+# Module guard to prevent multiple loading
+if [[ "${MILOU_SETUP_LOADED:-}" == "true" ]]; then
+    return 0
+fi
+readonly MILOU_SETUP_LOADED="true"
+
+# Ensure core modules are loaded
+if [[ "${MILOU_CORE_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_core.sh" || {
+        echo "ERROR: Cannot load core module" >&2
+        return 1
+    }
+fi
+
+if [[ "${MILOU_VALIDATION_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_validation.sh" || {
+        echo "ERROR: Cannot load validation module" >&2
+        return 1
+    }
+fi
+
+if [[ "${MILOU_CONFIG_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_config.sh" || {
+        echo "ERROR: Cannot load config module" >&2
+        return 1
+    }
+fi
+
+# =============================================================================
+# SETUP CONSTANTS AND DEFAULTS
+# =============================================================================
+
+# Setup mode constants
+declare -g SETUP_MODE_INTERACTIVE="interactive"
+declare -g SETUP_MODE_AUTOMATED="automated"
+declare -g SETUP_MODE_SMART="smart"
+
+# Setup state variables
+declare -g SETUP_IS_FRESH_SERVER="false"
+declare -g SETUP_NEEDS_DEPS="false"
+declare -g SETUP_NEEDS_USER="false"
+declare -g SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+
+# =============================================================================
+# MAIN SETUP ORCHESTRATION FUNCTIONS
+# =============================================================================
+
+# Main setup entry point - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_run() {
+    local force="${1:-false}"
+    local mode="${2:-auto}"
+    local skip_validation="${3:-false}"
+    
+    milou_log "STEP" "🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION:-latest}"
+    echo "═══════════════════════════════════════════════════"
+    echo
+    
+    # Step 1: System Analysis and Detection
+    if ! setup_analyze_system; then
+        milou_log "ERROR" "System analysis failed"
+        return 1
+    fi
+    
+    # Step 2: Prerequisites Assessment
+    if ! setup_assess_prerequisites; then
+        milou_log "ERROR" "Prerequisites assessment failed"
+        return 1
+    fi
+    
+    # Step 3: Setup Mode Determination
+    if ! setup_determine_mode "$mode"; then
+        milou_log "ERROR" "Setup mode determination failed"
+        return 1
+    fi
+    
+    # Step 4: Dependencies Installation
+    if [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
+        if ! setup_install_dependencies; then
+            milou_log "ERROR" "Dependencies installation failed"
+            return 1
+        fi
+    fi
+    
+    # Step 5: User Management
+    if [[ "$SETUP_NEEDS_USER" == "true" ]]; then
+        if ! setup_manage_user; then
+            milou_log "ERROR" "User management failed"
+            return 1
+        fi
+    fi
+    
+    # Step 6: Configuration Generation
+    if ! setup_generate_configuration; then
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
+    
+    # Step 7: Final Validation and Service Startup
+    if [[ "$skip_validation" != "true" ]]; then
+        if ! setup_validate_and_start_services; then
+            milou_log "ERROR" "Final validation and service startup failed"
+            return 1
+        fi
+    fi
+    
+    # Step 8: Completion Report
+    setup_display_completion_report
+    
+    milou_log "SUCCESS" "🎉 Milou setup completed successfully!"
+    return 0
+}
+
+# =============================================================================
+# SYSTEM ANALYSIS FUNCTIONS
+# =============================================================================
+
+# Analyze system and detect setup requirements - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_analyze_system() {
+    milou_log "STEP" "Step 1: System Analysis"
+    
+    # Reset analysis state
+    SETUP_IS_FRESH_SERVER="false"
+    SETUP_NEEDS_DEPS="false" 
+    SETUP_NEEDS_USER="false"
+    
+    milou_log "INFO" "🔍 Analyzing system state..."
+    
+    # Check if this is a fresh server installation
+    if setup_detect_fresh_server; then
+        SETUP_IS_FRESH_SERVER="true"
+        milou_log "INFO" "✨ Fresh server detected"
+    else
+        milou_log "INFO" "🔄 Existing system detected"
+    fi
+    
+    # Check for existing Milou installation
+    local has_existing_installation=false
+    if setup_check_existing_installation; then
+        has_existing_installation=true
+        milou_log "INFO" "🔍 Found existing Milou installation"
+    fi
+    
+    # Determine dependency needs
+    if ! setup_check_dependencies_status; then
+        SETUP_NEEDS_DEPS="true"
+        milou_log "INFO" "📦 Dependencies installation required"
+    fi
+    
+    # Determine user management needs
+    if ! setup_check_user_status; then
+        SETUP_NEEDS_USER="true"
+        milou_log "INFO" "👤 User management required"
+    fi
+    
+    # Summary
+    milou_log "SUCCESS" "📊 System Analysis Complete:"
+    milou_log "INFO" "  • Fresh Server: $SETUP_IS_FRESH_SERVER"
+    milou_log "INFO" "  • Needs Dependencies: $SETUP_NEEDS_DEPS"
+    milou_log "INFO" "  • Needs User Setup: $SETUP_NEEDS_USER"
+    milou_log "INFO" "  • Existing Installation: $has_existing_installation"
+    
+    return 0
+}
+
+# Detect if this is a fresh server installation
+setup_detect_fresh_server() {
+    local fresh_indicators=0
+    local total_checks=6
+    
+    # Check 1: No Docker containers
+    if [[ $(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing Docker containers"
+    fi
+    
+    # Check 2: No Docker volumes
+    if [[ $(docker volume ls --format "{{.Name}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing Docker volumes"
+    fi
+    
+    # Check 3: No configuration files
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing configuration"
+    fi
+    
+    # Check 4: System looks newly provisioned
+    if [[ -f /var/log/cloud-init.log ]] || [[ -f /var/log/cloud-init-output.log ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ Cloud-init detected (fresh cloud instance)"
+    fi
+    
+    # Check 5: Minimal package history
+    if command -v dpkg >/dev/null 2>&1; then
+        local pkg_count
+        pkg_count=$(dpkg -l 2>/dev/null | wc -l)
+        if [[ $pkg_count -lt 200 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Minimal package installation ($pkg_count packages)"
+        fi
+    elif command -v rpm >/dev/null 2>&1; then
+        local pkg_count
+        pkg_count=$(rpm -qa 2>/dev/null | wc -l)
+        if [[ $pkg_count -lt 150 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Minimal package installation ($pkg_count packages)"
+        fi
+    else
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ Unknown package manager (assuming minimal)"
+    fi
+    
+    # Check 6: System uptime
+    if command -v uptime >/dev/null 2>&1; then
+        local uptime_days
+        uptime_days=$(uptime | grep -o '[0-9]* day' | cut -d' ' -f1 || echo "0")
+        if [[ ${uptime_days:-0} -lt 7 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Recent system boot (${uptime_days:-0} days uptime)"
+        fi
+    fi
+    
+    # Determine if server is "fresh" (majority of indicators suggest it)
+    if [[ $fresh_indicators -ge $((total_checks / 2)) ]]; then
+        milou_log "DEBUG" "Fresh server detected ($fresh_indicators/$total_checks indicators)"
+        return 0
+    else
+        milou_log "DEBUG" "Existing system detected ($fresh_indicators/$total_checks indicators)"
+        return 1
+    fi
+}
+
+# Check for existing Milou installation
+setup_check_existing_installation() {
+    local has_containers=false
+    local has_config=false
+    local has_volumes=false
+    
+    # Check for existing containers
+    if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q milou; then
+        has_containers=true
+        milou_log "DEBUG" "Found existing Milou containers"
+    fi
+    
+    # Check for configuration
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        has_config=true
+        milou_log "DEBUG" "Found existing configuration file"
+    fi
+    
+    # Check for data volumes
+    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
+        has_volumes=true
+        milou_log "DEBUG" "Found existing data volumes"
+    fi
+    
+    # Return true if any component exists
+    if [[ "$has_containers" == "true" || "$has_config" == "true" || "$has_volumes" == "true" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check dependency installation status
+setup_check_dependencies_status() {
+    local missing_deps=()
+    
+    # Check Docker
+    if ! command -v docker >/dev/null 2>&1; then
+        missing_deps+=("docker")
+    elif ! docker version >/dev/null 2>&1; then
+        missing_deps+=("docker-service")
+    fi
+    
+    # Check Docker Compose
+    if ! docker compose version >/dev/null 2>&1; then
+        missing_deps+=("docker-compose")
+    fi
+    
+    # Check basic tools
+    for tool in curl wget jq openssl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_deps+=("$tool")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -eq 0 ]]; then
+        milou_log "DEBUG" "All dependencies are installed"
+        return 0
+    else
+        milou_log "DEBUG" "Missing dependencies: ${missing_deps[*]}"
+        return 1
+    fi
+}
+
+# Check user management status
+setup_check_user_status() {
+    # Check if running as root and if milou user exists
+    if [[ $EUID -eq 0 ]]; then
+        if id milou >/dev/null 2>&1; then
+            milou_log "DEBUG" "Milou user already exists"
+            return 0
+        else
+            milou_log "DEBUG" "Running as root, milou user needed"
+            return 1
+        fi
+    else
+        # Check if current user has Docker access
+        if docker version >/dev/null 2>&1; then
+            milou_log "DEBUG" "Current user has Docker access"
+            return 0
+        else
+            milou_log "DEBUG" "Current user needs Docker access"
+            return 1
+        fi
+    fi
+}
+
+# =============================================================================
+# PREREQUISITES ASSESSMENT FUNCTIONS
+# =============================================================================
+
+# Assess system prerequisites - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_assess_prerequisites() {
+    milou_log "STEP" "Step 2: Prerequisites Assessment"
+    
+    local critical_missing=()
+    local optional_missing=()
+    
+    # Critical prerequisites
+    if ! command -v docker >/dev/null 2>&1; then
+        critical_missing+=("docker")
+    fi
+    
+    if ! docker compose version >/dev/null 2>&1; then
+        critical_missing+=("docker-compose")
+    fi
+    
+    # Optional but recommended
+    for tool in curl wget jq openssl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            optional_missing+=("$tool")
+        fi
+    done
+    
+    # Report status
+    if [[ ${#critical_missing[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ All critical prerequisites satisfied"
+        if [[ ${#optional_missing[@]} -gt 0 ]]; then
+            milou_log "WARN" "📦 Optional tools missing: ${optional_missing[*]}"
+        fi
+        return 0
+    else
+        milou_log "WARN" "❌ Critical prerequisites missing: ${critical_missing[*]}"
+        return 1
+    fi
+}
+
+# =============================================================================
+# SETUP MODE DETERMINATION FUNCTIONS
+# =============================================================================
+
+# Determine optimal setup mode - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_determine_mode() {
+    local requested_mode="${1:-auto}"
+    
+    milou_log "STEP" "Step 3: Setup Mode Determination"
+    
+    case "$requested_mode" in
+        "interactive")
+            SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+            milou_log "INFO" "🧙 Interactive mode selected"
+            ;;
+        "automated"|"auto")
+            if setup_can_run_automated; then
+                SETUP_CURRENT_MODE="$SETUP_MODE_AUTOMATED"
+                milou_log "INFO" "🤖 Automated mode selected"
+            else
+                SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+                milou_log "INFO" "🧙 Falling back to interactive mode"
+            fi
+            ;;
+        "smart")
+            SETUP_CURRENT_MODE="$SETUP_MODE_SMART"
+            milou_log "INFO" "🧠 Smart mode selected"
+            ;;
+        *)
+            milou_log "WARN" "Unknown setup mode: $requested_mode, using interactive"
+            SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+            ;;
+    esac
+    
+    milou_log "SUCCESS" "📋 Setup mode determined: $SETUP_CURRENT_MODE"
+    return 0
+}
+
+# Check if automated mode is possible
+setup_can_run_automated() {
+    # Check for required environment variables
+    local required_vars=("DOMAIN" "ADMIN_EMAIL")
+    local missing_vars=()
+    
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            missing_vars+=("$var")
+        fi
+    done
+    
+    if [[ ${#missing_vars[@]} -eq 0 ]]; then
+        milou_log "DEBUG" "Environment variables available for automated setup"
+        return 0
+    else
+        milou_log "DEBUG" "Missing variables for automated setup: ${missing_vars[*]}"
+        return 1
+    fi
+}
+
+# =============================================================================
+# DEPENDENCIES INSTALLATION FUNCTIONS
+# =============================================================================
+
+# Install required dependencies - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_install_dependencies() {
+    milou_log "STEP" "Step 4: Dependencies Installation"
+    
+    case "$SETUP_CURRENT_MODE" in
+        "$SETUP_MODE_INTERACTIVE")
+            setup_install_dependencies_interactive
+            ;;
+        "$SETUP_MODE_AUTOMATED")
+            setup_install_dependencies_automated
+            ;;
+        "$SETUP_MODE_SMART")
+            setup_install_dependencies_smart
+            ;;
+        *)
+            milou_log "ERROR" "Unknown setup mode for dependencies: $SETUP_CURRENT_MODE"
+            return 1
+            ;;
+    esac
+}
+
+# Interactive dependencies installation
+setup_install_dependencies_interactive() {
+    milou_log "INFO" "🔧 Interactive Dependencies Installation"
+    
+    if ! confirm_user "Install missing dependencies now?" "Y"; then
+        milou_log "INFO" "Dependencies installation skipped by user"
+        return 1
+    fi
+    
+    setup_install_dependencies_core
+}
+
+# Automated dependencies installation
+setup_install_dependencies_automated() {
+    milou_log "INFO" "🤖 Automated Dependencies Installation"
+    setup_install_dependencies_core
+}
+
+# Smart dependencies installation  
+setup_install_dependencies_smart() {
+    milou_log "INFO" "🧠 Smart Dependencies Installation"
+    
+    # Install critical dependencies automatically, prompt for optional
+    if ! setup_install_dependencies_core "critical_only"; then
+        return 1
+    fi
+    
+    # Optionally install additional tools
+    if confirm_user "Install optional tools (curl, wget, jq, openssl)?" "Y"; then
+        setup_install_system_tools
+    fi
+}
+
+# Core dependencies installation logic
+setup_install_dependencies_core() {
+    local mode="${1:-all}"
+    
+    milou_log "INFO" "📦 Installing core dependencies..."
+    
+    # Install Docker if missing
+    if ! command -v docker >/dev/null 2>&1; then
+        if ! setup_install_docker; then
+            milou_log "ERROR" "Failed to install Docker"
+            return 1
+        fi
+    fi
+    
+    # Install Docker Compose if missing
+    if ! docker compose version >/dev/null 2>&1; then
+        if ! setup_install_docker_compose; then
+            milou_log "ERROR" "Failed to install Docker Compose"
+            return 1
+        fi
+    fi
+    
+    # Install system tools if requested
+    if [[ "$mode" != "critical_only" ]]; then
+        setup_install_system_tools
+    fi
+    
+    milou_log "SUCCESS" "✅ Dependencies installation completed"
+    return 0
+}
+
+# Install Docker
+setup_install_docker() {
+    milou_log "INFO" "🐳 Installing Docker..."
+    
+    # Use official Docker installation script
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL https://get.docker.com | sh; then
+            systemctl start docker 2>/dev/null || true
+            systemctl enable docker 2>/dev/null || true
+            milou_log "SUCCESS" "✅ Docker installed successfully"
+            return 0
+        fi
+    fi
+    
+    milou_log "ERROR" "Failed to install Docker"
+    return 1
+}
+
+# Install Docker Compose
+setup_install_docker_compose() {
+    milou_log "INFO" "🛠️ Installing Docker Compose..."
+    
+    # Try package manager first
+    if command -v apt-get >/dev/null 2>&1; then
+        if apt-get update && apt-get install -y docker-compose-plugin; then
+            milou_log "SUCCESS" "✅ Docker Compose plugin installed"
+            return 0
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        if yum install -y docker-compose-plugin; then
+            milou_log "SUCCESS" "✅ Docker Compose plugin installed"
+            return 0
+        fi
+    fi
+    
+    milou_log "WARN" "Package manager installation failed, trying manual installation"
+    
+    # Manual installation fallback
+    local compose_version="v2.20.0"
+    local compose_url="https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-$(uname -s)-$(uname -m)"
+    
+    if command -v curl >/dev/null 2>&1; then
+        if curl -L "$compose_url" -o /usr/local/bin/docker-compose; then
+            chmod +x /usr/local/bin/docker-compose
+            milou_log "SUCCESS" "✅ Docker Compose installed manually"
+            return 0
+        fi
+    fi
+    
+    milou_log "ERROR" "Failed to install Docker Compose"
+    return 1
+}
+
+# Install system tools
+setup_install_system_tools() {
+    milou_log "INFO" "🔧 Installing system tools..."
+    
+    local tools=("curl" "wget" "jq" "openssl")
+    local to_install=()
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            to_install+=("$tool")
+        fi
+    done
+    
+    if [[ ${#to_install[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ All system tools already installed"
+        return 0
+    fi
+    
+    milou_log "INFO" "Installing: ${to_install[*]}"
+    
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y "${to_install[@]}"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y "${to_install[@]}"
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y "${to_install[@]}"
+    else
+        milou_log "WARN" "Unsupported package manager"
+        return 1
+    fi
+    
+    milou_log "SUCCESS" "✅ System tools installed"
+    return 0
+}
+
+# =============================================================================
+# USER MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# Manage user setup - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_manage_user() {
+    milou_log "STEP" "Step 5: User Management"
+    
+    if [[ $EUID -eq 0 ]]; then
+        setup_create_milou_user
+    else
+        setup_configure_current_user
+    fi
+}
+
+# Create dedicated milou user
+setup_create_milou_user() {
+    milou_log "INFO" "👤 Creating dedicated milou user..."
+    
+    # Create user if it doesn't exist
+    if ! id milou >/dev/null 2>&1; then
+        if useradd -m -s /bin/bash milou; then
+            milou_log "SUCCESS" "✅ Milou user created"
+        else
+            milou_log "ERROR" "Failed to create milou user"
+            return 1
+        fi
+    else
+        milou_log "INFO" "Milou user already exists"
+    fi
+    
+    # Add to docker group
+    if ! groups milou | grep -q docker; then
+        if usermod -aG docker milou; then
+            milou_log "SUCCESS" "✅ Added milou user to docker group"
+        else
+            milou_log "ERROR" "Failed to add milou user to docker group"
+            return 1
+        fi
+    fi
+    
+    milou_log "SUCCESS" "✅ User management completed"
+    return 0
+}
+
+# Configure current user for Docker access
+setup_configure_current_user() {
+    local current_user="${USER:-$(whoami)}"
+    
+    milou_log "INFO" "👤 Configuring current user ($current_user) for Docker access..."
+    
+    # Check if user is in docker group
+    if ! groups "$current_user" | grep -q docker; then
+        milou_log "INFO" "Adding current user to docker group (requires sudo)..."
+        if sudo usermod -aG docker "$current_user"; then
+            milou_log "SUCCESS" "✅ Added $current_user to docker group"
+            milou_log "WARN" "⚠️  You may need to log out and log back in for group changes to take effect"
+        else
+            milou_log "ERROR" "Failed to add user to docker group"
+            return 1
+        fi
+    else
+        milou_log "SUCCESS" "✅ User already has Docker access"
+    fi
+    
+    return 0
+}
+
+# =============================================================================
+# CONFIGURATION GENERATION FUNCTIONS
+# =============================================================================
+
+# Generate configuration based on setup mode - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_generate_configuration() {
+    milou_log "STEP" "Step 6: Configuration Generation"
+    
+    case "$SETUP_CURRENT_MODE" in
+        "$SETUP_MODE_INTERACTIVE")
+            setup_generate_configuration_interactive
+            ;;
+        "$SETUP_MODE_AUTOMATED")
+            setup_generate_configuration_automated
+            ;;
+        "$SETUP_MODE_SMART")
+            setup_generate_configuration_smart
+            ;;
+        *)
+            milou_log "ERROR" "Unknown setup mode for configuration: $SETUP_CURRENT_MODE"
+            return 1
+            ;;
+    esac
+}
+
+# Interactive configuration generation
+setup_generate_configuration_interactive() {
+    milou_log "INFO" "🧙 Interactive Configuration Generation"
+    
+    # Use our consolidated config module for interactive generation
+    local domain="${DOMAIN:-localhost}"
+    local email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="${SSL_MODE:-generate}"
+    
+    # Collect configuration interactively
+    domain=$(prompt_user "Enter domain name" "$domain")
+    email=$(prompt_user "Enter admin email" "$email")
+    
+    # SSL configuration
+    milou_log "INFO" "🔒 SSL Configuration Options:"
+    echo "  1. Generate self-signed certificates (recommended for development)"
+    echo "  2. Use existing certificates"
+    echo "  3. No SSL (HTTP only - not recommended)"
+    
+    local ssl_choice
+    ssl_choice=$(prompt_user "Select SSL option [1-3]" "1")
+    
+    case "$ssl_choice" in
+        1) ssl_mode="generate" ;;
+        2) ssl_mode="existing" ;;
+        3) ssl_mode="none" ;;
+        *) ssl_mode="generate" ;;
+    esac
+    
+    # Generate configuration using consolidated config module
+    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+}
+
+# Automated configuration generation
+setup_generate_configuration_automated() {
+    milou_log "INFO" "🤖 Automated Configuration Generation"
+    
+    local domain="${DOMAIN:-localhost}"
+    local email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="${SSL_MODE:-generate}"
+    
+    # Generate configuration using consolidated config module
+    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+}
+
+# Smart configuration generation
+setup_generate_configuration_smart() {
+    milou_log "INFO" "🧠 Smart Configuration Generation"
+    
+    # Use environment variables if available, otherwise use smart defaults
+    local domain="${DOMAIN:-localhost}"
+    local email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="generate"
+    
+    # Smart SSL mode selection
+    if [[ "$domain" != "localhost" && "$domain" != "127.0.0.1" ]]; then
+        ssl_mode="generate"  # Real domain gets certificates
+    else
+        ssl_mode="generate"  # Development also gets self-signed
+    fi
+    
+    milou_log "INFO" "🧠 Smart defaults: domain=$domain, email=$email, ssl=$ssl_mode"
+    
+    # Generate configuration using consolidated config module
+    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+}
+
+# =============================================================================
+# VALIDATION AND SERVICE STARTUP FUNCTIONS
+# =============================================================================
+
+# Validate configuration and start services - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_validate_and_start_services() {
+    milou_log "STEP" "Step 7: Final Validation and Service Startup"
+    
+    # Validate system readiness
+    if ! setup_validate_system_readiness; then
+        milou_log "ERROR" "System readiness validation failed"
+        return 1
+    fi
+    
+    # Setup SSL certificates if needed
+    if ! setup_configure_ssl; then
+        milou_log "ERROR" "SSL configuration failed"
+        return 1
+    fi
+    
+    # Prepare Docker environment
+    if ! setup_prepare_docker_environment; then
+        milou_log "ERROR" "Docker environment preparation failed"
+        return 1
+    fi
+    
+    # Start services
+    if ! setup_start_services; then
+        milou_log "ERROR" "Service startup failed"
+        return 1
+    fi
+    
+    # Validate service health
+    if ! setup_validate_service_health; then
+        milou_log "WARN" "Service health validation completed with warnings"
+    fi
+    
+    milou_log "SUCCESS" "✅ Services started and validated"
+    return 0
+}
+
+# Validate system readiness
+setup_validate_system_readiness() {
+    milou_log "INFO" "🔍 Validating system readiness..."
+    
+    local errors=0
+    
+    # Check configuration file exists
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        milou_log "ERROR" "Configuration file not found"
+        ((errors++))
+    fi
+    
+    # Validate configuration using consolidated config module
+    if ! config_validate "${SCRIPT_DIR:-$(pwd)}/.env" "production" "true"; then
+        milou_log "ERROR" "Configuration validation failed"
+        ((errors++))
+    fi
+    
+    # Check Docker access
+    if ! validate_docker_access "true"; then
+        milou_log "ERROR" "Docker validation failed"
+        ((errors++))
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ System readiness validated"
+        return 0
+    else
+        milou_log "ERROR" "System readiness validation failed ($errors errors)"
+        return 1
+    fi
+}
+
+# Configure SSL certificates
+setup_configure_ssl() {
+    milou_log "INFO" "🔒 Setting up SSL certificates..."
+    
+    # Load environment variables
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        source "${SCRIPT_DIR:-$(pwd)}/.env"
+    fi
+    
+    local ssl_mode="${SSL_MODE:-generate}"
+    local domain="${DOMAIN:-localhost}"
+    
+    case "$ssl_mode" in
+        "generate")
+            milou_log "INFO" "🔧 Generating self-signed SSL certificates..."
+            # Use SSL module if available, otherwise basic generation
+            if command -v ssl_generate_self_signed >/dev/null 2>&1; then
+                ssl_generate_self_signed "$domain"
+            else
+                setup_generate_basic_ssl_certificates "$domain"
+            fi
+            ;;
+        "existing")
+            milou_log "INFO" "📁 Using existing SSL certificates..."
+            # Validation handled by config module
+            ;;
+        "none")
+            milou_log "INFO" "⚠️ SSL disabled - using HTTP only"
+            return 0
+            ;;
+        *)
+            milou_log "WARN" "Unknown SSL mode: $ssl_mode, defaulting to generate"
+            setup_generate_basic_ssl_certificates "$domain"
+            ;;
+    esac
+    
+    milou_log "SUCCESS" "✅ SSL configuration completed"
+    return 0
+}
+
+# Generate basic SSL certificates (fallback)
+setup_generate_basic_ssl_certificates() {
+    local domain="$1"
+    local ssl_dir="${SCRIPT_DIR:-$(pwd)}/ssl"
+    
+    ensure_directory "$ssl_dir" "755"
+    
+    # Generate self-signed certificate
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$ssl_dir/milou.key" \
+        -out "$ssl_dir/milou.crt" \
+        -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=$domain" \
+        -extensions v3_req \
+        -config <(cat <<EOF
+[req]
+distinguished_name = req
+[v3_req]
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = $domain
+DNS.2 = localhost
+DNS.3 = *.localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+    ) 2>/dev/null
+    
+    chmod 600 "$ssl_dir/milou.key"
+    chmod 644 "$ssl_dir/milou.crt"
+    
+    milou_log "SUCCESS" "✅ Self-signed SSL certificates generated"
+}
+
+# Prepare Docker environment
+setup_prepare_docker_environment() {
+    milou_log "INFO" "🐳 Preparing Docker environment..."
+    
+    # Use Docker module if available
+    if command -v docker_init >/dev/null 2>&1; then
+        docker_init
+    else
+        # Basic Docker network creation
+        docker network create milou-network 2>/dev/null || true
+    fi
+    
+    milou_log "SUCCESS" "✅ Docker environment prepared"
+    return 0
+}
+
+# Start services
+setup_start_services() {
+    milou_log "INFO" "🚀 Starting Milou services..."
+    
+    local compose_file="${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml"
+    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
+    
+    if [[ ! -f "$compose_file" ]]; then
+        milou_log "ERROR" "Docker Compose file not found: $compose_file"
+        return 1
+    fi
+    
+    # Start services
+    if docker compose --env-file "$env_file" -f "$compose_file" up -d; then
+        milou_log "SUCCESS" "✅ Services started successfully"
+        
+        # Wait for services to be ready
+        milou_log "INFO" "⏳ Waiting for services to initialize..."
+        sleep 10
+        
+        return 0
+    else
+        milou_log "ERROR" "Failed to start services"
+        return 1
+    fi
+}
+
+# Validate service health
+setup_validate_service_health() {
+    milou_log "INFO" "🏥 Validating service health..."
+    
+    local healthy_services=0
+    local total_services=0
+    local max_wait=60
+    local elapsed=0
+    
+    while [[ $elapsed -lt $max_wait ]]; do
+        healthy_services=0
+        total_services=0
+        
+        # Check container status
+        while IFS=$'\t' read -r name status; do
+            ((total_services++))
+            if [[ "$status" =~ "Up" ]] || [[ "$status" =~ "running" ]]; then
+                ((healthy_services++))
+            fi
+        done < <(docker compose ps --format "{{.Name}}\t{{.Status}}" 2>/dev/null || echo "")
+        
+        if [[ $healthy_services -gt 0 && $healthy_services -eq $total_services ]]; then
+            milou_log "SUCCESS" "✅ All services healthy ($healthy_services/$total_services)"
+            return 0
+        fi
+        
+        milou_log "DEBUG" "Services status: $healthy_services/$total_services healthy"
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    
+    if [[ $healthy_services -gt 0 ]]; then
+        milou_log "WARN" "⚠️ Partial service health: $healthy_services/$total_services healthy"
+        return 0
+    else
+        milou_log "ERROR" "❌ Service health validation failed"
+        return 1
+    fi
+}
+
+# =============================================================================
+# COMPLETION AND REPORTING FUNCTIONS
+# =============================================================================
+
+# Display setup completion report - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_display_completion_report() {
+    milou_log "SUCCESS" "🎉 Milou Setup Completed Successfully!"
+    echo
+    echo "═══════════════════════════════════════════════════"
+    echo "            MILOU SETUP COMPLETE! 🚀"
+    echo "═══════════════════════════════════════════════════"
+    echo
+    
+    # Load configuration for display
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        source "${SCRIPT_DIR:-$(pwd)}/.env"
+    fi
+    
+    # Access information
+    local domain="${DOMAIN:-localhost}"
+    local https_port="${HTTPS_PORT:-443}"
+    local http_port="${HTTP_PORT:-80}"
+    
+    echo "📍 Access Information:"
+    if [[ "${SSL_MODE:-}" != "none" ]]; then
+        if [[ "$https_port" == "443" ]]; then
+            echo "  🌐 Web Interface: https://$domain"
+        else
+            echo "  🌐 Web Interface: https://$domain:$https_port"
+        fi
+    fi
+    
+    if [[ "$http_port" == "80" ]]; then
+        echo "  🌐 HTTP Redirect: http://$domain"
+    else
+        echo "  🌐 HTTP Redirect: http://$domain:$http_port"
+    fi
+    echo
+    
+    # Admin credentials
+    echo "🔑 Admin Credentials:"
+    echo "  Username: ${ADMIN_USERNAME:-admin}"
+    echo "  Password: ${ADMIN_PASSWORD:-[check .env file]}"
+    echo "  Email: ${ADMIN_EMAIL:-admin@localhost}"
+    echo
+    echo "⚠️ IMPORTANT: Save these credentials securely!"
+    echo
+    
+    # Management commands
+    echo "⚙️ Management Commands:"
+    echo "  Status:  ./milou.sh status"
+    echo "  Logs:    ./milou.sh logs [service]"
+    echo "  Stop:    ./milou.sh stop"
+    echo "  Restart: ./milou.sh restart"
+    echo
+    
+    # Next steps
+    echo "💡 Next Steps:"
+    echo "  1. 🌐 Access the web interface using the URL above"
+    echo "  2. 🔑 Log in with the admin credentials"
+    echo "  3. 🧙 Complete the initial setup wizard"
+    echo "  4. 🔒 Review and configure security settings"
+    echo
+    
+    return 0
+}
+
+# =============================================================================
+# LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
+# =============================================================================
+
+# Legacy function aliases (will be removed after full refactoring)
+handle_setup_modular() { setup_run "$@"; }
+setup_check_existing_installation() { setup_check_existing_installation "$@"; }
+setup_analyze_system() { setup_analyze_system "$@"; }
+setup_assess_prerequisites() { setup_assess_prerequisites "$@"; }
+setup_install_dependencies() { setup_install_dependencies "$@"; }
+setup_manage_user() { setup_manage_user "$@"; }
+setup_run_configuration_wizard() { setup_generate_configuration "$@"; }
+setup_final_validation() { setup_validate_and_start_services "$@"; }
+
+# =============================================================================
+# EXPORT ALL FUNCTIONS
+# =============================================================================
+
+# Main setup orchestration
+export -f setup_run
+
+# System analysis functions
+export -f setup_analyze_system
+export -f setup_detect_fresh_server
+export -f setup_check_existing_installation
+export -f setup_check_dependencies_status
+export -f setup_check_user_status
+
+# Prerequisites assessment
+export -f setup_assess_prerequisites
+
+# Setup mode determination
+export -f setup_determine_mode
+export -f setup_can_run_automated
+
+# Dependencies installation
+export -f setup_install_dependencies
+export -f setup_install_dependencies_interactive
+export -f setup_install_dependencies_automated
+export -f setup_install_dependencies_smart
+export -f setup_install_dependencies_core
+export -f setup_install_docker
+export -f setup_install_docker_compose
+export -f setup_install_system_tools
+
+# User management
+export -f setup_manage_user
+export -f setup_create_milou_user
+export -f setup_configure_current_user
+
+# Configuration generation
+export -f setup_generate_configuration
+export -f setup_generate_configuration_interactive
+export -f setup_generate_configuration_automated
+export -f setup_generate_configuration_smart
+
+# Validation and service startup
+export -f setup_validate_and_start_services
+export -f setup_validate_system_readiness
+export -f setup_configure_ssl
+export -f setup_generate_basic_ssl_certificates
+export -f setup_prepare_docker_environment
+export -f setup_start_services
+export -f setup_validate_service_health
+
+# Completion and reporting
+export -f setup_display_completion_report
+
+# Legacy aliases (for backwards compatibility during transition)
+export -f handle_setup_modular
+
+milou_log "DEBUG" "Setup module loaded successfully" 

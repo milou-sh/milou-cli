@@ -1,0 +1,563 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+# =============================================================================
+# Milou CLI - Main Entry Point
+# Professional command-line interface following PlexTrac pattern
+# =============================================================================
+
+VERSION="3.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# =============================================================================
+# GLOBAL SETUP AND UTILITIES
+# =============================================================================
+
+# Colors and formatting
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export YELLOW='\033[1;33m'
+export BLUE='\033[0;34m'
+export PURPLE='\033[0;35m'
+export CYAN='\033[0;36m'
+export WHITE='\033[1;37m'
+export BOLD='\033[1m'
+export DIM='\033[2m'
+export UNDERLINE='\033[4m'
+export NC='\033[0m'
+export RESET='\033[0m'
+
+# Global variables
+export VERBOSE=${VERBOSE:-false}
+export DEBUG=${DEBUG:-false}
+export INTERACTIVE=${INTERACTIVE:-true}
+export FORCE=${FORCE:-false}
+export ASSUME_YES=${ASSUME_YES:-false}
+
+# Trap for cleanup
+trap 'cleanup $?' SIGINT ERR EXIT
+
+# =============================================================================
+# ERROR HANDLING AND CLEANUP
+# =============================================================================
+
+function backtrace() {
+    local depth=${#FUNCNAME[@]}
+    
+    for ((i=1; i<depth; i++)); do
+        local func="${FUNCNAME[$i]}"
+        local line="${BASH_LINENO[$((i-1))]}"
+        local src="${BASH_SOURCE[$((i-1))]}"
+        >&2 printf '%*s' "$i" ''
+        >&2 echo -e "at: ${UNDERLINE}$func()${RESET}, $src, line $line"
+    done
+}
+
+function cleanup() {
+    local status_code=$1
+    
+    if [[ "${EXITMSG:-}" != "" ]]; then
+        if [[ "$status_code" -ne 0 ]]; then
+            echo -e "${RED}ERROR: ${EXITMSG}${NC}" >&2
+        else
+            echo -e "${GREEN}${EXITMSG}${NC}" >&2
+        fi
+    fi
+    
+    if [[ "$status_code" -ne 0 && "${VERBOSE:-false}" == "true" ]]; then
+        echo -e "${RED}${DIM}Stack trace:${NC}" >&2
+        backtrace
+    fi
+    
+    if [[ "$status_code" -ne 0 && "${VERBOSE:-false}" == "false" ]]; then
+        echo -e "${DIM}Try running with '-v' for verbose output${NC}" >&2
+    fi
+    
+    trap - EXIT
+    exit $status_code
+}
+
+# =============================================================================
+# MODULE LOADING SYSTEM
+# =============================================================================
+
+# Track loaded modules to prevent double-loading
+declare -A LOADED_MODULES
+
+function load_module() {
+    local module_name="$1"
+    local required="${2:-true}"
+    
+    # Skip if already loaded
+    if [[ "${LOADED_MODULES[$module_name]:-}" == "true" ]]; then
+        return 0
+    fi
+    
+    local module_path="${SCRIPT_DIR}/src/_${module_name}.sh"
+    
+    if [[ ! -f "$module_path" ]]; then
+        if [[ "$required" == "true" ]]; then
+            echo -e "${RED}ERROR: Required module not found: $module_path${NC}" >&2
+            exit 1
+        else
+            echo -e "${YELLOW}WARN: Optional module not found: $module_path${NC}" >&2
+            return 1
+        fi
+    fi
+    
+    # Source the module
+    if source "$module_path" 2>/dev/null; then
+        LOADED_MODULES[$module_name]="true"
+        [[ "${DEBUG:-false}" == "true" ]] && echo -e "${DIM}Loaded module: $module_name${NC}" >&2
+        return 0
+    else
+        echo -e "${RED}ERROR: Failed to load module: $module_path${NC}" >&2
+        exit 1
+    fi
+}
+
+function load_core_modules() {
+    # Load essential modules first
+    load_module "core" true
+    load_module "validation" true
+    
+    # Load commonly used modules
+    load_module "docker" false
+    load_module "config" false
+}
+
+# =============================================================================
+# COMMAND SYSTEM
+# =============================================================================
+
+function show_header() {
+    if tty -s && [[ "${INTERACTIVE:-true}" == "true" ]]; then
+        echo -e "${PURPLE}${DIM}"
+        echo " __  __ _ _                _____ _     _____"
+        echo "|  \/  (_) |              / ____| |   |_   _|"
+        echo "| \  / |_| | ___  _   _  | |    | |     | |"
+        echo "| |\/| | | |/ _ \| | | | | |    | |     | |"
+        echo "| |  | | | | (_) | |_| | | |____| |_____| |_"
+        echo "|_|  |_|_|_|\___/ \__,_|  \_____|_______|___|"
+        echo
+        echo -e "${RESET}${DIM}Management Utility v$VERSION${RESET}"
+        echo
+    fi
+}
+
+function show_help() {
+    echo -e "${BOLD}${GREEN}Milou CLI - Container Management Utility${NC}"
+    echo
+    echo -e "${BOLD}Usage:${NC}"
+    echo "  milou <command> [options]"
+    echo
+    echo -e "${BOLD}Available Commands:${NC}"
+    echo
+    echo -e "${CYAN}Setup & Installation:${NC}"
+    echo "  setup                           Complete system setup and installation"
+    echo "  status                          Show current system status"
+    echo
+    echo -e "${CYAN}Service Management:${NC}"
+    echo "  start                           Start all Milou services"
+    echo "  stop                            Stop all Milou services"
+    echo "  restart                         Restart all Milou services"
+    echo "  logs [service]                  Show logs for all services or specific service"
+    echo
+    echo -e "${CYAN}Data Management:${NC}"
+    echo "  backup [type]                   Create backup (full/config/data/ssl)"
+    echo "  restore <backup_file>           Restore from backup"
+    echo "  export <type>                   Export data or configuration"
+    echo
+    echo -e "${CYAN}Updates & Maintenance:${NC}"
+    echo "  update                          Update Milou system"
+    echo "  self-update                     Update this CLI tool"
+    echo "  clean                           Clean up old backups and unused resources"
+    echo
+    echo -e "${CYAN}Administration:${NC}"
+    echo "  admin credentials               Manage admin credentials"
+    echo "  admin reset-password            Reset admin password"
+    echo "  config show                     Show current configuration"
+    echo "  config validate                 Validate configuration"
+    echo
+    echo -e "${CYAN}Development & Debugging:${NC}"
+    echo "  shell <service>                 Access service shell"
+    echo "  health                          Comprehensive health check"
+    echo "  debug                           Debug system issues"
+    echo
+    echo -e "${BOLD}Global Options:${NC}"
+    echo "  -h, --help                      Show this help message"
+    echo "  -v, --verbose                   Enable verbose output"
+    echo "  -d, --debug                     Enable debug mode"
+    echo "  -y, --yes                       Assume yes to all prompts"
+    echo "  -f, --force                     Force operations (use with caution)"
+    echo "  --version                       Show version information"
+    echo
+    echo -e "${BOLD}Examples:${NC}"
+    echo "  milou setup                     # Interactive setup"
+    echo "  milou setup --force             # Force clean installation"
+    echo "  milou backup full               # Create full backup"
+    echo "  milou logs backend              # Show backend service logs"
+    echo "  milou admin reset-password      # Reset admin password"
+    echo
+}
+
+function show_version() {
+    echo "Milou CLI v$VERSION"
+    if [[ "${VERBOSE:-false}" == "true" ]]; then
+        echo "Script Directory: $SCRIPT_DIR"
+        echo "Loaded Modules: ${!LOADED_MODULES[*]}"
+        echo "Environment: $(uname -a)"
+    fi
+}
+
+# =============================================================================
+# COMMAND HANDLERS - Comprehensive Module Integration
+# =============================================================================
+
+function handle_setup_command() {
+    load_module "setup" true
+    if command -v handle_setup_modular >/dev/null 2>&1; then
+        handle_setup_modular "$@"
+    else
+        echo -e "${RED}ERROR: Setup module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_status_command() {
+    load_module "docker" true
+    if command -v docker_status >/dev/null 2>&1; then
+        docker_status "$@"
+    else
+        echo -e "${RED}ERROR: Docker module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_docker_command() {
+    load_module "docker" true
+    local subcommand="${1:-help}"
+    shift 2>/dev/null || true
+    
+    case "$subcommand" in
+        start|up)
+            docker_start "$@"
+            ;;
+        stop|down)
+            docker_stop "$@"
+            ;;
+        restart)
+            docker_restart "$@"
+            ;;
+        logs)
+            docker_logs "$@"
+            ;;
+        health)
+            docker_health_check "$@"
+            ;;
+        shell)
+            docker_shell "$@"
+            ;;
+        *)
+            echo -e "${YELLOW}Available docker commands:${NC}"
+            echo "  start     - Start all services"
+            echo "  stop      - Stop all services"
+            echo "  restart   - Restart all services"
+            echo "  logs      - View service logs"
+            echo "  health    - Run health checks"
+            echo "  shell     - Access service shell"
+            ;;
+    esac
+}
+
+function handle_backup_command() {
+    load_module "backup" true
+    if command -v handle_backup >/dev/null 2>&1; then
+        handle_backup "$@"
+    else
+        echo -e "${RED}ERROR: Backup module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_restore_command() {
+    load_module "backup" true
+    if command -v handle_restore >/dev/null 2>&1; then
+        handle_restore "$@"
+    else
+        echo -e "${RED}ERROR: Backup module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_update_command() {
+    load_module "update" true
+    if command -v handle_update >/dev/null 2>&1; then
+        handle_update "$@"
+    else
+        echo -e "${RED}ERROR: Update module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_admin_command() {
+    load_module "admin" true
+    if command -v handle_admin >/dev/null 2>&1; then
+        handle_admin "$@"
+    else
+        echo -e "${RED}ERROR: Admin module not properly loaded${NC}" >&2
+        exit 1
+    fi
+}
+
+function handle_config_command() {
+    load_module "config" true
+    local subcommand="${1:-show}"
+    shift 2>/dev/null || true
+    
+    case "$subcommand" in
+        show|display)
+            if command -v config_show >/dev/null 2>&1; then
+                config_show "$@"
+            else
+                echo -e "${RED}ERROR: Config show function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        validate)
+            if command -v config_validate >/dev/null 2>&1; then
+                config_validate "$@"
+            else
+                echo -e "${RED}ERROR: Config validate function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        generate)
+            if command -v config_generate >/dev/null 2>&1; then
+                config_generate "$@"
+            else
+                echo -e "${RED}ERROR: Config generate function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}Available config commands:${NC}"
+            echo "  show       - Display current configuration"
+            echo "  validate   - Validate configuration"
+            echo "  generate   - Generate new configuration"
+            ;;
+    esac
+}
+
+function handle_user_command() {
+    load_module "user" true
+    local subcommand="${1:-help}"
+    shift 2>/dev/null || true
+    
+    # Use the user module functions directly
+    case "$subcommand" in
+        create)
+            if command -v user_create >/dev/null 2>&1; then
+                user_create "$@"
+            else
+                echo -e "${RED}ERROR: User create function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        switch)
+            if command -v user_switch >/dev/null 2>&1; then
+                user_switch "$@"
+            else
+                echo -e "${RED}ERROR: User switch function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        docker)
+            if command -v user_setup_docker_permissions >/dev/null 2>&1; then
+                user_setup_docker_permissions "$@"
+            else
+                echo -e "${RED}ERROR: User docker function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}Available user commands:${NC}"
+            echo "  create     - Create new user"
+            echo "  switch     - Switch to different user"
+            echo "  docker     - Setup Docker permissions"
+            ;;
+    esac
+}
+
+function handle_ssl_command() {
+    load_module "ssl" true
+    local subcommand="${1:-status}"
+    shift 2>/dev/null || true
+    
+    case "$subcommand" in
+        status)
+            if command -v ssl_status >/dev/null 2>&1; then
+                ssl_status "$@"
+            else
+                echo -e "${RED}ERROR: SSL status function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        generate)
+            if command -v ssl_generate_self_signed >/dev/null 2>&1; then
+                ssl_generate_self_signed "$@"
+            else
+                echo -e "${RED}ERROR: SSL generate function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        setup)
+            if command -v ssl_setup >/dev/null 2>&1; then
+                ssl_setup "$@"
+            else
+                echo -e "${RED}ERROR: SSL setup function not available${NC}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${YELLOW}Available ssl commands:${NC}"
+            echo "  status     - Check SSL certificate status"
+            echo "  generate   - Generate self-signed certificate"
+            echo "  setup      - Setup SSL certificates"
+            ;;
+    esac
+}
+
+# =============================================================================
+# MAIN FUNCTION
+# =============================================================================
+
+function main() {
+    # Load core modules first
+    load_core_modules
+    
+    # Parse global options first
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_header
+                show_help
+                exit 0
+                ;;
+            --version)
+                show_version
+                exit 0
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                export VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=true
+                set -x
+                shift
+                ;;
+            -y|--yes|--assume-yes)
+                ASSUME_YES=true
+                export ASSUME_YES=true
+                export INTERACTIVE=false
+                shift
+                ;;
+            -f|--force)
+                FORCE=true
+                export FORCE=true
+                shift
+                ;;
+            -*)
+                echo -e "${RED}ERROR: Unknown option: $1${NC}" >&2
+                exit 1
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    
+    # Show header for interactive sessions
+    if [[ $# -eq 0 ]]; then
+        show_header
+        show_help
+        exit 0
+    fi
+    
+    # Get command
+    local command="$1"
+    shift
+    
+    # Dispatch commands
+    case "$command" in
+        setup)
+            handle_setup_command "$@"
+            ;;
+        status)
+            handle_status_command "$@"
+            ;;
+        start)
+            handle_docker_command "start" "$@"
+            ;;
+        stop)
+            handle_docker_command "stop" "$@"
+            ;;
+        restart)
+            handle_docker_command "restart" "$@"
+            ;;
+        logs)
+            handle_docker_command "logs" "$@"
+            ;;
+        backup)
+            handle_backup_command "$@"
+            ;;
+        restore)
+            handle_restore_command "$@"
+            ;;
+        update)
+            handle_update_command "$@"
+            ;;
+        self-update)
+            handle_update_command "$@"
+            ;;
+        admin)
+            handle_admin_command "$@"
+            ;;
+        config)
+            handle_config_command "$@"
+            ;;
+        user)
+            handle_user_command "$@"
+            ;;
+        ssl)
+            handle_ssl_command "$@"
+            ;;
+        health)
+            handle_docker_command "health" "$@"
+            ;;
+        shell)
+            handle_docker_command "shell" "$@"
+            ;;
+        help)
+            show_header
+            show_help
+            ;;
+        *)
+            echo -e "${RED}ERROR: Unknown command: $command${NC}" >&2
+            echo "Run 'milou help' for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
+# Only run main if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi 

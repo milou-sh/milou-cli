@@ -8,22 +8,28 @@
 set -euo pipefail
 
 # Test framework globals
-readonly TEST_FRAMEWORK_VERSION="2.0.0"
-if [[ -z "${TEST_DIR:-}" ]]; then
-    readonly TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fi
-if [[ -z "${PROJECT_ROOT:-}" ]]; then
-    readonly PROJECT_ROOT="$(cd "$TEST_DIR/.." && pwd)"
-fi
-if [[ -z "${TEST_TEMP_DIR:-}" ]]; then
-    readonly TEST_TEMP_DIR="$TEST_DIR/tmp"
+if [[ -z "${TEST_FRAMEWORK_VERSION:-}" ]]; then
+    readonly TEST_FRAMEWORK_VERSION="2.0.0"
 fi
 
-# Test counters
-TEST_TOTAL=0
-TEST_PASSED=0
-TEST_FAILED=0
-TEST_SKIPPED=0
+# Simple robust path resolution - only set if not already set
+if [[ -z "${TEST_DIR:-}" ]]; then
+    TEST_DIR="$(pwd)/tests"
+fi
+
+if [[ -z "${PROJECT_ROOT:-}" ]]; then
+    PROJECT_ROOT="$(pwd)"
+fi
+
+if [[ -z "${TEST_TEMP_DIR:-}" ]]; then
+    TEST_TEMP_DIR="$TEST_DIR/tmp"
+fi
+
+# Test counters - ensure they're always initialized
+TEST_TOTAL=${TEST_TOTAL:-0}
+TEST_PASSED=${TEST_PASSED:-0}
+TEST_FAILED=${TEST_FAILED:-0}
+TEST_SKIPPED=${TEST_SKIPPED:-0}
 
 # Test state
 TEST_CURRENT_SUITE=""
@@ -133,7 +139,8 @@ test_run() {
     local test_function="$2"
     local test_description="$3"
     
-    ((TEST_TOTAL++))
+    # Safe arithmetic that won't exit with set -e
+    TEST_TOTAL=$((TEST_TOTAL + 1))
     
     echo -e "${BOLD}🧪 Test: $test_name${NC}"
     echo -e "   📄 $test_description"
@@ -144,13 +151,15 @@ test_run() {
         local end_time=$(date +%s%N)
         local duration=$(( (end_time - start_time) / 1000000 ))
         
-        ((TEST_PASSED++))
+        # Safe arithmetic
+        TEST_PASSED=$((TEST_PASSED + 1))
         test_log "SUCCESS" "✅ $test_name PASSED (${duration}ms)"
     else
         local end_time=$(date +%s%N)
         local duration=$(( (end_time - start_time) / 1000000 ))
         
-        ((TEST_FAILED++))
+        # Safe arithmetic
+        TEST_FAILED=$((TEST_FAILED + 1))
         test_log "ERROR" "❌ $test_name FAILED (${duration}ms)"
     fi
     
@@ -313,6 +322,34 @@ assert_function_exists() {
         return 0
     else
         test_log "ERROR" "❌ $message ($function_name)"
+        return 1
+    fi
+}
+
+# Assert that a string is not empty
+assert_not_empty() {
+    local value="$1"
+    local message="${2:-Value should not be empty}"
+    
+    if [[ -n "$value" ]]; then
+        test_log "DEBUG" "✅ $message"
+        return 0
+    else
+        test_log "ERROR" "❌ $message (value is empty)"
+        return 1
+    fi
+}
+
+# Assert that a string is empty
+assert_empty() {
+    local value="$1"
+    local message="${2:-Value should be empty}"
+    
+    if [[ -z "$value" ]]; then
+        test_log "DEBUG" "✅ $message"
+        return 0
+    else
+        test_log "ERROR" "❌ $message (value: '$value')"
         return 1
     fi
 }

@@ -67,6 +67,7 @@ setup_run() {
     local force="${1:-false}"
     local mode="${2:-auto}"
     local skip_validation="${3:-false}"
+    local preserve_creds="${4:-auto}"
     
     milou_log "STEP" "🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION:-latest}"
     echo "═══════════════════════════════════════════════════"
@@ -106,8 +107,8 @@ setup_run() {
         fi
     fi
     
-    # Step 6: Configuration Generation
-    if ! setup_generate_configuration; then
+    # Step 6: Configuration Generation (with credential preservation)
+    if ! setup_generate_configuration "$preserve_creds"; then
         milou_log "ERROR" "Configuration generation failed"
         return 1
     fi
@@ -391,12 +392,13 @@ setup_determine_mode() {
             milou_log "INFO" "🧙 Interactive mode selected"
             ;;
         "automated"|"auto")
-            if setup_can_run_automated; then
+            # For automated mode, check if we have required variables OR if user explicitly requested it
+            if setup_can_run_automated || [[ "$requested_mode" == "automated" ]]; then
                 SETUP_CURRENT_MODE="$SETUP_MODE_AUTOMATED"
                 milou_log "INFO" "🤖 Automated mode selected"
             else
                 SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
-                milou_log "INFO" "🧙 Falling back to interactive mode"
+                milou_log "INFO" "🧙 Falling back to interactive mode (missing environment variables)"
             fi
             ;;
         "smart")
@@ -463,7 +465,7 @@ setup_install_dependencies() {
 setup_install_dependencies_interactive() {
     milou_log "INFO" "🔧 Interactive Dependencies Installation"
     
-    if ! confirm_user "Install missing dependencies now?" "Y"; then
+    if ! confirm "Install missing dependencies now?" "Y"; then
         milou_log "INFO" "Dependencies installation skipped by user"
         return 1
     fi
@@ -487,7 +489,7 @@ setup_install_dependencies_smart() {
     fi
     
     # Optionally install additional tools
-    if confirm_user "Install optional tools (curl, wget, jq, openssl)?" "Y"; then
+    if confirm "Install optional tools (curl, wget, jq, openssl)?" "Y"; then
         setup_install_system_tools
     fi
 }
@@ -685,17 +687,19 @@ setup_configure_current_user() {
 
 # Generate configuration based on setup mode - SINGLE AUTHORITATIVE IMPLEMENTATION
 setup_generate_configuration() {
+    local preserve_creds="${1:-auto}"
+    
     milou_log "STEP" "Step 6: Configuration Generation"
     
     case "$SETUP_CURRENT_MODE" in
         "$SETUP_MODE_INTERACTIVE")
-            setup_generate_configuration_interactive
+            setup_generate_configuration_interactive "$preserve_creds"
             ;;
         "$SETUP_MODE_AUTOMATED")
-            setup_generate_configuration_automated
+            setup_generate_configuration_automated "$preserve_creds"
             ;;
         "$SETUP_MODE_SMART")
-            setup_generate_configuration_smart
+            setup_generate_configuration_smart "$preserve_creds"
             ;;
         *)
             milou_log "ERROR" "Unknown setup mode for configuration: $SETUP_CURRENT_MODE"
@@ -706,26 +710,28 @@ setup_generate_configuration() {
 
 # Interactive configuration generation
 setup_generate_configuration_interactive() {
+    local preserve_creds="${1:-auto}"
+    
     milou_log "INFO" "🧙 Interactive Configuration Generation"
     
-    # Use our consolidated config module for interactive generation
-    local domain="${DOMAIN:-localhost}"
-    local email="${ADMIN_EMAIL:-admin@localhost}"
-    local ssl_mode="${SSL_MODE:-generate}"
+    # Get domain
+    local domain
+    domain=$(prompt_user "Enter domain name" "localhost")
     
-    # Collect configuration interactively
-    domain=$(prompt_user "Enter domain name" "$domain")
-    email=$(prompt_user "Enter admin email" "$email")
+    # Get admin email
+    local email
+    email=$(prompt_user "Enter admin email" "admin@localhost")
     
-    # SSL configuration
-    milou_log "INFO" "🔒 SSL Configuration Options:"
-    echo "  1. Generate self-signed certificates (recommended for development)"
-    echo "  2. Use existing certificates"
-    echo "  3. No SSL (HTTP only - not recommended)"
+    # Get SSL mode
+    echo "Select SSL mode:"
+    echo "1) Generate self-signed certificates (recommended for development)"
+    echo "2) Use existing certificates"
+    echo "3) No SSL (not recommended)"
     
     local ssl_choice
-    ssl_choice=$(prompt_user "Select SSL option [1-3]" "1")
+    ssl_choice=$(prompt_user "Choose SSL mode [1-3]" "1")
     
+    local ssl_mode
     case "$ssl_choice" in
         1) ssl_mode="generate" ;;
         2) ssl_mode="existing" ;;
@@ -733,24 +739,58 @@ setup_generate_configuration_interactive() {
         *) ssl_mode="generate" ;;
     esac
     
-    # Generate configuration using consolidated config module
-    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+    # Generate configuration using consolidated config module with credential preservation
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "✅ Configuration generated successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "🔄 New credentials generated - recreating containers for security"
+            setup_force_container_recreation "false"
+        else
+            milou_log "INFO" "✅ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
 }
 
 # Automated configuration generation
 setup_generate_configuration_automated() {
+    local preserve_creds="${1:-auto}"
+    
     milou_log "INFO" "🤖 Automated Configuration Generation"
     
     local domain="${DOMAIN:-localhost}"
     local email="${ADMIN_EMAIL:-admin@localhost}"
     local ssl_mode="${SSL_MODE:-generate}"
     
-    # Generate configuration using consolidated config module
-    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+    # Generate configuration using consolidated config module with credential preservation
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "✅ Configuration generated successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "🔄 New credentials generated - recreating containers for security"
+            setup_force_container_recreation "false"
+        else
+            milou_log "INFO" "✅ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
 }
 
 # Smart configuration generation
 setup_generate_configuration_smart() {
+    local preserve_creds="${1:-auto}"
+    
     milou_log "INFO" "🧠 Smart Configuration Generation"
     
     # Use environment variables if available, otherwise use smart defaults
@@ -767,8 +807,23 @@ setup_generate_configuration_smart() {
     
     milou_log "INFO" "🧠 Smart defaults: domain=$domain, email=$email, ssl=$ssl_mode"
     
-    # Generate configuration using consolidated config module
-    config_generate "$domain" "$email" "auto" "true" "$ssl_mode" "false"
+    # Generate configuration using consolidated config module with credential preservation
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "✅ Configuration generated successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "🔄 New credentials generated - recreating containers for security"
+            setup_force_container_recreation "false"
+        else
+            milou_log "INFO" "✅ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -922,12 +977,18 @@ EOF
 setup_prepare_docker_environment() {
     milou_log "INFO" "🐳 Preparing Docker environment..."
     
+    # Create required external networks
+    milou_log "DEBUG" "Creating external proxy network"
+    if ! docker network ls | grep -q "proxy"; then
+        docker network create proxy 2>/dev/null || true
+    fi
+    
     # Use Docker module if available
     if command -v docker_init >/dev/null 2>&1; then
         docker_init
     else
         # Basic Docker network creation
-        docker network create milou-network 2>/dev/null || true
+        docker network create milou_network 2>/dev/null || true
     fi
     
     milou_log "SUCCESS" "✅ Docker environment prepared"
@@ -1072,15 +1133,143 @@ setup_display_completion_report() {
 # LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
 # =============================================================================
 
-# Legacy function aliases (will be removed after full refactoring)
-handle_setup_modular() { setup_run "$@"; }
-setup_check_existing_installation() { setup_check_existing_installation "$@"; }
-setup_analyze_system() { setup_analyze_system "$@"; }
-setup_assess_prerequisites() { setup_assess_prerequisites "$@"; }
-setup_install_dependencies() { setup_install_dependencies "$@"; }
-setup_manage_user() { setup_manage_user "$@"; }
-setup_run_configuration_wizard() { setup_generate_configuration "$@"; }
-setup_final_validation() { setup_validate_and_start_services "$@"; }
+# Main setup command handler with options parsing
+handle_setup_modular() {
+    local force="false"
+    local mode="auto"
+    local skip_validation="false"
+    local preserve_creds="auto"
+    local clean="false"
+    
+    # Parse command line options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --force|-f)
+                force="true"
+                shift
+                ;;
+            --clean)
+                clean="true"
+                shift
+                ;;
+            --preserve-creds|--preserve-credentials)
+                preserve_creds="true"
+                shift
+                ;;
+            --new-creds|--new-credentials)
+                preserve_creds="false"
+                shift
+                ;;
+            --interactive|-i)
+                mode="interactive"
+                shift
+                ;;
+            --automated|--auto|-a)
+                mode="automated"
+                shift
+                ;;
+            --smart|-s)
+                mode="smart"
+                shift
+                ;;
+            --skip-validation)
+                skip_validation="true"
+                shift
+                ;;
+            --dev|--development)
+                mode="interactive"
+                export MILOU_DEV_MODE=1
+                shift
+                ;;
+            --help|-h)
+                show_setup_help
+                return 0
+                ;;
+            *)
+                milou_log "WARN" "Unknown setup option: $1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Handle clean install first
+    if [[ "$clean" == "true" ]]; then
+        milou_log "STEP" "🧹 Clean Installation Requested"
+        echo ""
+        echo "⚠️  🚨 WARNING: CLEAN INSTALL WILL DELETE ALL DATA! 🚨"
+        echo "==============================================="
+        echo ""
+        echo "This will PERMANENTLY DELETE:"
+        echo "  🗄️  All database data"
+        echo "  🔐 All SSL certificates"
+        echo "  ⚙️  All configuration files"
+        echo "  📦 All Docker volumes and containers"
+        echo "  💾 All backup files"
+        echo ""
+        
+        if ! confirm "Are you ABSOLUTELY SURE you want to delete ALL data?" "N"; then
+            milou_log "INFO" "Clean install cancelled - wise choice!"
+            return 0
+        fi
+        
+        # Force container recreation with volume cleanup
+        setup_force_container_recreation "false"
+        
+        # Remove configuration files
+        rm -f "${SCRIPT_DIR:-$(pwd)}/.env"
+        rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl"
+        
+        milou_log "SUCCESS" "✅ Clean install preparation completed"
+        echo ""
+        
+        # Force new credentials for clean install
+        preserve_creds="false"
+    fi
+    
+    # Run main setup with parsed options
+    setup_run "$force" "$mode" "$skip_validation" "$preserve_creds"
+}
+
+# Show setup help
+show_setup_help() {
+    echo "🚀 Milou CLI Setup Command"
+    echo "=========================="
+    echo ""
+    echo "USAGE:"
+    echo "  ./milou.sh setup [OPTIONS]"
+    echo ""
+    echo "SETUP MODES:"
+    echo "  --interactive, -i      Interactive setup wizard (default)"
+    echo "  --automated, --auto, -a Automated setup using environment variables"
+    echo "  --smart, -s            Smart setup with minimal prompts"
+    echo ""
+    echo "CREDENTIAL OPTIONS:"
+    echo "  --preserve-creds       Preserve existing credentials (recommended for updates)"
+    echo "  --new-creds           Generate new credentials (will affect existing data!)"
+    echo ""
+    echo "INSTALLATION OPTIONS:"
+    echo "  --clean               Clean install - DELETE ALL EXISTING DATA"
+    echo "  --force, -f           Skip confirmation prompts"
+    echo "  --dev, --development  Development mode setup"
+    echo ""
+    echo "ADVANCED OPTIONS:"
+    echo "  --skip-validation     Skip final validation and service startup"
+    echo "  --help, -h            Show this help"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  ./milou.sh setup                           # Interactive setup with credential preservation"
+    echo "  ./milou.sh setup --automated               # Automated setup using environment variables"
+    echo "  ./milou.sh setup --preserve-creds          # Explicitly preserve existing credentials"
+    echo "  ./milou.sh setup --new-creds               # Generate new credentials (WARNING: affects data)"
+    echo "  ./milou.sh setup --clean                   # Clean install (WARNING: deletes all data)"
+    echo ""
+    echo "CREDENTIAL PRESERVATION:"
+    echo "  🔄 UPDATE: Credentials are preserved by default to protect your data"
+    echo "  ✨ FRESH INSTALL: New credentials are generated for security"
+    echo "  ⚠️  OVERRIDE: Use --new-creds to force new credentials (may affect data access)"
+    echo ""
+    echo "For more information, see: docs/USER_GUIDE.md"
+}
 
 # =============================================================================
 # EXPORT ALL FUNCTIONS
@@ -1136,7 +1325,62 @@ export -f setup_validate_service_health
 # Completion and reporting
 export -f setup_display_completion_report
 
-# Legacy aliases (for backwards compatibility during transition)
+# Container management
+export -f setup_force_container_recreation
+
+# Setup command handlers
 export -f handle_setup_modular
+export -f show_setup_help
+
+# Legacy aliases (for backwards compatibility during transition)
+export -f setup_run_configuration_wizard
+export -f setup_final_validation
+
+# Force clean restart when credentials change
+setup_force_container_recreation() {
+    local quiet="${1:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Forcing complete system recreation for credential updates"
+    
+    # Stop all containers first
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Stopping all containers..."
+    docker compose down --remove-orphans --volumes 2>/dev/null || true
+    
+    # Force stop any remaining containers
+    local running_containers=$(docker ps -q --filter "name=milou")
+    if [[ -n "$running_containers" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Force stopping remaining containers"
+        echo "$running_containers" | xargs docker stop 2>/dev/null || true
+        echo "$running_containers" | xargs docker rm -f 2>/dev/null || true
+    fi
+    
+    # Clean up ALL volumes related to milou (this is critical for credential updates)
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Cleaning up all data volumes for fresh initialization..."
+    
+    # Remove all milou-related volumes
+    local milou_volumes=$(docker volume ls -q | grep -E "milou|static" 2>/dev/null || true)
+    if [[ -n "$milou_volumes" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing volumes: $(echo $milou_volumes | tr '\n' ' ')"
+        echo "$milou_volumes" | xargs docker volume rm -f 2>/dev/null || true
+    fi
+    
+    # Also clean up any anonymous volumes that might exist
+    docker volume prune -f >/dev/null 2>&1 || true
+    
+    # Clean up networks
+    docker network prune -f >/dev/null 2>&1 || true
+    
+    # Clean up any orphaned containers
+    docker container prune -f >/dev/null 2>&1 || true
+    
+    # Ensure docker-compose file exists and pull latest images
+    if [[ -f "docker-compose.yml" ]] || [[ -f "static/docker-compose.yml" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Pulling latest images to ensure fresh start"
+        docker compose pull >/dev/null 2>&1 || true
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Complete system cleanup finished - ready for fresh initialization"
+    return 0
+}
 
 milou_log "DEBUG" "Setup module loaded successfully" 

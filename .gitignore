@@ -15,10 +15,20 @@
 # Backup files
 *.backup
 *.bak
+backups/
 
-# Logs
+# Test results and logs
+tests/results/
+tests/tmp/
 *.log
 logs/
+
+# SSL certificates and keys
+ssl/
+*.crt
+*.key
+*.pem
+*.p12
 
 # Node modules (if any)
 node_modules/
@@ -32,16 +42,23 @@ node_modules/
 ehthumbs.db
 Thumbs.db
 
-# SSL certificates (except examples)
-ssl/*.crt
-ssl/*.key
-ssl/*.pem
-!ssl/*.example
+# Temporary files
+*.tmp
+*.temp
+*~
 
-# Milou CLI specific
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Milou CLI specific runtime files
 ~/.milou/
 .milou/
-milou.log 
-# Backup files
-*.backup*
-*.backup.*

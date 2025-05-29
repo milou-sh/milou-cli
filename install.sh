@@ -562,18 +562,26 @@ start_setup() {
         echo -e "   • Start your Docker services"
         echo
         
-        echo -e "${YELLOW}Starting in 3 seconds... (Press Ctrl+C to cancel)${NC}"
+        local choice
+        choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")
         
-        for i in 3 2 1; do
-            echo -ne "\r${YELLOW}Starting in $i seconds... (Press Ctrl+C to cancel)${NC}"
-            sleep 1
-        done
-        echo -ne "\r${GREEN}Starting setup now!                                ${NC}\n"
-        echo
-        
-        step "Launching Milou setup wizard..."
-        cd "$INSTALL_DIR"
-        exec ./milou.sh setup
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            echo
+            step "Launching Milou setup wizard..."
+            cd "$INSTALL_DIR"
+            
+            # Unset install script variables that might interfere with setup interactivity
+            unset INTERACTIVE FORCE QUIET
+            
+            exec ./milou.sh setup
+        else
+            echo
+            echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"
+            echo -e "${CYAN}To start setup when ready:${NC}"
+            echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
+            echo -e "   ${BOLD}./milou.sh setup${NC}"
+            echo
+        fi
     else
         echo
         echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"
@@ -590,7 +598,7 @@ main() {
     check_interactive_mode
     
     # Parse arguments if running as script
-    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
         parse_args "$@"
     fi
     
@@ -633,8 +641,9 @@ main() {
 }
 
 # Handle script being piped from curl
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Running as script
+# Use a safer check that works with curl | bash
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
+    # Running as script or via curl | bash
     main "$@"
 else
     # Being sourced (shouldn't happen with curl | bash)

@@ -1049,10 +1049,10 @@ setup_generate_configuration_interactive() {
     if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "Configuration created successfully"
         
-        # Enhanced credential management messaging
+        # Only force container recreation if credentials are NEW (not preserved)
         if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
             milou_log "INFO" "✓ New credentials generated - recreating containers for security"
-            setup_force_container_recreation "false"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
         else
             milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
         fi
@@ -1084,7 +1084,7 @@ setup_generate_configuration_automated() {
         # Only force container recreation if credentials are NEW (not preserved)
         if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
             milou_log "INFO" "✓ New credentials generated - recreating containers for security"
-            setup_force_container_recreation "false"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
         else
             milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
         fi
@@ -1123,7 +1123,7 @@ setup_generate_configuration_smart() {
         # Only force container recreation if credentials are NEW (not preserved)
         if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
             milou_log "INFO" "✓ New credentials generated - recreating containers for security"
-            setup_force_container_recreation "false"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
         else
             milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
         fi
@@ -1367,7 +1367,7 @@ setup_start_services() {
     fi
     
     # Use the Docker module's start function which handles authentication
-    if docker_start "$github_token" "false" "false"; then
+    if service_start_with_validation "" "60" "false"; then
         milou_log "SUCCESS" "✓ Services started successfully"
         
         # Wait for services to be ready
@@ -1547,7 +1547,7 @@ handle_setup_modular() {
         fi
         
         # Force container recreation with volume cleanup
-        setup_force_container_recreation "false"
+        # setup_force_container_recreation "false"  # TODO: Implement this function
         
         # Remove configuration files
         rm -f "${SCRIPT_DIR:-$(pwd)}/.env"

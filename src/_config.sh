@@ -103,14 +103,20 @@ config_generate() {
     # Generate configuration
     [[ "$quiet" != "true" ]] && milou_log "INFO" "📝 Generating configuration..."
     
+    # Prepare credentials data
+    local credentials_data=""
     if [[ "$should_preserve" == "true" && "${CREDENTIALS_PRESERVED:-false}" == "true" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Using preserved credentials for safe update"
+        # Use preserved credentials data if available
+        credentials_data="${PRESERVED_CREDENTIALS_DATA:-}"
     else
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Generating fresh credentials"
+        # Generate new credentials
+        credentials_data=$(config_generate_credentials "$quiet")
     fi
     
     # Generate the actual configuration
-    if config_write_env_file "$domain" "$admin_email" "$ssl_mode" "$quiet"; then
+    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "true" "$credentials_data" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Configuration written successfully"
         
         # ENTERPRISE VALIDATION: Verify no credentials were lost

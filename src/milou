@@ -457,19 +457,19 @@ function handle_docker_command() {
     
     case "$subcommand" in
         start|up)
-            docker_start "$@"
+            docker_execute "up" "" "false" "$@"
             clear_state_cache  # Clear cache after state change
             ;;
         stop|down)
-            docker_stop "$@"
+            docker_execute "down" "" "false" "$@"
             clear_state_cache  # Clear cache after state change
             ;;
         restart)
-            docker_restart "$@"
+            docker_execute "restart" "" "false" "$@"
             clear_state_cache  # Clear cache after state change
             ;;
         logs)
-            docker_logs "$@"
+            docker_execute "logs" "" "false" "$@"
             ;;
         health)
             if command -v health_check_all >/dev/null 2>&1; then
@@ -480,7 +480,7 @@ function handle_docker_command() {
             fi
             ;;
         shell)
-            docker_shell "$@"
+            docker_execute "exec" "milou-backend" "false" "/bin/bash" "$@"
             ;;
         *)
             echo -e "${YELLOW}Available docker commands:${NC}"

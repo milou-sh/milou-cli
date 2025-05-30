@@ -1158,7 +1158,7 @@ config_migrate() {
     local preserved_credentials=""
     if [[ "$preserve_data" == "true" ]]; then
         if config_preserve_existing_credentials "$quiet"; then
-            preserved_credentials=$(config_get_preserved_credentials "$quiet")
+            preserved_credentials=$(config_generate_credentials_with_preservation "$quiet")
             [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🔒 Existing credentials preserved for migration"
         fi
     fi
@@ -1226,6 +1226,7 @@ export -f config_get_env_variable
 export -f config_update_env_variable
 export -f config_preserve_existing_credentials
 export -f config_generate_credentials
+export -f config_generate_credentials_with_preservation
 export -f config_create_env_file
 export -f config_find_available_port
 export -f config_resolve_port_conflicts
@@ -1240,7 +1241,6 @@ export -f config_validate_ssl
 
 # Configuration utility functions
 export -f config_show_section
-export -f config_get_preserved_credentials
 
 # Installation type and credential management
 export -f config_detect_installation_type

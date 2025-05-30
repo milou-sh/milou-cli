@@ -59,52 +59,173 @@ declare -g SETUP_NEEDS_USER="false"
 declare -g SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
 
 # =============================================================================
-# LOGO AND BRANDING FUNCTIONS
+# ENHANCED LOGO AND BRANDING FUNCTIONS  
+# Version: 3.1.1 - Enhanced User Experience Edition
 # =============================================================================
 
-# Show Milou logo during setup
+# Professional Milou logo with consistent design
 setup_show_logo() {
     if tty -s && [[ "${QUIET:-false}" != "true" ]]; then
-        echo -e "${PURPLE:-}"
+        echo -e "${BOLD}${PURPLE}"
         cat << 'EOF'
-                                                        @@@@@@@@@@@                     
-                                                        @@@@@@@@@@@                     
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@   @@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@    @@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                                                                                                                 
+
+    ███╗   ███╗██╗██╗      ██████╗ ██╗   ██╗
+    ████╗ ████║██║██║     ██╔═══██╗██║   ██║  
+    ██╔████╔██║██║██║     ██║   ██║██║   ██║  
+    ██║╚██╔╝██║██║██║     ██║   ██║██║   ██║  
+    ██║ ╚═╝ ██║██║███████╗╚██████╔╝╚██████╔╝  
+    ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝  ╚═════╝   
+    
+    ┌─────────────────────────────────────────┐
+    │   Professional Docker Management        │
+    │   🚀 Simple • Secure • Reliable        │
+    └─────────────────────────────────────────┘
+
 EOF
-        echo -e "${NC:-}"
-        echo -e "    ┌─────────────────────────────────────┐"
-        echo -e "    │  Milou CLI - Docker Management      │"
-        echo -e "    │  Professional • Secure • Simple    │"
-        echo -e "    └─────────────────────────────────────┘"
-        echo
-        echo -e "${BOLD:-}${CYAN:-}Welcome to the Milou CLI Setup Wizard${NC:-}"
-        echo -e "${CYAN:-}Setting up your professional Docker environment...${NC:-}"
+        echo -e "${NC}"
+        log_welcome "Let's get your Milou environment set up quickly and easily!"
+        echo -e "${DIM}This wizard will guide you through each step with clear explanations.${NC}"
         echo
     fi
+}
+
+# Enhanced setup header with progress indication
+setup_show_header() {
+    local current_step="${1:-1}"
+    local total_steps="${2:-7}"
+    local step_name="${3:-Starting Setup}"
+    
+    if tty -s && [[ "${QUIET:-false}" != "true" ]]; then
+        echo
+        milou_log "HEADER" "🚀 Milou Setup - Professional Installation v$(get_milou_version 2>/dev/null || echo 'latest')"
+        log_progress "$current_step" "$total_steps" "$step_name"
+        echo
+    fi
+}
+
+# User-friendly step announcements
+setup_announce_step() {
+    local step_number="$1"
+    local step_title="$2"
+    local step_description="${3:-}"
+    local estimated_time="${4:-}"
+    
+    log_section "Step $step_number: $step_title" "$step_description"
+    
+    if [[ -n "$estimated_time" ]]; then
+        echo -e "${DIM}  ⏱️  Estimated time: $estimated_time${NC}"
+        echo
+    fi
+}
+
+# Enhanced success messages with clear next steps  
+setup_show_success() {
+    local domain="${1:-localhost}"
+    local admin_user="${2:-admin}"
+    local admin_password="${3:-[generated]}"
+    local admin_email="${4:-admin@localhost}"
+    
+    echo
+    milou_log "HEADER" "🎉 Setup Complete! Welcome to Milou"
+    
+    echo -e "${BOLD}${GREEN}┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "${BOLD}${GREEN}│              🎊 CONGRATULATIONS! 🎊                │${NC}"
+    echo -e "${BOLD}${GREEN}│        Your Milou system is ready to use!          │${NC}"
+    echo -e "${BOLD}${GREEN}└─────────────────────────────────────────────────────┘${NC}"
+    echo
+    
+    log_section "🌐 Access Your System" "Your Milou installation is now accessible"
+    echo -e "   ${BOLD}Web Interface:${NC} ${CYAN}https://$domain${NC}"
+    echo -e "   ${BOLD}Admin Panel:${NC}   ${CYAN}https://$domain/admin${NC}"
+    echo
+    
+    log_section "🔑 Your Admin Credentials" "Keep these credentials safe!"
+    echo -e "   ${BOLD}Username:${NC} $admin_user"
+    echo -e "   ${BOLD}Password:${NC} $admin_password"
+    echo -e "   ${BOLD}Email:${NC}    $admin_email"
+    echo
+    echo -e "${YELLOW}${BOLD}⚠️  IMPORTANT:${NC} Save these credentials in a secure password manager!"
+    echo
+    
+    log_next_steps \
+        "Open ${CYAN}https://$domain${NC} in your web browser" \
+        "Accept the SSL certificate (normal for self-signed certificates)" \
+        "Log in with the credentials above" \
+        "Change your password after first login" \
+        "Create a backup: ${CYAN}./milou.sh backup${NC}" \
+        "Explore the system and start managing your environment!"
+    
+    log_tip "Need help? Run ${CYAN}./milou.sh --help${NC} or check the documentation in the ${CYAN}docs/${NC} folder"
+}
+
+# Enhanced error display with helpful guidance
+setup_show_error() {
+    local error_msg="$1"
+    local context="${2:-}"
+    local solutions=("${@:3}")
+    
+    echo
+    milou_log "ERROR" "$error_msg"
+    
+    if [[ -n "$context" ]]; then
+        echo -e "${DIM}Context: $context${NC}"
+        echo
+    fi
+    
+    if [[ ${#solutions[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}${BOLD}💡 How to fix this:${NC}"
+        for i in "${!solutions[@]}"; do
+            echo -e "   ${BLUE}$((i+1)).${NC} ${solutions[$i]}"
+        done
+        echo
+    fi
+    
+    log_tip "If you need help, check our troubleshooting guide or contact support"
+}
+
+# System analysis display with user-friendly language
+setup_show_analysis() {
+    local is_fresh="${1:-true}"
+    local needs_deps="${2:-false}"
+    local needs_user="${3:-false}"
+    local existing_install="${4:-false}"
+    
+    log_section "🔍 System Analysis" "Understanding your current environment"
+    
+    # Translate technical status to user-friendly language
+    if [[ "$is_fresh" == "true" ]]; then
+        echo -e "   ${GREEN}${CHECKMARK}${NC} Fresh system detected - perfect for a clean installation"
+    else
+        echo -e "   ${BLUE}${BULLET}${NC} Existing system detected - we'll work with your current setup"
+    fi
+    
+    if [[ "$needs_deps" == "true" ]]; then
+        echo -e "   ${YELLOW}${WRENCH}${NC} We'll install Docker and other required tools automatically"
+    else
+        echo -e "   ${GREEN}${CHECKMARK}${NC} All required tools are already installed"
+    fi
+    
+    if [[ "$needs_user" == "true" ]]; then
+        echo -e "   ${BLUE}${BULLET}${NC} We'll create a dedicated user account for security"
+    else
+        echo -e "   ${GREEN}${CHECKMARK}${NC} User account is already properly configured"
+    fi
+    
+    if [[ "$existing_install" == "true" ]]; then
+        echo -e "   ${YELLOW}${WRENCH}${NC} Existing Milou installation found - we'll update it carefully"
+    else
+        echo -e "   ${GREEN}${SPARKLES}${NC} This will be your first Milou installation"
+    fi
+    
+    echo
+    log_tip "Everything looks good! The setup will handle any required installations automatically."
 }
 
 # =============================================================================
 # MAIN SETUP ORCHESTRATION FUNCTIONS
 # =============================================================================
 
-# Main setup entry point - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Main setup entry point with enhanced UX
 setup_run() {
     local force="${1:-false}"
     local mode="${2:-auto}"
@@ -112,7 +233,6 @@ setup_run() {
     local preserve_creds="${4:-auto}"
     
     # Ensure interactive mode is properly set for setup wizard
-    # Respect environment variables set by installer, but fall back to TTY detection
     if [[ "${MILOU_INTERACTIVE:-}" == "true" ]] || [[ "${INTERACTIVE:-}" == "true" ]]; then
         export MILOU_INTERACTIVE=true
         export INTERACTIVE=true
@@ -127,60 +247,97 @@ setup_run() {
         milou_log "WARN" "Setup detected non-interactive environment"
     fi
     
-    # Show Milou logo
+    # Show enhanced Milou logo and welcome
     setup_show_logo
     
-    # Display header
-    milou_log "STEP" "🚀 Milou Setup - State-of-the-Art CLI v${SCRIPT_VERSION:-latest}"
-    echo "═══════════════════════════════════════════════════"
-    echo ""
+    # Enhanced setup header with progress tracking
+    setup_show_header 1 7 "Starting Setup"
     
-    # Step 1: System Analysis (always succeeds, just gathers information)
+    # Step 1: System Analysis with user-friendly display
+    setup_announce_step 1 "System Analysis" "Understanding your current environment" 
     if ! setup_analyze_system; then
-        milou_log "ERROR" "System analysis failed"
+        setup_show_error "System analysis failed" "Unable to detect system requirements" \
+            "Check system permissions" \
+            "Ensure Docker is accessible" \
+            "Contact support if issues persist"
         return 1
     fi
     
-    # Step 2: Prerequisites Assessment (reports status, doesn't fail setup)
+    # Display analysis results in user-friendly format
+    setup_show_analysis "$SETUP_IS_FRESH_SERVER" "$SETUP_NEEDS_DEPS" "$SETUP_NEEDS_USER" "false"
+    
+    # Step 2: Prerequisites Assessment
+    setup_announce_step 2 "Prerequisites Assessment" "Checking what needs to be installed" 
     setup_assess_prerequisites || true  # Always continue regardless of result
     
     # Step 3: Setup Mode Determination
+    setup_announce_step 3 "Setup Mode Selection" "Choosing the best setup approach" 
     if ! setup_determine_mode "$mode"; then
-        milou_log "ERROR" "Setup mode determination failed"
+        setup_show_error "Setup mode determination failed" "Could not determine optimal setup approach" \
+            "Try running with specific mode: ./milou.sh setup --interactive" \
+            "Check system requirements" \
+            "Review setup documentation"
         return 1
     fi
     
-    # Step 4: Dependencies Installation (only if needed)
+    # Step 4: Dependencies Installation (if needed)
     if [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
+        setup_announce_step 4 "Dependencies Installation" "Installing Docker and required tools" 
         if ! setup_install_dependencies; then
-            milou_log "ERROR" "Dependencies installation failed"
+            setup_show_error "Dependencies installation failed" "Could not install required system components" \
+                "Check internet connectivity" \
+                "Verify system package manager is working" \
+                "Try manual Docker installation" \
+                "Run with sudo if permission issues"
             return 1
         fi
+        milou_log "SUCCESS" "All dependencies installed successfully"
+    else
+        setup_announce_step 4 "Dependencies Check" "Verifying existing installation" 
+        milou_log "SUCCESS" "All required dependencies are already available"
     fi
     
-    # Step 5: User Management (only if needed)
+    # Step 5: User Management (if needed)
     if [[ "$SETUP_NEEDS_USER" == "true" ]]; then
+        setup_announce_step 5 "User Setup" "Creating dedicated user account" 
         if ! setup_manage_user; then
-            milou_log "ERROR" "User management failed"
+            setup_show_error "User management failed" "Could not set up user account properly" \
+                "Check if running with appropriate permissions" \
+                "Verify system supports user creation" \
+                "Try running as root/sudo"
             return 1
         fi
+        milou_log "SUCCESS" "User account configured successfully"
+    else
+        setup_announce_step 5 "User Verification" "Confirming user configuration" 
+        milou_log "SUCCESS" "User configuration is already optimal"
     fi
     
-    # Step 6: Configuration Generation (with credential preservation)
+    # Step 6: Configuration Generation
+    setup_announce_step 6 "Configuration Setup" "Creating your personalized settings" 
     if ! setup_generate_configuration "$preserve_creds"; then
-        milou_log "ERROR" "Configuration generation failed"
+        setup_show_error "Configuration generation failed" "Could not create system configuration" \
+            "Check file permissions in installation directory" \
+            "Verify disk space availability" \
+            "Try running setup again" \
+            "Contact support with error details"
         return 1
     fi
+    milou_log "SUCCESS" "Configuration generated successfully"
     
     # Step 7: Final Validation and Service Startup
-    if [[ "$skip_validation" != "true" ]]; then
-        if ! setup_validate_and_start_services; then
-            milou_log "ERROR" "Final validation and service startup failed"
-            return 1
-        fi
+    setup_announce_step 7 "Service Deployment" "Starting and validating your Milou system" "
+    if ! setup_validate_and_start_services; then
+        setup_show_error "Service startup failed" "Could not start all required services" \
+            "Check Docker service status" \
+            "Verify port availability" \
+            "Review service logs: ./milou.sh logs" \
+            "Try restarting: ./milou.sh restart"
+        return 1
     fi
     
-    # Step 8: Completion Report
+    # Enhanced completion display
+    log_progress 7 7 "Setup Complete!"
     setup_display_completion_report
     
     milou_log "SUCCESS" "🎉 Milou setup completed successfully!"
@@ -772,85 +929,94 @@ setup_generate_configuration() {
     esac
 }
 
-# Interactive configuration generation
+# Enhanced interactive configuration generation with better UX
 setup_generate_configuration_interactive() {
     local preserve_creds="${1:-auto}"
     
-    milou_log "INFO" "🧙 Interactive Configuration Setup"
-    echo
-    echo -e "${CYAN}Let's configure your Milou environment...${NC:-}"
+    log_section "🧙 Interactive Configuration" "Let's personalize your Milou setup"
+    echo -e "${DIM}We'll ask you a few quick questions to configure everything perfectly for your needs.${NC}"
     echo
     
-    # Get domain with better prompting and validation
+    # Domain Configuration with enhanced UX
     local domain
     while true; do
-        echo -e "${BOLD}${BLUE}🌐 Domain Configuration${NC:-}"
-        echo -e "${DIM}Enter the domain where Milou will be accessible${NC:-}"
-        echo -e "${DIM}Examples: localhost, yourdomain.com, server.company.com${NC:-}"
+        log_section "🌐 Domain Configuration" "Where will your Milou system be accessible?"
+        echo -e "${DIM}This is the web address where you'll access Milou in your browser.${NC}"
         echo
-        echo -ne "${GREEN}Domain name${NC:-} [${BOLD}localhost${NC:-}]: "
+        echo -e "${YELLOW}💡 Common examples:${NC}"
+        echo -e "   ${CYAN}•${NC} ${BOLD}localhost${NC} - For testing on this computer"
+        echo -e "   ${CYAN}•${NC} ${BOLD}milou.company.com${NC} - For company use"
+        echo -e "   ${CYAN}•${NC} ${BOLD}192.168.1.100${NC} - For local network access"
+        echo
+        echo -ne "${BOLD}${GREEN}Domain name${NC} [${CYAN}localhost${NC}]: "
         read -r domain
         if [[ -z "$domain" ]]; then
             domain="localhost"
         fi
         
-        # Basic domain validation
+        # Enhanced domain validation with helpful feedback
         if [[ "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]] || [[ "$domain" == "localhost" ]]; then
-            echo -e "   ${GREEN}✓${NC:-} Domain: ${BOLD}$domain${NC:-}"
+            echo -e "   ${GREEN}${CHECKMARK} Perfect!${NC} Your domain: ${BOLD}$domain${NC}"
             break
         else
-            echo -e "   ${RED}✗${NC:-} Invalid domain format. Please try again."
+            echo -e "   ${RED}${CROSSMARK} That doesn't look like a valid domain.${NC}"
+            echo -e "   ${YELLOW}💡 Try:${NC} localhost, your-domain.com, or an IP address"
             echo
         fi
     done
     echo
     
-    # Get admin email with validation
+    # Admin Email Configuration with enhanced UX
     local email
     while true; do
-        echo -e "${BOLD}${BLUE}📧 Admin Email Configuration${NC:-}"
-        echo -e "${DIM}This email will be used for admin notifications and SSL certificates${NC:-}"
+        log_section "📧 Admin Contact Email" "Your administrator email address"
+        echo -e "${DIM}This email will be used for important notifications and SSL certificates.${NC}"
+        echo -e "${DIM}Don't worry - we won't send you spam or share it with anyone.${NC}"
         echo
-        echo -ne "${GREEN}Admin email${NC:-} [${BOLD}admin@$domain${NC:-}]: "
+        echo -ne "${BOLD}${GREEN}Admin email${NC} [${CYAN}admin@$domain${NC}]: "
         read -r email
         if [[ -z "$email" ]]; then
             email="admin@$domain"
         fi
         
-        # Use core validation function that properly handles localhost
+        # Enhanced email validation with helpful feedback
         if validate_email "$email" "true"; then
-            echo -e "   ${GREEN}✓${NC:-} Email: ${BOLD}$email${NC:-}"
+            echo -e "   ${GREEN}${CHECKMARK} Great!${NC} Admin email: ${BOLD}$email${NC}"
             break
         else
-            echo -e "   ${RED}✗${NC:-} Invalid email format. Please try again."
-            echo -e "   ${DIM}Examples: admin@yourdomain.com, admin@localhost, user@example.org${NC:-}"
+            echo -e "   ${RED}${CROSSMARK} That email format doesn't look right.${NC}"
+            echo -e "   ${YELLOW}💡 Examples:${NC} admin@yourdomain.com, admin@localhost"
             echo
         fi
     done
     echo
     
-    # Get SSL mode with better explanation
-    echo -e "${BOLD}${BLUE}🔒 SSL Certificate Configuration${NC:-}"
-    echo -e "${DIM}Choose how to handle SSL certificates for secure HTTPS access${NC:-}"
-    echo
-    echo -e "${BOLD}Available options:${NC:-}"
-    echo -e "   ${GREEN}1)${NC:-} ${BOLD}Generate self-signed certificates${NC:-} ${DIM}(Recommended for development)${NC:-}"
-    echo -e "      ${DIM}• Quick setup, works immediately${NC:-}"
-    echo -e "      ${DIM}• Browser will show security warning (normal)${NC:-}"
-    echo -e "      ${DIM}• Perfect for testing and local development${NC:-}"
-    echo
-    echo -e "   ${YELLOW}2)${NC:-} ${BOLD}Use existing certificates${NC:-} ${DIM}(For production with your own certs)${NC:-}"
-    echo -e "      ${DIM}• Place your certificates in ssl/ directory${NC:-}"
-    echo -e "      ${DIM}• Required files: certificate.crt, private.key${NC:-}"
-    echo
-    echo -e "   ${RED}3)${NC:-} ${BOLD}No SSL${NC:-} ${DIM}(Not recommended, HTTP only)${NC:-}"
-    echo -e "      ${DIM}• Unencrypted connection${NC:-}"
-    echo -e "      ${DIM}• Only use for development or trusted networks${NC:-}"
+    # SSL Configuration with enhanced UX and better explanations
+    log_section "🔒 Security & SSL Setup" "How to secure your connection"
+    echo -e "${DIM}SSL certificates encrypt the connection between your browser and Milou.${NC}"
+    echo -e "${DIM}This keeps your login and data safe from prying eyes.${NC}"
     echo
     
-    local ssl_choice
+    echo -e "${BOLD}${CYAN}Choose your security level:${NC}"
+    echo
+    echo -e "${GREEN}   1) ${BOLD}Quick & Easy${NC} ${DIM}(Self-signed certificates)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Works immediately, no setup required"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for testing and development"
+    echo -e "      ${YELLOW}⚠️${NC}  Browser will show a security warning (this is normal)"
+    echo
+    echo -e "${YELLOW}   2) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} No browser warnings"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for business use"
+    echo -e "      ${BLUE}ℹ️${NC}  Requires: certificate.crt and private.key in ssl/ folder"
+    echo
+    echo -e "${RED}   3) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
+    echo -e "      ${RED}${CROSSMARK}${NC} Connection is not encrypted"
+    echo -e "      ${RED}${CROSSMARK}${NC} Only use for testing in trusted environments"
+    echo
+    
+    local ssl_choice ssl_mode
     while true; do
-        echo -ne "${GREEN}Choose SSL option${NC:-} [${BOLD}1-3${NC:-}] (default: ${BOLD}1${NC:-}): "
+        echo -ne "${BOLD}${GREEN}Choose security option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
         read -r ssl_choice
         if [[ -z "$ssl_choice" ]]; then
             ssl_choice="1"
@@ -859,39 +1025,47 @@ setup_generate_configuration_interactive() {
         case "$ssl_choice" in
             1) 
                 ssl_mode="generate"
-                echo -e "   ${GREEN}✓${NC:-} SSL: ${BOLD}Self-signed certificates${NC:-}"
+                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Self-signed certificates${NC}"
+                echo -e "   ${DIM}Your system will be secure and ready in minutes.${NC}"
                 break
                 ;;
             2) 
                 ssl_mode="existing"
-                echo -e "   ${YELLOW}✓${NC:-} SSL: ${BOLD}Existing certificates${NC:-}"
-                echo -e "   ${DIM}Make sure to place your certificates in ssl/ directory${NC:-}"
+                echo -e "   ${YELLOW}${CHECKMARK} Professional setup!${NC} Using: ${BOLD}Your own certificates${NC}"
+                echo -e "   ${BLUE}💡 Remember:${NC} Place your certificate files in the ssl/ directory"
                 break
                 ;;
             3) 
                 ssl_mode="none"
-                echo -e "   ${RED}✓${NC:-} SSL: ${BOLD}Disabled${NC:-} ${DIM}(HTTP only)${NC:-}"
+                echo -e "   ${RED}${CROSSMARK} No encryption selected${NC} Using: ${BOLD}HTTP only${NC}"
+                echo -e "   ${YELLOW}⚠️  Warning:${NC} Your connection will not be encrypted"
                 break
                 ;;
             *) 
-                echo -e "   ${RED}✗${NC:-} Please choose 1, 2, or 3"
+                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                echo
                 ;;
         esac
     done
     echo
     
-    # Summary of choices
-    echo -e "${BOLD}${PURPLE}📋 Configuration Summary${NC:-}"
-    echo -e "   ${CYAN}Domain:${NC:-}     ${BOLD}$domain${NC:-}"
-    echo -e "   ${CYAN}Email:${NC:-}      ${BOLD}$email${NC:-}"
-    echo -e "   ${CYAN}SSL Mode:${NC:-}   ${BOLD}$ssl_mode${NC:-}"
+    # Enhanced configuration summary with visual appeal
+    echo -e "${BOLD}${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${PURPLE}                📋 Your Configuration Summary${NC}"
+    echo -e "${BOLD}${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo
+    echo -e "   ${BOLD}Domain:${NC}        ${CYAN}$domain${NC}"
+    echo -e "   ${BOLD}Admin Email:${NC}   ${CYAN}$email${NC}"
+    echo -e "   ${BOLD}SSL Security:${NC}  ${CYAN}$ssl_mode${NC}"
+    echo
+    echo -e "${GREEN}${CHECKMARK} Everything looks perfect! Generating your configuration...${NC}"
     echo
     
     # Generate configuration using consolidated config module with credential preservation
     if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
-        milou_log "SUCCESS" "✅ Configuration generated successfully"
+        milou_log "SUCCESS" "Configuration created successfully"
         
-        # Only force container recreation if credentials are NEW (not preserved)
+        # Enhanced credential management messaging
         if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
             milou_log "INFO" "🔄 New credentials generated - recreating containers for security"
             setup_force_container_recreation "false"
@@ -901,7 +1075,10 @@ setup_generate_configuration_interactive() {
         
         return 0
     else
-        milou_log "ERROR" "Configuration generation failed"
+        setup_show_error "Configuration generation failed" "Unable to create configuration files" \
+            "Check file permissions in the installation directory" \
+            "Verify sufficient disk space is available" \
+            "Try running the setup again"
         return 1
     fi
 }
@@ -1284,88 +1461,20 @@ setup_validate_service_health() {
 
 # Display setup completion report - SINGLE AUTHORITATIVE IMPLEMENTATION
 setup_display_completion_report() {
-    milou_log "SUCCESS" "🎉 Milou Setup Completed Successfully!"
-    echo
-    echo -e "${BOLD}${GREEN}┌────────────────────────────────────────────────────┐${NC:-}"
-    echo -e "${BOLD}${GREEN}│               SETUP COMPLETE! 🚀                  │${NC:-}"
-    echo -e "${BOLD}${GREEN}└────────────────────────────────────────────────────┘${NC:-}"
-    echo
+    # Show enhanced success message using our new functions
+    local domain="${DOMAIN:-localhost}"
+    local admin_user="${ADMIN_USERNAME:-admin}"
+    local admin_password="${ADMIN_PASSWORD:-[check .env file]}"
+    local admin_email="${ADMIN_EMAIL:-admin@localhost}"
     
     # Load configuration for display
     if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
         source "${SCRIPT_DIR:-$(pwd)}/.env"
+        admin_password="${ADMIN_PASSWORD:-[check .env file]}"
     fi
     
-    # Access information
-    local domain="${DOMAIN:-localhost}"
-    local https_port="${HTTPS_PORT:-443}"
-    local http_port="${HTTP_PORT:-80}"
-    
-    echo -e "${BOLD}${CYAN}🌐 Access Information${NC:-}"
-    if [[ "${SSL_MODE:-}" != "none" ]]; then
-        if [[ "$https_port" == "443" ]]; then
-            echo -e "   ${GREEN}Primary URL:${NC:-}    ${BOLD}https://$domain${NC:-}"
-        else
-            echo -e "   ${GREEN}Primary URL:${NC:-}    ${BOLD}https://$domain:$https_port${NC:-}"
-        fi
-        echo -e "   ${DIM}• Secure HTTPS connection with SSL certificates${NC:-}"
-    fi
-    
-    if [[ "$http_port" == "80" ]]; then
-        echo -e "   ${YELLOW}HTTP Redirect:${NC:-} ${BOLD}http://$domain${NC:-} ${DIM}(redirects to HTTPS)${NC:-}"
-    else
-        echo -e "   ${YELLOW}HTTP Redirect:${NC:-} ${BOLD}http://$domain:$http_port${NC:-} ${DIM}(redirects to HTTPS)${NC:-}"
-    fi
-    echo
-    
-    # Admin credentials with security notice
-    echo -e "${BOLD}${PURPLE}🔑 Admin Credentials${NC:-}"
-    echo -e "   ${GREEN}Username:${NC:-} ${BOLD}${ADMIN_USERNAME:-admin}${NC:-}"
-    echo -e "   ${GREEN}Password:${NC:-} ${BOLD}${ADMIN_PASSWORD:-[check .env file]}${NC:-}"
-    echo -e "   ${GREEN}Email:${NC:-}    ${BOLD}${ADMIN_EMAIL:-admin@localhost}${NC:-}"
-    echo
-    echo -e "   ${RED}⚠️  IMPORTANT SECURITY NOTICE:${NC:-}"
-    echo -e "   ${DIM}• Save these credentials in a secure password manager${NC:-}"
-    echo -e "   ${DIM}• Change the default password after first login${NC:-}"
-    echo -e "   ${DIM}• Never share credentials via email or chat${NC:-}"
-    echo
-    
-    # Management commands
-    echo -e "${BOLD}${BLUE}⚙️  Management Commands${NC:-}"
-    echo -e "   ${GREEN}Check Status:${NC:-}    ${BOLD}./milou.sh status${NC:-}"
-    echo -e "   ${GREEN}View Logs:${NC:-}       ${BOLD}./milou.sh logs${NC:-} ${DIM}[service]${NC:-}"
-    echo -e "   ${GREEN}Stop Services:${NC:-}   ${BOLD}./milou.sh stop${NC:-}"
-    echo -e "   ${GREEN}Restart All:${NC:-}     ${BOLD}./milou.sh restart${NC:-}"
-    echo -e "   ${GREEN}Create Backup:${NC:-}   ${BOLD}./milou.sh backup${NC:-}"
-    echo -e "   ${GREEN}Get Help:${NC:-}        ${BOLD}./milou.sh --help${NC:-}"
-    echo
-    
-    # Next steps with priorities
-    echo -e "${BOLD}${YELLOW}💡 Next Steps (Recommended)${NC:-}"
-    echo -e "   ${BOLD}1.${NC:-} ${GREEN}Access the web interface${NC:-}"
-    echo -e "      ${DIM}• Open your browser and go to the URL above${NC:-}"
-    echo -e "      ${DIM}• Accept the SSL certificate if using self-signed${NC:-}"
-    echo
-    echo -e "   ${BOLD}2.${NC:-} ${GREEN}Complete initial login${NC:-}"
-    echo -e "      ${DIM}• Use the admin credentials shown above${NC:-}"
-    echo -e "      ${DIM}• Change the default password immediately${NC:-}"
-    echo
-    echo -e "   ${BOLD}3.${NC:-} ${GREEN}Create your first backup${NC:-}"
-    echo -e "      ${DIM}• Run: ./milou.sh backup${NC:-}"
-    echo -e "      ${DIM}• Secure your configuration and data${NC:-}"
-    echo
-    echo -e "   ${BOLD}4.${NC:-} ${GREEN}Explore the documentation${NC:-}"
-    echo -e "      ${DIM}• Check docs/USER_GUIDE.md for detailed instructions${NC:-}"
-    echo -e "      ${DIM}• Learn about advanced features and administration${NC:-}"
-    echo
-    
-    # Troubleshooting help
-    echo -e "${BOLD}${RED}🚨 Having Issues?${NC:-}"
-    echo -e "   ${DIM}• Services not starting: ./milou.sh logs${NC:-}"
-    echo -e "   ${DIM}• Can't access web interface: ./milou.sh status${NC:-}"
-    echo -e "   ${DIM}• Need help: ./milou.sh --help${NC:-}"
-    echo -e "   ${DIM}• Health check: ./milou.sh health${NC:-}"
-    echo
+    # Use our enhanced success display function
+    setup_show_success "$domain" "$admin_user" "$admin_password" "$admin_email"
     
     return 0
 }

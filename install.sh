@@ -129,57 +129,47 @@ handle_error() {
 # Logging functions
 log() {
     if [[ "$QUIET" != "true" ]]; then
-        echo -e "${GREEN}[INFO]${NC} $*"
+        echo -e "${CYAN}• INFO${NC} $*"
     fi
 }
 
 warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*" >&2
+    echo -e "${YELLOW}${BOLD}⚠️  WARNING${NC} $*" >&2
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
+    echo -e "${RED}${BOLD}❌ ERROR${NC} $*" >&2
 }
 
 success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*"
+    echo -e "${GREEN}${BOLD}✓ SUCCESS${NC} $*"
 }
 
 step() {
-    echo -e "${BLUE}[STEP]${NC} $*"
+    echo -e "${BLUE}${BOLD}�� STEP${NC} $*"
 }
 
-# Show Milou ASCII art
+# Show enhanced Milou logo with better design
 show_milou_logo() {
-    echo -e "${PURPLE}"
+    echo -e "${BOLD}${PURPLE}"
     cat << 'EOF'
-                                                        @@@@@@@@@@@                     
-                                                        @@@@@@@@@@@                     
-                                                        @@@@@@@@@@@                     
-                                                        @@@@@@@@@@@                     
-                                                        @@@@@@@@@@@                     
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@   @@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@    @@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@    @@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                               
-                                  @@@@@@@@@@@@@@@@@@@@@@@@                                                                                                                 
+
+    ███╗   ███╗██╗██╗      ██████╗ ██╗   ██╗
+    ████╗ ████║██║██║     ██╔═══██╗██║   ██║  
+    ██╔████╔██║██║██║     ██║   ██║██║   ██║  
+    ██║╚██╔╝██║██║██║     ██║   ██║██║   ██║  
+    ██║ ╚═╝ ██║██║███████╗╚██████╔╝╚██████╔╝  
+    ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝  ╚═════╝   
+    
+    ┌─────────────────────────────────────────┐
+    │   Professional Docker Management        │
+    │   🚀 Simple • Secure • Reliable        │
+    └─────────────────────────────────────────┘
+
 EOF
     echo -e "${NC}"
-    echo -e "${BOLD}${CYAN}             Milou CLI - Professional Docker Management${NC}"
-    echo -e "${CYAN}                    One-Line Installation${NC}"
+    echo -e "${BOLD}${CYAN}Welcome to the Milou CLI Installer!${NC}"
+    echo -e "${DIM}Quick installation with automatic setup wizard${NC}"
     echo
 }
 
@@ -572,85 +562,97 @@ setup_shell_integration() {
     success "Shell integration configured"
 }
 
-# Show completion message
+# Enhanced progress indicator
+show_progress() {
+    local current="$1"
+    local total="$2"
+    local description="$3"
+    local percentage=$((current * 100 / total))
+    local filled=$((current * 20 / total))
+    local empty=$((20 - filled))
+    
+    printf "\r${BLUE}${BOLD}Progress:${NC} ["
+    printf "%*s" $filled | tr ' ' '█'
+    printf "%*s" $empty | tr ' ' '░'
+    printf "] %d%% ${CYAN}(%d/%d)${NC} %s" $percentage $current $total "$description"
+    
+    if [[ $current -eq $total ]]; then
+        echo
+    fi
+}
+
+# Enhanced installation summary
 show_completion() {
     echo
-    success "🎉 Milou CLI installation completed!"
+    success "🎉 Milou CLI installation completed successfully!"
     echo
     echo -e "${BOLD}${BLUE}┌──────────────────────────────────────────────┐${NC}"
-    echo -e "${BOLD}${BLUE}│             INSTALLATION COMPLETE!          │${NC}"
+    echo -e "${BOLD}${BLUE}│        🎊 INSTALLATION COMPLETE! 🎊        │${NC}"
     echo -e "${BOLD}${BLUE}└──────────────────────────────────────────────┘${NC}"
     echo
-    echo -e "${CYAN}📍 Installation Details:${NC}"
-    echo -e "   Location: ${BOLD}$INSTALL_DIR${NC}"
-    echo -e "   Version:  ${BOLD}Latest from $BRANCH branch${NC}"
-    echo -e "   Command:  ${BOLD}milou${NC} (available after shell restart)"
+    echo -e "${BOLD}${CYAN}📍 Your Installation Details:${NC}"
+    echo -e "   ${BOLD}Location:${NC}     $INSTALL_DIR"
+    echo -e "   ${BOLD}Version:${NC}      Latest from $BRANCH branch"
+    echo -e "   ${BOLD}Command:${NC}      ${CYAN}milou${NC} (available after shell restart)"
     echo
-    echo -e "${GREEN}🚀 Quick Start Commands:${NC}"
-    echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
-    echo -e "   ${BOLD}./milou.sh setup${NC}      # Start interactive setup"
-    echo -e "   ${BOLD}./milou.sh --help${NC}     # View all commands"
+    echo -e "${BOLD}${GREEN}🚀 What's Next?${NC}"
+    echo -e "   ${CYAN}1.${NC} Start the setup wizard: ${BOLD}cd $INSTALL_DIR && ./milou.sh setup${NC}"
+    echo -e "   ${CYAN}2.${NC} View all commands: ${BOLD}./milou.sh --help${NC}"
+    echo -e "   ${CYAN}3.${NC} Read the documentation: ${BOLD}docs/USER_GUIDE.md${NC}"
     echo
-    echo -e "${YELLOW}💡 Shell Integration:${NC}"
-    echo -e "   Restart your terminal or run: ${BOLD}source ~/.bashrc${NC}"
-    echo -e "   Then you can use: ${BOLD}milou setup${NC}"
+    echo -e "${BOLD}${YELLOW}💡 Pro Tip:${NC} Restart your terminal to use the ${CYAN}milou${NC} command globally"
     echo
 }
 
-# Start interactive setup if requested
+# Enhanced ready to start message
 start_setup() {
-    # Always prompt - no automatic countdown or launch
     if [[ "$AUTO_START" == "true" ]]; then
         echo
-        echo -e "${BOLD}${GREEN}🚀 Ready to Start Setup!${NC}"
+        echo -e "${BOLD}${GREEN}🎯 Ready to Configure Your System!${NC}"
         echo
-        echo -e "${CYAN}The interactive setup wizard will:${NC}"
-        echo -e "   • Guide you through configuration"
-        echo -e "   • Set up SSL certificates"
-        echo -e "   • Configure admin credentials"
-        echo -e "   • Start your Docker services"
+        echo -e "${CYAN}The setup wizard will help you:${NC}"
+        echo -e "   ${GREEN}✓${NC} Configure your domain and SSL certificates"
+        echo -e "   ${GREEN}✓${NC} Set up admin credentials securely"
+        echo -e "   ${GREEN}✓${NC} Install and start all services"
+        echo -e "   ${GREEN}✓${NC} Verify everything works perfectly"
+        echo
+        echo -e "${DIM}Estimated time: 3-5 minutes${NC}"
         echo
         
-        # Always prompt user - no countdown
         local choice
-        choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")
+        choice=$(prompt_user "Start the setup wizard now? (Y/n)" "y")
         
         if [[ "$choice" =~ ^[Yy]$ ]]; then
             echo
-            step "Launching Milou setup wizard..."
+            step "Launching the interactive setup wizard..."
+            echo -e "${DIM}Switching to setup mode for optimal configuration experience...${NC}"
             cd "$INSTALL_DIR"
             
-            # Ensure setup runs in interactive mode regardless of install context
+            # Ensure setup runs in interactive mode
             export INTERACTIVE=true
             export MILOU_INTERACTIVE=true
-            # Enable debug mode to diagnose interactivity issues
-            export MILOU_DEBUG=true
-            # Unset variables that might interfere with setup interactivity
             unset FORCE QUIET
             
-            # For curl | bash, redirect stdin to terminal so setup can read user input
+            # Handle stdin redirection for curl | bash
             if [[ ! -t 0 ]]; then
-                # stdin is not a terminal (probably curl | bash)
-                # Redirect to terminal for interactive setup
                 exec ./milou.sh setup < /dev/tty
             else
-                # stdin is already a terminal
                 exec ./milou.sh setup
             fi
         else
             echo
-            echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"
-            echo -e "${CYAN}To start setup when ready:${NC}"
-            echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
-            echo -e "   ${BOLD}./milou.sh setup${NC}"
+            echo -e "${BOLD}${BLUE}🎯 Manual Setup Instructions${NC}"
+            echo -e "   ${CYAN}1.${NC} Open a new terminal (to activate the milou command)"
+            echo -e "   ${CYAN}2.${NC} Run: ${BOLD}cd $INSTALL_DIR${NC}"
+            echo -e "   ${CYAN}3.${NC} Run: ${BOLD}./milou.sh setup${NC}"
             echo
+            echo -e "${YELLOW}💡 Tip:${NC} You can also run ${CYAN}milou setup${NC} from anywhere after restarting your terminal"
         fi
     else
         echo
-        echo -e "${BOLD}${BLUE}🎯 Manual Setup${NC}"
-        echo -e "${CYAN}To start setup when ready:${NC}"
-        echo -e "   ${BOLD}cd $INSTALL_DIR${NC}"
-        echo -e "   ${BOLD}./milou.sh setup${NC}"
+        echo -e "${BOLD}${BLUE}🎯 Ready for Configuration${NC}"
+        echo -e "   ${CYAN}When you're ready:${NC} ${BOLD}cd $INSTALL_DIR && ./milou.sh setup${NC}"
+        echo -e "   ${CYAN}Or globally:${NC} ${BOLD}milou setup${NC} (after terminal restart)"
         echo
     fi
 }

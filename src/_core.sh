@@ -19,10 +19,11 @@ fi
 readonly MILOU_CORE_LOADED="true"
 
 # =============================================================================
-# LOGGING UTILITIES (Consolidated from lib/core/logging.sh)
+# ENHANCED UI/UX LOGGING UTILITIES
+# Version: 3.1.1 - Enhanced User Experience Edition  
 # =============================================================================
 
-# Color codes for logging (safe declarations to avoid readonly conflicts)
+# Color codes for enhanced UI (safe declarations to avoid readonly conflicts)
 if [[ -z "${RED:-}" ]]; then
     readonly RED='\033[0;31m'
 fi
@@ -51,7 +52,21 @@ if [[ -z "${NC:-}" ]]; then
     readonly NC='\033[0m' # No Color
 fi
 
-# Log levels
+# Enhanced UI elements
+readonly CHECKMARK="✓"
+readonly CROSSMARK="✗"
+readonly ARROW="→"
+readonly BULLET="•"
+readonly STAR="⭐"
+readonly ROCKET="🚀"
+readonly WRENCH="🔧"
+readonly SHIELD="🛡️"
+readonly SPARKLES="✨"
+
+# Progress indicators
+readonly PROGRESS_DOTS=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+
+# Log levels with enhanced UX focus
 readonly LOG_TRACE=0
 readonly LOG_DEBUG=1
 readonly LOG_INFO=2
@@ -59,11 +74,13 @@ readonly LOG_WARN=3
 readonly LOG_ERROR=4
 readonly LOG_SUCCESS=5
 readonly LOG_STEP=6
+readonly LOG_HEADER=7
+readonly LOG_HIGHLIGHT=8
 
 # Current log level (can be overridden by environment)
 MILOU_LOG_LEVEL="${MILOU_LOG_LEVEL:-${LOG_INFO}}"
 
-# Main logging function
+# Enhanced main logging function with better UX
 milou_log() {
     local level="$1"
     shift
@@ -79,6 +96,8 @@ milou_log() {
         ERROR) log_level_num=$LOG_ERROR ;;
         SUCCESS) log_level_num=$LOG_SUCCESS ;;
         STEP)  log_level_num=$LOG_STEP ;;
+        HEADER) log_level_num=$LOG_HEADER ;;
+        HIGHLIGHT) log_level_num=$LOG_HIGHLIGHT ;;
         *) log_level_num=$LOG_INFO; level="INFO" ;;
     esac
     
@@ -87,16 +106,110 @@ milou_log() {
         return 0
     fi
     
-    # Format and output the log message
+    # Enhanced formatting with better visual hierarchy
     case "$level" in
-        ERROR)   echo -e "${RED}[ERROR]${NC} ${message}" >&2 ;;
-        WARN)    echo -e "${YELLOW}[WARN]${NC} ${message}" >&2 ;;
-        SUCCESS) echo -e "${GREEN}[SUCCESS]${NC} ${message}" ;;
-        STEP)    echo -e "${BOLD}${BLUE}[STEP]${NC} ${message}" ;;
-        DEBUG)   echo -e "${DIM}[DEBUG]${NC} ${message}" ;;
-        TRACE)   echo -e "${DIM}[TRACE]${NC} ${message}" ;;
-        *)       echo -e "[INFO] ${message}" ;;
+        ERROR)   
+            echo -e "${RED}${BOLD}❌ ERROR${NC} ${message}" >&2 
+            ;;
+        WARN)    
+            echo -e "${YELLOW}${BOLD}⚠️  WARNING${NC} ${message}" >&2 
+            ;;
+        SUCCESS) 
+            echo -e "${GREEN}${BOLD}${CHECKMARK} SUCCESS${NC} ${message}" 
+            ;;
+        STEP)    
+            echo -e "${BLUE}${BOLD}${ROCKET} STEP${NC} ${message}" 
+            ;;
+        HEADER)  
+            echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════════════════${NC}"
+            echo -e "${BOLD}${CYAN}${message}${NC}"
+            echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════${NC}\n"
+            ;;
+        HIGHLIGHT)
+            echo -e "${BOLD}${YELLOW}${STAR} ${message}${NC}"
+            ;;
+        DEBUG)   
+            echo -e "${DIM}${BULLET} DEBUG${NC} ${DIM}${message}${NC}" 
+            ;;
+        TRACE)   
+            echo -e "${DIM}${BULLET} TRACE${NC} ${DIM}${message}${NC}" 
+            ;;
+        *)       
+            echo -e "${CYAN}${BULLET} INFO${NC} ${message}" 
+            ;;
     esac
+}
+
+# Enhanced user-friendly logging shortcuts
+log_welcome() {
+    local message="$1"
+    echo -e "\n${BOLD}${PURPLE}${SPARKLES} Welcome!${NC} ${message}\n"
+}
+
+log_progress() {
+    local step="$1"
+    local total="$2"
+    local description="$3"
+    local percentage=$((step * 100 / total))
+    local filled=$((step * 20 / total))
+    local empty=$((20 - filled))
+    
+    printf "\r${BLUE}${BOLD}Progress:${NC} ["
+    printf "%*s" $filled | tr ' ' '█'
+    printf "%*s" $empty | tr ' ' '░'
+    printf "] %d%% ${CYAN}(%d/%d)${NC} %s" $percentage $step $total "$description"
+    
+    if [[ $step -eq $total ]]; then
+        echo -e "\n${GREEN}${BOLD}${CHECKMARK} Complete!${NC}"
+    fi
+}
+
+log_section() {
+    local title="$1"
+    local subtitle="${2:-}"
+    echo -e "\n${BOLD}${BLUE}▼ ${title}${NC}"
+    if [[ -n "$subtitle" ]]; then
+        echo -e "${DIM}  ${subtitle}${NC}"
+    fi
+    echo
+}
+
+log_user_action() {
+    local action="$1"
+    echo -e "${YELLOW}${BOLD}👤 User Action Required:${NC} ${action}"
+}
+
+log_system_status() {
+    local status="$1"
+    local details="$2"
+    case "$status" in
+        "healthy")
+            echo -e "${GREEN}${CHECKMARK} System Status:${NC} ${GREEN}Healthy${NC} - ${details}"
+            ;;
+        "warning")
+            echo -e "${YELLOW}⚠️  System Status:${NC} ${YELLOW}Warning${NC} - ${details}"
+            ;;
+        "error")
+            echo -e "${RED}${CROSSMARK} System Status:${NC} ${RED}Error${NC} - ${details}"
+            ;;
+        *)
+            echo -e "${BLUE}${BULLET} System Status:${NC} ${status} - ${details}"
+            ;;
+    esac
+}
+
+log_tip() {
+    local tip="$1"
+    echo -e "${CYAN}${BOLD}💡 Tip:${NC} ${tip}"
+}
+
+log_next_steps() {
+    local steps=("$@")
+    echo -e "\n${BOLD}${GREEN}🎯 Next Steps:${NC}"
+    for i in "${!steps[@]}"; do
+        echo -e "   ${BLUE}$((i+1)).${NC} ${steps[$i]}"
+    done
+    echo
 }
 
 # =============================================================================

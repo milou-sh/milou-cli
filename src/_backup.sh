@@ -639,6 +639,745 @@ _milou_restore_volumes() {
 }
 
 # =============================================================================
+# WEEK 4: ENHANCED BACKUP SYSTEM 
+# =============================================================================
+
+# Automated backup scheduler with intelligent timing
+automated_backup_system() {
+    local schedule_type="${1:-daily}"     # daily, weekly, monthly, custom
+    local backup_retention="${2:-7}"      # days to keep backups
+    local backup_location="${3:-./backups}"
+    local notification_enabled="${4:-true}"
+    
+    milou_log "INFO" "🤖 Setting up automated backup system..."
+    
+    # Create backup schedule configuration
+    local backup_config="/etc/milou/backup_schedule.conf"
+    mkdir -p "$(dirname "$backup_config")" 2>/dev/null || backup_config="$HOME/.milou_backup_schedule.conf"
+    
+    cat > "$backup_config" << EOF
+# Milou CLI Automated Backup Configuration
+SCHEDULE_TYPE=$schedule_type
+BACKUP_RETENTION=$backup_retention
+BACKUP_LOCATION=$backup_location
+NOTIFICATION_ENABLED=$notification_enabled
+LAST_BACKUP_TIME=
+BACKUP_HISTORY_FILE=${backup_location}/backup_history.log
+INCREMENTAL_ENABLED=true
+HEALTH_CHECK_BEFORE_BACKUP=true
+EOF
+    
+    # Set up cron job based on schedule type
+    setup_backup_cron_job "$schedule_type" "$backup_config"
+    
+    # Initialize backup history tracking
+    initialize_backup_history "$backup_location"
+    
+    milou_log "SUCCESS" "✅ Automated backup system configured ($schedule_type schedule)"
+    return 0
+}
+
+# Set up cron job for automated backups
+setup_backup_cron_job() {
+    local schedule_type="$1"
+    local config_file="$2"
+    
+    # Determine cron schedule
+    local cron_schedule
+    case "$schedule_type" in
+        "daily")   cron_schedule="0 2 * * *" ;;         # 2 AM daily
+        "weekly")  cron_schedule="0 2 * * 0" ;;         # 2 AM Sunday
+        "monthly") cron_schedule="0 2 1 * *" ;;         # 2 AM 1st of month
+        "hourly")  cron_schedule="0 * * * *" ;;         # Top of every hour
+        *)
+            milou_log "WARN" "Unknown schedule type: $schedule_type, using daily"
+            cron_schedule="0 2 * * *"
+            ;;
+    esac
+    
+    # Create backup script
+    local backup_script="/tmp/milou_automated_backup.sh"
+    cat > "$backup_script" << EOF
+#!/bin/bash
+# Milou CLI Automated Backup Script
+source "$config_file"
+cd "${SCRIPT_DIR:-$(pwd)}"
+exec >> "\${BACKUP_LOCATION}/automated_backup.log" 2>&1
+echo "[\$(date)] Starting automated backup..."
+bash "${SCRIPT_DIR:-$(pwd)}/milou.sh" backup-auto --config "$config_file"
+EOF
+    chmod +x "$backup_script"
+    
+    # Add to crontab (if available)
+    if command -v crontab >/dev/null 2>&1; then
+        # Check if entry already exists
+        if ! crontab -l 2>/dev/null | grep -q "milou_automated_backup"; then
+            (crontab -l 2>/dev/null; echo "$cron_schedule $backup_script") | crontab -
+            milou_log "SUCCESS" "✅ Backup cron job scheduled: $schedule_type"
+        else
+            milou_log "INFO" "📅 Backup cron job already exists"
+        fi
+    else
+        milou_log "WARN" "⚠️ Crontab not available - manual scheduling required"
+        milou_log "INFO" "💡 Run periodically: $backup_script"
+    fi
+}
+
+# Initialize backup history tracking
+initialize_backup_history() {
+    local backup_location="$1"
+    local history_file="$backup_location/backup_history.log"
+    
+    mkdir -p "$backup_location"
+    
+    if [[ ! -f "$history_file" ]]; then
+        cat > "$history_file" << EOF
+# Milou CLI Backup History Log
+# Format: timestamp|backup_type|backup_file|size_bytes|duration_seconds|status
+# Created: $(date -Iseconds)
+EOF
+        milou_log "DEBUG" "✅ Backup history file initialized: $history_file"
+    fi
+}
+
+# Incremental backup system with change detection
+incremental_backup_create() {
+    local base_backup="${1:-}"              # Reference backup for incremental
+    local backup_dir="${2:-./backups}"
+    local backup_name="${3:-incremental_$(date +%Y%m%d_%H%M%S)}"
+    
+    milou_log "INFO" "📈 Creating incremental backup..."
+    
+    if [[ -z "$base_backup" ]]; then
+        # Find the latest full backup as base
+        base_backup=$(find_latest_full_backup "$backup_dir")
+        if [[ -z "$base_backup" ]]; then
+            milou_log "WARN" "No base backup found, creating full backup instead"
+            milou_backup_create "full" "$backup_dir" "$backup_name"
+            return $?
+        fi
+    fi
+    
+    milou_log "INFO" "📊 Base backup: $(basename "$base_backup")"
+    
+    # Create backup directory
+    local backup_path="$backup_dir/$backup_name"
+    mkdir -p "$backup_path"
+    
+    # Detect changes since base backup
+    detect_changes_since_backup "$base_backup" "$backup_path"
+    
+    # Create incremental backup manifest
+    create_incremental_manifest "$backup_path" "$base_backup"
+    
+    # Create archive
+    local archive_path="${backup_path}.tar.gz"
+    if tar -czf "$archive_path" -C "$backup_dir" "$backup_name"; then
+        rm -rf "$backup_path"
+        milou_log "SUCCESS" "✅ Incremental backup created: $archive_path"
+        
+        # Log backup in history
+        log_backup_history "$archive_path" "incremental" "$(stat -c%s "$archive_path" 2>/dev/null || echo "0")" "success"
+        
+        echo "$archive_path"
+        return 0
+    else
+        milou_log "ERROR" "❌ Failed to create incremental backup archive"
+        rm -rf "$backup_path"
+        return 1
+    fi
+}
+
+# Find latest full backup for incremental base
+find_latest_full_backup() {
+    local backup_dir="$1"
+    
+    # Look for backup manifests with full backup type
+    local latest_backup=""
+    local latest_time=0
+    
+    for backup_file in "$backup_dir"/*.tar.gz; do
+        if [[ -f "$backup_file" ]]; then
+            # Extract and check manifest
+            local temp_dir="/tmp/backup_check_$$"
+            mkdir -p "$temp_dir"
+            
+            if tar -xzf "$backup_file" -C "$temp_dir" --wildcards "*/manifest.json" 2>/dev/null; then
+                local manifest_file
+                manifest_file=$(find "$temp_dir" -name "manifest.json" -type f | head -1)
+                
+                if [[ -f "$manifest_file" ]] && grep -q '"backup_type": "full"' "$manifest_file"; then
+                    local backup_time
+                    backup_time=$(stat -c%Y "$backup_file" 2>/dev/null || echo "0")
+                    
+                    if [[ $backup_time -gt $latest_time ]]; then
+                        latest_time=$backup_time
+                        latest_backup="$backup_file"
+                    fi
+                fi
+            fi
+            
+            rm -rf "$temp_dir"
+        fi
+    done
+    
+    echo "$latest_backup"
+}
+
+# Detect changes since base backup for incremental
+detect_changes_since_backup() {
+    local base_backup="$1"
+    local incremental_path="$2"
+    
+    milou_log "DEBUG" "Detecting changes since base backup..."
+    
+    # Get base backup timestamp
+    local base_time
+    base_time=$(stat -c%Y "$base_backup" 2>/dev/null || echo "0")
+    
+    # Check configuration changes
+    if [[ -f "${SCRIPT_DIR}/.env" ]] && [[ "${SCRIPT_DIR}/.env" -nt "$base_backup" ]]; then
+        milou_log "DEBUG" "Configuration changed, including in incremental"
+        _milou_backup_configuration "$incremental_path"
+    fi
+    
+    # Check SSL certificate changes
+    if [[ -d "${SCRIPT_DIR}/ssl" ]]; then
+        local ssl_changed=false
+        while IFS= read -r -d '' file; do
+            if [[ "$file" -nt "$base_backup" ]]; then
+                ssl_changed=true
+                break
+            fi
+        done < <(find "${SCRIPT_DIR}/ssl" -type f -print0 2>/dev/null)
+        
+        if [[ "$ssl_changed" == "true" ]]; then
+            milou_log "DEBUG" "SSL certificates changed, including in incremental"
+            _milou_backup_ssl_certificates "$incremental_path"
+        fi
+    fi
+    
+    # For Docker volumes, we need to check container modification times
+    # This is simplified - in production, we'd use more sophisticated change detection
+    milou_log "DEBUG" "Checking Docker volume changes..."
+    _milou_backup_docker_data "$incremental_path"  # For now, always include data changes
+}
+
+# Create incremental backup manifest
+create_incremental_manifest() {
+    local backup_path="$1"
+    local base_backup="$2"
+    
+    cat > "$backup_path/manifest.json" << EOF
+{
+    "backup_type": "incremental",
+    "base_backup": "$(basename "$base_backup")",
+    "timestamp": "$(date -Iseconds)",
+    "milou_version": "${MILOU_VERSION:-unknown}",
+    "cli_version": "${MILOU_CLI_VERSION:-unknown}",
+    "system_info": {
+        "hostname": "$(hostname)",
+        "os": "$(uname -s)",
+        "arch": "$(uname -m)"
+    },
+    "changes_detected": {
+        "configuration": $([ -d "$backup_path/config" ] && echo "true" || echo "false"),
+        "ssl_certificates": $([ -d "$backup_path/ssl" ] && echo "true" || echo "false"),
+        "docker_volumes": $([ -d "$backup_path/volumes" ] && echo "true" || echo "false")
+    }
+}
+EOF
+}
+
+# Log backup in history file
+log_backup_history() {
+    local backup_file="$1"
+    local backup_type="$2"
+    local backup_size="$3"
+    local status="$4"
+    local duration="${5:-0}"
+    
+    local backup_dir
+    backup_dir="$(dirname "$backup_file")"
+    local history_file="$backup_dir/backup_history.log"
+    
+    local timestamp
+    timestamp="$(date -Iseconds)"
+    
+    echo "$timestamp|$backup_type|$(basename "$backup_file")|$backup_size|$duration|$status" >> "$history_file"
+}
+
+# =============================================================================
+# WEEK 4: ENHANCED DISASTER RECOVERY
+# =============================================================================
+
+# One-click disaster recovery with guided restoration
+disaster_recovery_restore() {
+    local backup_source="${1:-auto}"        # auto, file, cloud
+    local recovery_mode="${2:-interactive}" # interactive, auto, minimal
+    local target_services="${3:-all}"       # all, or comma-separated list
+    
+    milou_log "STEP" "🚨 Disaster Recovery Mode Activated"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Step 1: Assess current system state
+    local current_state
+    current_state=$(assess_disaster_recovery_state)
+    milou_log "INFO" "💀 System state: $current_state"
+    
+    # Step 2: Find best backup for recovery
+    local recovery_backup=""
+    case "$backup_source" in
+        "auto")
+            recovery_backup=$(find_optimal_recovery_backup)
+            ;;
+        "file")
+            if [[ "$recovery_mode" == "interactive" ]]; then
+                recovery_backup=$(prompt_backup_selection)
+            else
+                milou_log "ERROR" "File mode requires interactive selection or specific file path"
+                return 1
+            fi
+            ;;
+        *)
+            # Assume it's a file path
+            if [[ -f "$backup_source" ]]; then
+                recovery_backup="$backup_source"
+            else
+                milou_log "ERROR" "Backup file not found: $backup_source"
+                return 1
+            fi
+            ;;
+    esac
+    
+    if [[ -z "$recovery_backup" ]]; then
+        milou_log "ERROR" "❌ No suitable backup found for disaster recovery"
+        return 1
+    fi
+    
+    milou_log "INFO" "🎯 Selected backup: $(basename "$recovery_backup")"
+    
+    # Step 3: Validate backup before recovery
+    if ! validate_backup_integrity "$recovery_backup"; then
+        milou_log "ERROR" "❌ Backup validation failed - cannot proceed with recovery"
+        return 1
+    fi
+    
+    # Step 4: Create emergency backup of current state (if possible)
+    create_emergency_state_backup "$current_state"
+    
+    # Step 5: Execute recovery based on mode
+    case "$recovery_mode" in
+        "interactive")
+            interactive_disaster_recovery "$recovery_backup" "$target_services"
+            ;;
+        "auto")
+            automated_disaster_recovery "$recovery_backup" "$target_services"
+            ;;
+        "minimal")
+            minimal_disaster_recovery "$recovery_backup" "$target_services"
+            ;;
+        *)
+            milou_log "ERROR" "Unknown recovery mode: $recovery_mode"
+            return 1
+            ;;
+    esac
+    
+    local recovery_result=$?
+    
+    # Step 6: Post-recovery validation and reporting
+    if [[ $recovery_result -eq 0 ]]; then
+        post_recovery_validation "$recovery_backup"
+        generate_recovery_report "$recovery_backup" "$recovery_mode" "success"
+    else
+        generate_recovery_report "$recovery_backup" "$recovery_mode" "failed"
+    fi
+    
+    return $recovery_result
+}
+
+# Assess current system state for disaster recovery
+assess_disaster_recovery_state() {
+    local state="unknown"
+    
+    # Check if configuration exists
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        # Check if services are responsive
+        if command -v health_check_all >/dev/null 2>&1; then
+            if health_check_all "true" >/dev/null 2>&1; then
+                state="degraded"  # Has config and some services work
+            else
+                state="failed"    # Has config but services failed
+            fi
+        else
+            state="partial"       # Has config but can't check services
+        fi
+    else
+        state="corrupted"         # No configuration found
+    fi
+    
+    echo "$state"
+}
+
+# Find optimal backup for recovery
+find_optimal_recovery_backup() {
+    local backup_dir="./backups"
+    local optimal_backup=""
+    
+    # Look for recent full backups first
+    local backups=($(find "$backup_dir" -name "*.tar.gz" -type f -mtime -7 | sort -t'_' -k2 -r))
+    
+    for backup_file in "${backups[@]}"; do
+        if validate_backup_integrity "$backup_file" "silent"; then
+            optimal_backup="$backup_file"
+            break
+        fi
+    done
+    
+    if [[ -z "$optimal_backup" ]]; then
+        # Look for any valid backup if no recent ones found
+        for backup_file in "$backup_dir"/*.tar.gz; do
+            if [[ -f "$backup_file" ]] && validate_backup_integrity "$backup_file" "silent"; then
+                optimal_backup="$backup_file"
+                break
+            fi
+        done
+    fi
+    
+    echo "$optimal_backup"
+}
+
+# Interactive disaster recovery with user guidance
+interactive_disaster_recovery() {
+    local backup_file="$1"
+    local target_services="$2"
+    
+    milou_log "INFO" "🎮 Interactive Disaster Recovery Mode"
+    echo
+    
+    # Show backup information
+    display_backup_information "$backup_file"
+    echo
+    
+    # Confirm recovery
+    if ! confirm_disaster_recovery "$backup_file"; then
+        milou_log "INFO" "🛑 Disaster recovery cancelled by user"
+        return 1
+    fi
+    
+    # Step-by-step recovery with user confirmation
+    milou_log "STEP" "🔄 Starting recovery process..."
+    
+    # Stop existing services
+    if [[ "$target_services" == "all" ]] || [[ -z "$target_services" ]]; then
+        milou_log "INFO" "⛔ Stopping all services for full recovery..."
+        if command -v docker_execute >/dev/null 2>&1; then
+            docker_execute "down" "" "true" || true
+        fi
+    fi
+    
+    # Restore from backup
+    if milou_restore_from_backup "$backup_file" "full" "false"; then
+        milou_log "SUCCESS" "✅ Backup restoration completed"
+        
+        # Restart services
+        milou_log "INFO" "🚀 Restarting services..."
+        if command -v docker_execute >/dev/null 2>&1; then
+            if docker_execute "up" "-d" "true"; then
+                milou_log "SUCCESS" "✅ Services restarted successfully"
+                return 0
+            else
+                milou_log "ERROR" "❌ Failed to restart services after recovery"
+                return 1
+            fi
+        fi
+    else
+        milou_log "ERROR" "❌ Backup restoration failed"
+        return 1
+    fi
+}
+
+# Validate backup integrity before recovery
+validate_backup_integrity() {
+    local backup_file="$1"
+    local quiet_mode="${2:-false}"
+    
+    [[ "$quiet_mode" != "true" ]] && milou_log "INFO" "🔍 Validating backup integrity..."
+    
+    # Check if file exists and is readable
+    if [[ ! -f "$backup_file" ]] || [[ ! -r "$backup_file" ]]; then
+        [[ "$quiet_mode" != "true" ]] && milou_log "ERROR" "Backup file not accessible: $backup_file"
+        return 1
+    fi
+    
+    # Test archive integrity
+    if ! tar -tzf "$backup_file" >/dev/null 2>&1; then
+        [[ "$quiet_mode" != "true" ]] && milou_log "ERROR" "Backup archive is corrupted"
+        return 1
+    fi
+    
+    # Check for required components in backup
+    local temp_check="/tmp/backup_validation_$$"
+    mkdir -p "$temp_check"
+    
+    if tar -xzf "$backup_file" -C "$temp_check" --wildcards "*/manifest.json" 2>/dev/null; then
+        local manifest_file
+        manifest_file=$(find "$temp_check" -name "manifest.json" -type f | head -1)
+        
+        if [[ -f "$manifest_file" ]]; then
+            [[ "$quiet_mode" != "true" ]] && milou_log "DEBUG" "✅ Backup manifest found and validated"
+            rm -rf "$temp_check"
+            return 0
+        fi
+    fi
+    
+    rm -rf "$temp_check"
+    [[ "$quiet_mode" != "true" ]] && milou_log "WARN" "⚠️ Backup validation incomplete - no manifest found"
+    return 0  # Allow recovery even without manifest
+}
+
+# Display backup information for user
+display_backup_information() {
+    local backup_file="$1"
+    
+    echo "📦 Backup Information"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "   File: $(basename "$backup_file")"
+    echo "   Size: $(du -h "$backup_file" 2>/dev/null | cut -f1 || echo "Unknown")"
+    echo "   Date: $(date -r "$backup_file" 2>/dev/null || echo "Unknown")"
+    echo "   Path: $backup_file"
+    
+    # Try to extract backup metadata
+    local temp_info="/tmp/backup_info_$$"
+    mkdir -p "$temp_info"
+    
+    if tar -xzf "$backup_file" -C "$temp_info" --wildcards "*/manifest.json" 2>/dev/null; then
+        local manifest_file
+        manifest_file=$(find "$temp_info" -name "manifest.json" -type f | head -1)
+        
+        if [[ -f "$manifest_file" ]]; then
+            echo "   Type: $(grep '"backup_type"' "$manifest_file" 2>/dev/null | cut -d'"' -f4 || echo "Unknown")"
+            echo "   Version: $(grep '"milou_version"' "$manifest_file" 2>/dev/null | cut -d'"' -f4 || echo "Unknown")"
+        fi
+    fi
+    
+    rm -rf "$temp_info"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# Confirm disaster recovery with user
+confirm_disaster_recovery() {
+    local backup_file="$1"
+    
+    echo
+    echo "⚠️  WARNING: This will replace your current system with the backup!"
+    echo "   All current data and configuration will be overwritten."
+    echo "   This action cannot be undone."
+    echo
+    read -p "Are you sure you want to proceed with disaster recovery? (type 'YES' to confirm): " confirmation
+    
+    if [[ "$confirmation" == "YES" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Create emergency backup of current state
+create_emergency_state_backup() {
+    local current_state="$1"
+    
+    milou_log "INFO" "📦 Creating emergency state backup..."
+    
+    # Only create backup if system has some recoverable state
+    if [[ "$current_state" != "corrupted" ]]; then
+        local emergency_backup_name="emergency_state_$(date +%Y%m%d_%H%M%S)"
+        
+        if milou_backup_create "config" "./backups" "$emergency_backup_name" >/dev/null 2>&1; then
+            milou_log "SUCCESS" "✅ Emergency state backup created"
+        else
+            milou_log "WARN" "⚠️ Could not create emergency state backup"
+        fi
+    else
+        milou_log "WARN" "⚠️ System state too corrupted for emergency backup"
+    fi
+}
+
+# Automated disaster recovery (non-interactive)
+automated_disaster_recovery() {
+    local backup_file="$1"
+    local target_services="$2"
+    
+    milou_log "INFO" "🤖 Automated Disaster Recovery Mode"
+    
+    # Stop services
+    if command -v docker_execute >/dev/null 2>&1; then
+        docker_execute "down" "" "true" || true
+    fi
+    
+    # Restore from backup
+    if milou_restore_from_backup "$backup_file" "full" "false"; then
+        milou_log "SUCCESS" "✅ Automated restoration completed"
+        
+        # Restart services
+        if command -v docker_execute >/dev/null 2>&1; then
+            if docker_execute "up" "-d" "true"; then
+                milou_log "SUCCESS" "✅ Services restarted automatically"
+                return 0
+            fi
+        fi
+    fi
+    
+    milou_log "ERROR" "❌ Automated disaster recovery failed"
+    return 1
+}
+
+# Minimal disaster recovery (config only)
+minimal_disaster_recovery() {
+    local backup_file="$1"
+    local target_services="$2"
+    
+    milou_log "INFO" "⚙️ Minimal Disaster Recovery Mode"
+    
+    # Only restore configuration, not data
+    if milou_restore_from_backup "$backup_file" "config" "false"; then
+        milou_log "SUCCESS" "✅ Minimal recovery completed (configuration only)"
+        return 0
+    else
+        milou_log "ERROR" "❌ Minimal disaster recovery failed"
+        return 1
+    fi
+}
+
+# Post-recovery validation
+post_recovery_validation() {
+    local backup_file="$1"
+    
+    milou_log "INFO" "🔍 Post-recovery validation..."
+    
+    # Check configuration exists
+    if [[ ! -f "${SCRIPT_DIR}/.env" ]]; then
+        milou_log "ERROR" "❌ Configuration file missing after recovery"
+        return 1
+    fi
+    
+    # Check service health if possible
+    if command -v health_check_all >/dev/null 2>&1; then
+        # Give services time to start
+        sleep 10
+        
+        if health_check_all "true"; then
+            milou_log "SUCCESS" "✅ Post-recovery health check passed"
+        else
+            milou_log "WARN" "⚠️ Some services may need manual attention"
+        fi
+    fi
+    
+    milou_log "SUCCESS" "✅ Post-recovery validation completed"
+    return 0
+}
+
+# Generate recovery report
+generate_recovery_report() {
+    local backup_file="$1"
+    local recovery_mode="$2"
+    local status="$3"
+    
+    local report_file="./logs/disaster_recovery_$(date +%Y%m%d_%H%M%S).log"
+    mkdir -p "$(dirname "$report_file")"
+    
+    cat > "$report_file" << EOF
+# Milou CLI Disaster Recovery Report
+# Generated: $(date -Iseconds)
+
+## Recovery Details
+- Backup File: $(basename "$backup_file")
+- Recovery Mode: $recovery_mode
+- Status: $status
+- Timestamp: $(date)
+
+## System Information
+- Hostname: $(hostname)
+- OS: $(uname -s)
+- Architecture: $(uname -m)
+- Milou Version: ${MILOU_VERSION:-unknown}
+
+## Recovery Summary
+$(if [[ "$status" == "success" ]]; then
+    echo "✅ Disaster recovery completed successfully"
+    echo "✅ System restored from backup: $(basename "$backup_file")"
+    echo "✅ Services should be operational"
+else
+    echo "❌ Disaster recovery failed"
+    echo "❌ Manual intervention may be required"
+    echo "❌ Check logs for detailed error information"
+fi)
+
+## Next Steps
+$(if [[ "$status" == "success" ]]; then
+    echo "1. Verify all services are running: ./milou.sh status"
+    echo "2. Test system functionality"
+    echo "3. Monitor system logs for any issues"
+else
+    echo "1. Review error logs for failure details"
+    echo "2. Attempt manual recovery if needed"
+    echo "3. Contact support if issues persist"
+fi)
+
+## Generated by Milou CLI v${MILOU_CLI_VERSION:-unknown}
+EOF
+    
+    milou_log "INFO" "📋 Recovery report generated: $report_file"
+}
+
+# Prompt user to select backup for recovery
+prompt_backup_selection() {
+    local backup_dir="./backups"
+    
+    echo "📦 Available Backups for Recovery"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local -a backup_files=()
+    local counter=1
+    
+    for backup_file in "$backup_dir"/*.tar.gz; do
+        if [[ -f "$backup_file" ]]; then
+            backup_files+=("$backup_file")
+            local size
+            size=$(du -h "$backup_file" 2>/dev/null | cut -f1 || echo "Unknown")
+            local date
+            date=$(date -r "$backup_file" 2>/dev/null || echo "Unknown")
+            
+            echo "   $counter. $(basename "$backup_file") ($size, $date)"
+            ((counter++))
+        fi
+    done
+    
+    if [[ ${#backup_files[@]} -eq 0 ]]; then
+        echo "   No backups found in $backup_dir"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        return 1
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    
+    local selection
+    while true; do
+        read -p "Select backup number (1-${#backup_files[@]}) or 'q' to quit: " selection
+        
+        if [[ "$selection" == "q" ]]; then
+            return 1
+        elif [[ "$selection" =~ ^[0-9]+$ ]] && [[ $selection -ge 1 ]] && [[ $selection -le ${#backup_files[@]} ]]; then
+            echo "${backup_files[$((selection-1))]}"
+            return 0
+        else
+            echo "Invalid selection. Please enter a number between 1 and ${#backup_files[@]}, or 'q' to quit."
+        fi
+    done
+}
+
+# =============================================================================
 # Command Handler Functions (from commands/backup.sh)
 # =============================================================================
 
@@ -782,6 +1521,12 @@ export -f milou_backup_create milou_backup_list
 
 # Core restore functions
 export -f milou_restore_from_backup
+
+# WEEK 4: Enhanced backup system exports
+export -f automated_backup_system           # Automated backup scheduling
+export -f incremental_backup_create         # Incremental backups
+export -f validate_backup_integrity         # Backup validation
+export -f disaster_recovery_restore         # One-click disaster recovery
 
 # Command handlers
 export -f handle_backup handle_restore handle_list_backups

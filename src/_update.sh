@@ -817,20 +817,549 @@ handle_rollback() {
 }
 
 # =============================================================================
+# WEEK 4: SMART UPDATE SYSTEM ENHANCEMENTS
+# =============================================================================
+
+# Smart update detection with semver support and change impact analysis
+smart_update_detection() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-}"
+    local github_token="${3:-}"
+    local check_only="${4:-false}"
+    
+    milou_log "INFO" "🧠 Smart update detection analysis..."
+    
+    # Initialize results structure
+    local -A update_analysis=(
+        [needs_update]="false"
+        [version_available]="false"
+        [impact_level]="none"
+        [affected_services]=""
+        [requires_downtime]="false"
+        [rollback_complexity]="low"
+        [estimated_duration]="0"
+    )
+    
+    # Get current version and parse semver
+    local current_version="${MILOU_VERSION:-1.0.0}"
+    milou_log "DEBUG" "Current version: $current_version"
+    
+    # Determine target version if 'latest' requested
+    if [[ "$target_version" == "latest" ]]; then
+        target_version=$(detect_latest_version "$github_token")
+        if [[ $? -ne 0 ]] || [[ -z "$target_version" ]]; then
+            milou_log "WARN" "Could not determine latest version, using current"
+            target_version="$current_version"
+        fi
+    fi
+    
+    # Semantic version comparison
+    if compare_semver_versions "$current_version" "$target_version"; then
+        update_analysis[needs_update]="true"
+        update_analysis[version_available]="true"
+        milou_log "INFO" "📈 Update available: $current_version → $target_version"
+    else
+        milou_log "INFO" "✅ Already at requested version: $current_version"
+        if [[ "$check_only" == "true" ]]; then
+            return 1  # No update needed
+        fi
+    fi
+    
+    # Analyze update impact
+    analyze_update_impact "$current_version" "$target_version" "$specific_services" update_analysis
+    
+    # Store analysis results for use by other functions
+    export SMART_UPDATE_ANALYSIS
+    SMART_UPDATE_ANALYSIS=$(declare -p update_analysis)
+    
+    # Display analysis results
+    display_update_analysis update_analysis
+    
+    # Return whether update is needed
+    [[ "${update_analysis[needs_update]}" == "true" ]]
+}
+
+# Semantic version comparison with enhanced logic
+compare_semver_versions() {
+    local current="$1"
+    local target="$2"
+    
+    # Remove 'v' prefix if present
+    current="${current#v}"
+    target="${target#v}"
+    
+    # Split versions into parts (major.minor.patch)
+    IFS='.' read -ra current_parts <<< "$current"
+    IFS='.' read -ra target_parts <<< "$target"
+    
+    # Compare each part
+    for i in {0..2}; do
+        local current_part="${current_parts[$i]:-0}"
+        local target_part="${target_parts[$i]:-0}"
+        
+        # Remove non-numeric suffixes (e.g., "rc1", "beta2")
+        current_part="${current_part%%[^0-9]*}"
+        target_part="${target_part%%[^0-9]*}"
+        
+        if [[ $target_part -gt $current_part ]]; then
+            return 0  # Target is newer
+        elif [[ $target_part -lt $current_part ]]; then
+            return 1  # Current is newer
+        fi
+        # If equal, continue to next part
+    done
+    
+    return 1  # Versions are equal
+}
+
+# Detect latest available version from GitHub releases
+detect_latest_version() {
+    local github_token="${1:-}"
+    
+    milou_log "DEBUG" "Detecting latest version from GitHub..."
+    
+    local auth_header=""
+    if [[ -n "$github_token" ]]; then
+        auth_header="Authorization: token $github_token"
+    fi
+    
+    local latest_version
+    if command -v curl >/dev/null 2>&1; then
+        latest_version=$(curl -s \
+            ${auth_header:+-H "$auth_header"} \
+            "$RELEASE_API_URL/latest" | \
+            grep '"tag_name":' | \
+            head -n 1 | \
+            cut -d '"' -f 4)
+    elif command -v wget >/dev/null 2>&1; then
+        local auth_option=""
+        if [[ -n "$github_token" ]]; then
+            auth_option="--header=\"Authorization: token $github_token\""
+        fi
+        latest_version=$(eval "wget -qO- $auth_option '$RELEASE_API_URL/latest'" | \
+            grep '"tag_name":' | \
+            head -n 1 | \
+            cut -d '"' -f 4)
+    else
+        milou_log "ERROR" "Neither curl nor wget available for version detection"
+        return 1
+    fi
+    
+    if [[ -n "$latest_version" ]]; then
+        echo "$latest_version"
+        return 0
+    else
+        milou_log "ERROR" "Failed to detect latest version"
+        return 1
+    fi
+}
+
+# Analyze update impact and complexity
+analyze_update_impact() {
+    local current_version="$1"
+    local target_version="$2"
+    local specific_services="$3"
+    local -n analysis_ref="$4"
+    
+    milou_log "DEBUG" "Analyzing update impact..."
+    
+    # Parse version differences to determine impact level
+    local version_diff_major version_diff_minor version_diff_patch
+    get_version_differences "$current_version" "$target_version" version_diff_major version_diff_minor version_diff_patch
+    
+    # Determine impact level based on version differences
+    if [[ $version_diff_major -gt 0 ]]; then
+        analysis_ref[impact_level]="high"
+        analysis_ref[requires_downtime]="true"
+        analysis_ref[rollback_complexity]="high"
+        analysis_ref[estimated_duration]="15-30"
+    elif [[ $version_diff_minor -gt 0 ]]; then
+        analysis_ref[impact_level]="medium"
+        analysis_ref[requires_downtime]="true"
+        analysis_ref[rollback_complexity]="medium"
+        analysis_ref[estimated_duration]="10-20"
+    elif [[ $version_diff_patch -gt 0 ]]; then
+        analysis_ref[impact_level]="low"
+        analysis_ref[requires_downtime]="false"
+        analysis_ref[rollback_complexity]="low"
+        analysis_ref[estimated_duration]="5-10"
+    else
+        analysis_ref[impact_level]="none"
+        analysis_ref[estimated_duration]="0"
+    fi
+    
+    # Determine affected services
+    local -a services_to_update=()
+    if [[ -n "$specific_services" ]]; then
+        IFS=',' read -ra services_to_update <<< "$specific_services"
+    else
+        services_to_update=("${DEFAULT_SERVICES[@]}")
+    fi
+    analysis_ref[affected_services]="${services_to_update[*]}"
+    
+    # Adjust estimates based on service count
+    local service_count=${#services_to_update[@]}
+    if [[ $service_count -gt 3 ]]; then
+        # Increase duration estimate for multiple services
+        local current_duration="${analysis_ref[estimated_duration]}"
+        analysis_ref[estimated_duration]="${current_duration} (full system)"
+    fi
+}
+
+# Get version differences for analysis
+get_version_differences() {
+    local current="$1"
+    local target="$2"
+    local -n major_ref="$3"
+    local -n minor_ref="$4"
+    local -n patch_ref="$5"
+    
+    # Remove 'v' prefix if present
+    current="${current#v}"
+    target="${target#v}"
+    
+    # Split versions into parts
+    IFS='.' read -ra current_parts <<< "$current"
+    IFS='.' read -ra target_parts <<< "$target"
+    
+    # Calculate differences
+    major_ref=$((${target_parts[0]:-0} - ${current_parts[0]:-0}))
+    minor_ref=$((${target_parts[1]:-0} - ${current_parts[1]:-0}))
+    patch_ref=$((${target_parts[2]:-0} - ${current_parts[2]:-0}))
+    
+    # Ensure non-negative values
+    major_ref=$((major_ref > 0 ? major_ref : 0))
+    minor_ref=$((minor_ref > 0 ? minor_ref : 0))
+    patch_ref=$((patch_ref > 0 ? patch_ref : 0))
+}
+
+# Display update analysis results
+display_update_analysis() {
+    local -n analysis_ref="$1"
+    
+    echo
+    milou_log "INFO" "📊 Update Impact Analysis"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Impact level with color coding
+    local impact_color=""
+    case "${analysis_ref[impact_level]}" in
+        "high") impact_color="\033[0;31m" ;;    # Red
+        "medium") impact_color="\033[1;33m" ;;  # Yellow
+        "low") impact_color="\033[0;32m" ;;     # Green
+        "none") impact_color="\033[2m" ;;       # Dim
+    esac
+    
+    echo -e "   ${BOLD}Impact Level:${NC} ${impact_color}${analysis_ref[impact_level]^^}${NC}"
+    echo -e "   ${BOLD}Affected Services:${NC} ${analysis_ref[affected_services]}"
+    echo -e "   ${BOLD}Requires Downtime:${NC} ${analysis_ref[requires_downtime]}"
+    echo -e "   ${BOLD}Rollback Complexity:${NC} ${analysis_ref[rollback_complexity]}"
+    echo -e "   ${BOLD}Estimated Duration:${NC} ${analysis_ref[estimated_duration]} minutes"
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# Enhanced update process with smart detection integration
+enhanced_update_process() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-}"
+    local force_update="${3:-false}"
+    local backup_before_update="${4:-true}"
+    local github_token="${5:-}"
+    
+    milou_log "STEP" "🚀 Enhanced Smart Update Process"
+    
+    # Step 1: Smart detection and analysis
+    if [[ "$force_update" != "true" ]]; then
+        if ! smart_update_detection "$target_version" "$specific_services" "$github_token" "true"; then
+            milou_log "INFO" "✅ No update needed based on smart detection"
+            return 0
+        fi
+    else
+        milou_log "INFO" "🔄 Force update requested - skipping smart detection"
+    fi
+    
+    # Step 2: Pre-update preparation with enhanced backup
+    if [[ "$backup_before_update" == "true" ]]; then
+        enhanced_pre_update_backup "$target_version" "$specific_services"
+    fi
+    
+    # Step 3: Execute update with monitoring
+    execute_monitored_update "$target_version" "$specific_services" "$github_token"
+    local update_result=$?
+    
+    # Step 4: Post-update validation
+    if [[ $update_result -eq 0 ]]; then
+        post_update_validation "$target_version" "$specific_services"
+        update_result=$?
+    fi
+    
+    # Step 5: Handle results
+    if [[ $update_result -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ Enhanced update process completed successfully"
+        cleanup_update_artifacts
+    else
+        milou_log "ERROR" "❌ Update process failed - initiating rollback"
+        emergency_rollback "$target_version" "$specific_services"
+    fi
+    
+    return $update_result
+}
+
+# Enhanced pre-update backup with metadata
+enhanced_pre_update_backup() {
+    local target_version="$1"
+    local specific_services="$2"
+    
+    milou_log "INFO" "📦 Creating enhanced pre-update backup..."
+    
+    # Create backup with metadata
+    local backup_name="pre_update_$(date +%Y%m%d_%H%M%S)_${MILOU_VERSION:-unknown}_to_${target_version}"
+    local backup_metadata="/tmp/milou_update_metadata_$(date +%s).json"
+    
+    # Generate backup metadata
+    cat > "$backup_metadata" << EOF
+{
+    "backup_type": "pre_update",
+    "timestamp": "$(date -Iseconds)",
+    "current_version": "${MILOU_VERSION:-unknown}",
+    "target_version": "$target_version",
+    "affected_services": "$specific_services",
+    "milou_cli_version": "${MILOU_CLI_VERSION:-unknown}",
+    "system_info": {
+        "os": "$(uname -s)",
+        "arch": "$(uname -m)",
+        "hostname": "$(hostname)"
+    }
+}
+EOF
+    
+    # Perform backup with metadata
+    if command -v milou_backup_create >/dev/null 2>&1; then
+        local backup_path
+        if backup_path=$(milou_backup_create "full" "./backups" "$backup_name"); then
+            # Add metadata to backup
+            local backup_dir="${backup_path%.*}"
+            mkdir -p "/tmp/milou_backup_extract"
+            tar -xzf "$backup_path" -C "/tmp/milou_backup_extract"
+            cp "$backup_metadata" "/tmp/milou_backup_extract/$backup_name/update_metadata.json"
+            tar -czf "$backup_path" -C "/tmp/milou_backup_extract" "$backup_name"
+            rm -rf "/tmp/milou_backup_extract"
+            
+            milou_log "SUCCESS" "✅ Enhanced backup created with metadata: $backup_path"
+            export LAST_BACKUP_PATH="$backup_path"
+        else
+            milou_log "ERROR" "❌ Failed to create pre-update backup"
+            return 1
+        fi
+    else
+        milou_log "WARN" "⚠️ Backup function not available"
+    fi
+    
+    rm -f "$backup_metadata"
+    return 0
+}
+
+# Emergency rollback with smart recovery
+emergency_rollback() {
+    local failed_target_version="$1"
+    local failed_services="$2"
+    
+    milou_log "WARN" "🚨 Emergency rollback initiated"
+    
+    # Use the last backup if available
+    if [[ -n "${LAST_BACKUP_PATH:-}" && -f "$LAST_BACKUP_PATH" ]]; then
+        milou_log "INFO" "🔄 Rolling back using backup: $LAST_BACKUP_PATH"
+        
+        if command -v milou_restore_from_backup >/dev/null 2>&1; then
+            if milou_restore_from_backup "$LAST_BACKUP_PATH" "true"; then
+                milou_log "SUCCESS" "✅ Emergency rollback completed"
+                
+                # Verify rollback success
+                if verify_rollback_success; then
+                    milou_log "SUCCESS" "✅ Rollback verification passed"
+                    return 0
+                else
+                    milou_log "ERROR" "❌ Rollback verification failed"
+                    return 1
+                fi
+            else
+                milou_log "ERROR" "❌ Emergency rollback failed"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "❌ Restore function not available"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "❌ No backup available for emergency rollback"
+        milou_log "INFO" "💡 Manual intervention may be required"
+        return 1
+    fi
+}
+
+# Verify rollback success
+verify_rollback_success() {
+    milou_log "INFO" "🔍 Verifying rollback success..."
+    
+    # Check service health
+    if command -v health_check_all >/dev/null 2>&1; then
+        if health_check_all "true"; then
+            milou_log "DEBUG" "✅ Service health check passed"
+        else
+            milou_log "ERROR" "❌ Service health check failed after rollback"
+            return 1
+        fi
+    fi
+    
+    # Verify configuration integrity
+    if command -v config_validate >/dev/null 2>&1; then
+        if config_validate "${SCRIPT_DIR}/.env" "minimal" "true"; then
+            milou_log "DEBUG" "✅ Configuration validation passed"
+        else
+            milou_log "ERROR" "❌ Configuration validation failed after rollback"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Create pre-update backup with metadata
+create_pre_update_backup() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-all}"
+    local quiet="${3:-false}"
+    
+    milou_log "INFO" "📦 Creating pre-update backup..."
+    
+    # Use existing backup functionality if available
+    if command -v milou_backup_create >/dev/null 2>&1; then
+        local backup_name="pre_update_$(date +%Y%m%d_%H%M%S)"
+        local backup_path
+        
+        if backup_path=$(milou_backup_create "full" "./backups" "$backup_name" 2>/dev/null); then
+            milou_log "SUCCESS" "✅ Pre-update backup created: $backup_path"
+            export LAST_BACKUP_PATH="$backup_path"
+            return 0
+        else
+            milou_log "ERROR" "❌ Failed to create pre-update backup"
+            return 1
+        fi
+    else
+        milou_log "WARN" "⚠️ Backup function not available"
+        return 1
+    fi
+}
+
+# Execute update with monitoring and health checks
+execute_monitored_update() {
+    local target_version="$1"
+    local specific_services="$2"
+    local github_token="$3"
+    
+    milou_log "INFO" "🔄 Executing monitored update process..."
+    
+    # Use existing update function with enhanced monitoring
+    local start_time
+    start_time=$(date +%s)
+    
+    # Execute the actual update
+    if [[ -n "$specific_services" ]]; then
+        _milou_update_selective_services "$specific_services" "$target_version" "$github_token"
+    else
+        _milou_update_all_services "$target_version" "$github_token"
+    fi
+    
+    local update_result=$?
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    milou_log "INFO" "⏱️ Update duration: ${duration} seconds"
+    
+    return $update_result
+}
+
+# Post-update validation with comprehensive checks
+post_update_validation() {
+    local target_version="$1"
+    local specific_services="$2"
+    
+    milou_log "INFO" "🔍 Post-update validation..."
+    
+    # Wait for services to stabilize
+    sleep 5
+    
+    # Check service health
+    if command -v health_check_all >/dev/null 2>&1; then
+        if ! health_check_all "true"; then
+            milou_log "ERROR" "❌ Service health check failed after update"
+            return 1
+        fi
+    fi
+    
+    # Verify configuration integrity
+    if command -v config_validate >/dev/null 2>&1; then
+        if ! config_validate "${SCRIPT_DIR}/.env" "minimal" "true"; then
+            milou_log "ERROR" "❌ Configuration validation failed after update"
+            return 1
+        fi
+    fi
+    
+    # Check if services are responding
+    if command -v docker_execute >/dev/null 2>&1; then
+        local running_services
+        running_services=$(docker_execute "ps" "--format \"{{.Names}}\"" "true" 2>/dev/null | wc -l)
+        
+        if [[ $running_services -eq 0 ]]; then
+            milou_log "ERROR" "❌ No services running after update"
+            return 1
+        fi
+    fi
+    
+    milou_log "SUCCESS" "✅ Post-update validation passed"
+    return 0
+}
+
+# Clean up temporary update artifacts
+cleanup_update_artifacts() {
+    milou_log "DEBUG" "🧹 Cleaning up update artifacts..."
+    
+    # Remove temporary files
+    rm -f /tmp/milou_env_backup_* 2>/dev/null || true
+    rm -f /tmp/milou_pre_update_status_* 2>/dev/null || true
+    rm -f /tmp/milou_update_metadata_* 2>/dev/null || true
+    
+    # Clear update cache
+    unset SMART_UPDATE_ANALYSIS LAST_BACKUP_PATH
+    
+    milou_log "DEBUG" "✅ Update artifacts cleaned up"
+}
+
+# =============================================================================
 # CLEAN PUBLIC API - Export only essential functions
 # =============================================================================
 
-# System Update Functions (4 exports)
+# System Update Functions
 export -f milou_update_system           # Primary system update function
 export -f milou_update_rollback         # Rollback capability  
 export -f milou_update_check_status     # Status checking
 export -f milou_update_cli              # CLI self-update
 
-# CLI Self-Update Functions (2 exports)
+# CLI Self-Update Functions
 export -f milou_self_update_check       # Check for CLI updates
 export -f milou_self_update_perform     # Perform CLI update
 
-# Command Handlers (5 exports)
+# WEEK 4: Enhanced smart update functions
+export -f smart_update_detection        # Smart update detection
+export -f enhanced_update_process       # Enhanced update process
+export -f emergency_rollback            # Emergency rollback
+export -f compare_semver_versions       # Semantic version comparison
+export -f create_pre_update_backup      # Pre-update backup creation
+
+# Command Handlers
 export -f handle_update                 # System update handler
 export -f handle_update_cli             # CLI update handler
 export -f handle_check_cli_updates      # CLI update check

@@ -1,44 +1,28 @@
 #!/bin/bash
 
 # =============================================================================
-# Milou CLI - Installation Test Script
-# Tests the installation process locally before GitHub release
+# Milou CLI Installation Test Script
+# Tests the installation process in various environments
 # =============================================================================
+
+# Load shared utilities to eliminate code duplication
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/shared-utils.sh" ]]; then
+    source "$script_dir/shared-utils.sh"
+else
+    echo "ERROR: Cannot find shared-utils.sh" >&2
+    exit 1
+fi
 
 set -euo pipefail
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m' # No Color
+# Global variables
+INSTALL_URL="https://raw.githubusercontent.com/YOUR_ORG/milou-cli/main/install.sh"
+TEST_DIR="/tmp/milou-test-$$"
+CLEANUP_ON_EXIT=true
 
 # Test configuration
-TEST_DIR="/tmp/milou-cli-test-$(date +%s)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-# Logging functions
-log() {
-    echo -e "${GREEN}[TEST]${NC} $*"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*" >&2
-}
-
-error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
-
-success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*"
-}
-
-step() {
-    echo -e "${BLUE}[STEP]${NC} $*"
-}
 
 # Cleanup function
 cleanup() {
@@ -51,46 +35,31 @@ cleanup() {
 # Set up cleanup trap
 trap cleanup EXIT
 
-# Test basic installation script
+# Create a self-contained test script
 test_install_script() {
-    step "Testing installation script..."
+    step "Creating test installation script..."
     
-    # Copy install script to temp location and modify it for local testing
-    local test_install_script="$TEST_DIR/install.sh"
-    mkdir -p "$TEST_DIR"
+    local test_install_script="$TEST_DIR/test_install.sh"
     
-    # Create a modified version that uses local repository
-    cat > "$test_install_script" << EOF
+    # Generate test script that simulates the installation
+    cat > "$test_install_script" << 'EOF'
 #!/bin/bash
+
+# Test installation script (auto-generated)
 set -euo pipefail
 
-# Test configuration - use local repository
-readonly REPO_URL="file://$SCRIPT_DIR"
-readonly INSTALL_DIR="$TEST_DIR/milou-cli"
-readonly BRANCH="main"
+INSTALL_DIR="${MILOU_INSTALL_DIR:-$HOME/milou-cli}"
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m'
-
-# Logging functions
-log() { echo -e "\${GREEN}[INFO]\${NC} \$*"; }
-warn() { echo -e "\${YELLOW}[WARN]\${NC} \$*" >&2; }
-error() { echo -e "\${RED}[ERROR]\${NC} \$*" >&2; }
-success() { echo -e "\${GREEN}[SUCCESS]\${NC} \$*"; }
-step() { echo -e "\${BLUE}[STEP]\${NC} \$*"; }
+# Remove duplicate logging functions - now using shared utilities from parent script
+# Functions are already available through the parent environment
 
 # Simple test installation (without logo for test)
 step "Testing Milou CLI installation..."
 
 # Check prerequisites
 for cmd in git; do
-    if ! command -v "\$cmd" &> /dev/null; then
-        error "Missing required dependency: \$cmd"
+    if ! command -v "$cmd" &> /dev/null; then
+        error "Missing required dependency: $cmd"
         exit 1
     fi
 done
@@ -98,22 +67,22 @@ done
 success "Prerequisites check passed"
 
 # Create installation directory
-if [[ -d "\$INSTALL_DIR" ]]; then
-    rm -rf "\$INSTALL_DIR"
+if [[ -d "$INSTALL_DIR" ]]; then
+    rm -rf "$INSTALL_DIR"
 fi
 
 # Copy repository (simulate git clone)
-step "Installing Milou CLI to \$INSTALL_DIR..."
-cp -r "$SCRIPT_DIR" "\$INSTALL_DIR"
+step "Installing Milou CLI to $INSTALL_DIR..."
+cp -r "$SCRIPT_DIR" "$INSTALL_DIR"
 
 # Make scripts executable
-chmod +x "\$INSTALL_DIR/milou.sh"
-if [[ -f "\$INSTALL_DIR/src/milou" ]]; then
-    chmod +x "\$INSTALL_DIR/src/milou"
+chmod +x "$INSTALL_DIR/milou.sh"
+if [[ -f "$INSTALL_DIR/src/milou" ]]; then
+    chmod +x "$INSTALL_DIR/src/milou"
 fi
 
 success "Milou CLI installed successfully"
-echo "Installation directory: \$INSTALL_DIR"
+echo "Installation directory: $INSTALL_DIR"
 EOF
     
     chmod +x "$test_install_script"

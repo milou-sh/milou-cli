@@ -1,41 +1,25 @@
 #!/bin/bash
 
 # =============================================================================
-# Milou CLI - Release Preparation Script
-# Helps prepare the repository for GitHub release by updating URLs
+# Milou CLI Release Preparation Script
+# Helps prepare the CLI for distribution by updating URLs and organization
 # =============================================================================
 
-set -euo pipefail
+# Load shared utilities to eliminate code duplication
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/shared-utils.sh" ]]; then
+    source "$script_dir/shared-utils.sh"
+else
+    echo "ERROR: Cannot find shared-utils.sh in $script_dir" >&2
+    exit 1
+fi
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m' # No Color
+set -euo pipefail
 
 # Global variables
 GITHUB_ORG=""
 REPO_NAME="milou-cli"
 DRY_RUN=false
-
-# Logging functions
-log() {
-    echo -e "${GREEN}[INFO]${NC} $*"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*" >&2
-}
-
-error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
-
-success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $*"
-}
 
 # Show help
 show_help() {

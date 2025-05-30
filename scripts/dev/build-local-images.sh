@@ -1,5 +1,19 @@
 #!/bin/bash
 
+# =============================================================================
+# Milou CLI Local Image Build Script
+# Builds Docker images locally for development and testing
+# =============================================================================
+
+# Load shared utilities to eliminate code duplication
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$script_dir/shared-utils.sh" ]]; then
+    source "$script_dir/shared-utils.sh"
+else
+    echo "ERROR: Cannot find shared-utils.sh in $script_dir" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 # =============================================================================
@@ -12,31 +26,20 @@ set -euo pipefail
 declare -g FORCE_BUILD=false
 declare -g VERBOSE=false
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m' # No Color
+# Configuration
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly BUILD_DIR="/tmp/milou-build-$$"
 
-# Enhanced log function that uses milou_log if available
-# Enhanced log function that uses milou_log if available
-log() {
+# Build Docker images locally
+step "Building Milou Docker images locally..."
+
+# Enhanced log function that uses milou_log if available (fallback only)
+log_enhanced() {
     if command -v milou_log >/dev/null 2>&1; then
         milou_log "$@"
     else
-        # Fallback for standalone script execution
-        local level="$1"
-        shift
-        local message="$*"
-        case "$level" in
-            "ERROR") echo -e "${RED}[ERROR]${NC} $message" >&2 ;;
-            "WARN") echo -e "${YELLOW}[WARN]${NC} $message" >&2 ;;
-            "INFO") echo -e "${GREEN}[INFO]${NC} $message" ;;
-            "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-            "DEBUG") [[ "${VERBOSE:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $message" ;;
-            *) echo "[INFO] $message" ;;
-        esac
+        # Fallback for standalone script execution (shouldn't happen with shared-utils.sh)
+        log "$@"
     fi
 }
 

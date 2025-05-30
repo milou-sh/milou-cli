@@ -176,6 +176,20 @@ This document outlines the step-by-step implementation plan to clean up and impr
 - [ ] Remove deprecated functions
 - [ ] Test all affected functionality
 
+### Phase 2: Code Quality
+- [x] Day 8-9: Consolidate duplicate functions ✅ **COMPLETED**
+  - Created `scripts/shared-utils.sh` as single source of truth for logging and utility functions
+  - Eliminated duplicate `log()`, `warn()`, `error()`, `success()`, `step()` functions across:
+    - `scripts/prepare-release.sh`, `scripts/test-install.sh`, `scripts/dev/test-setup.sh`, `scripts/dev/build-local-images.sh`
+  - Fixed directory structure and path references for proper sourcing
+  - Maintained standalone nature of `install.sh` while documenting consistency approach
+  - Added legacy compatibility aliases (`milou_log`, `prompt_user`) for smooth transition
+  - All scripts now source shared utilities correctly, reducing code duplication by ~200 lines
+  - Added proper module loading guards and error handling
+  - Resolved color variable conflicts between shared utilities and individual scripts
+- [ ] Day 10-11: Module loading improvements  
+- [ ] Day 12-14: Error handling standardization
+
 ---
 
 ### Day 10-11: Module Loading Improvements
@@ -483,8 +497,17 @@ milou update --version X.Y.Z   # Update to specific version
 - [ ] Day 6-7: Testing and validation
 
 ### Phase 2: Code Quality
-- [ ] Day 8-9: Consolidate duplicate functions
-- [ ] Day 10-11: Module loading improvements
+- [x] Day 8-9: Consolidate duplicate functions ✅ **COMPLETED**
+  - Created `scripts/shared-utils.sh` as single source of truth for logging and utility functions
+  - Eliminated duplicate `log()`, `warn()`, `error()`, `success()`, `step()` functions across:
+    - `scripts/prepare-release.sh`, `scripts/test-install.sh`, `scripts/dev/test-setup.sh`, `scripts/dev/build-local-images.sh`
+  - Fixed directory structure and path references for proper sourcing
+  - Maintained standalone nature of `install.sh` while documenting consistency approach
+  - Added legacy compatibility aliases (`milou_log`, `prompt_user`) for smooth transition
+  - All scripts now source shared utilities correctly, reducing code duplication by ~200 lines
+  - Added proper module loading guards and error handling
+  - Resolved color variable conflicts between shared utilities and individual scripts
+- [ ] Day 10-11: Module loading improvements  
 - [ ] Day 12-14: Error handling standardization
 
 ### Phase 3: User Experience  

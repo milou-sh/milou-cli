@@ -6,6 +6,24 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 # =============================================================================
 
+# =============================================================================
+# STANDALONE LOGGING AND UTILITIES
+# Note: install.sh must be standalone and cannot source external files
+# Since it's downloaded via curl and executed immediately.
+# For consistency, these functions mirror shared-utils.sh functionality.
+# =============================================================================
+
+# Color definitions (matches shared-utils.sh)
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly PURPLE='\033[0;35m'
+readonly BOLD='\033[1m'
+readonly DIM='\033[2m'
+readonly NC='\033[0m' # No Color
+
 set -euo pipefail
 
 # Determine default installation directory
@@ -31,17 +49,6 @@ readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main
 INSTALL_DIR="${MILOU_INSTALL_DIR:-$(get_default_install_dir)}"
 readonly BRANCH="${MILOU_BRANCH:-main}"
 
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly PURPLE='\033[0;35m'
-readonly CYAN='\033[0;36m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m' # No Color
-readonly DIM='\033[2m'
-
 # Global variables
 QUIET=false
 FORCE=false
@@ -56,7 +63,7 @@ check_interactive_mode() {
     fi
 }
 
-# Interactive prompt function
+# Interactive prompt function (matches shared-utils.sh prompt_basic)
 prompt_user() {
     local prompt="$1"
     local default="${2:-}"

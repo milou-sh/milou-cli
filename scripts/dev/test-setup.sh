@@ -1,5 +1,19 @@
 #!/bin/bash
 
+# =============================================================================
+# Milou CLI Development Test Script
+# Tests setup functionality in development environment
+# =============================================================================
+
+# Load shared utilities to eliminate code duplication
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$script_dir/shared-utils.sh" ]]; then
+    source "$script_dir/shared-utils.sh"
+else
+    echo "ERROR: Cannot find shared-utils.sh in $script_dir" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 # =============================================================================
@@ -8,35 +22,22 @@ set -euo pipefail
 # Location: scripts/dev/test-setup.sh
 # =============================================================================
 
-# Get script directory and project root
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Development test configuration
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly TEST_DIR="/tmp/milou-dev-test-$$"
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m'
+# Test setup commands and functionality
+echo "Development test script running..."
+log "Testing Milou CLI setup functionality"
 
+# Remove duplicate logging function definitions since they're now provided by shared-utils.sh
 # Enhanced log function that uses milou_log if available
-# Enhanced log function that uses milou_log if available
-log() {
+log_enhanced() {
     if command -v milou_log >/dev/null 2>&1; then
         milou_log "$@"
     else
-        # Fallback for standalone script execution
-        local level="$1"
-        shift
-        local message="$*"
-        case "$level" in
-            "ERROR") echo -e "${RED}[ERROR]${NC} $message" >&2 ;;
-            "WARN") echo -e "${YELLOW}[WARN]${NC} $message" >&2 ;;
-            "INFO") echo -e "${GREEN}[INFO]${NC} $message" ;;
-            "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $message" ;;
-            "DEBUG") [[ "${VERBOSE:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $message" ;;
-            *) echo "[INFO] $message" ;;
-        esac
+        # Fallback for standalone script execution (shouldn't happen with shared-utils.sh)
+        log "$@"
     fi
 }
 

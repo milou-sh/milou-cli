@@ -52,6 +52,35 @@ declare -g REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 # DOCKER INITIALIZATION AND SETUP
 # =============================================================================
 
+# GitHub Container Registry authentication
+docker_login_github() {
+    local github_token="${1:-}"
+    local quiet="${2:-false}"
+    
+    # Use provided token or environment variable
+    if [[ -z "$github_token" ]]; then
+        github_token="${GITHUB_TOKEN:-}"
+    fi
+    
+    if [[ -z "$github_token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token provided for authentication"
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Authenticating with GitHub Container Registry..."
+    
+    # Login to GitHub Container Registry
+    if echo "$github_token" | docker login ghcr.io -u oauth2 --password-stdin >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to authenticate with GitHub Container Registry"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your GitHub token has 'read:packages' scope"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Token should be from: https://github.com/settings/tokens"
+        return 1
+    fi
+}
+
 # Initialize Docker environment - SINGLE AUTHORITATIVE IMPLEMENTATION
 docker_init() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
@@ -79,6 +108,25 @@ docker_init() {
     if [[ ! -f "$DOCKER_COMPOSE_FILE" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Compose file not found: $DOCKER_COMPOSE_FILE"
         return 1
+    fi
+    
+    # Load environment to check for GitHub token
+    local github_token="${GITHUB_TOKEN:-}"
+    if [[ -f "$DOCKER_ENV_FILE" ]]; then
+        # Source the environment file to get GITHUB_TOKEN
+        source "$DOCKER_ENV_FILE"
+        github_token="${GITHUB_TOKEN:-$github_token}"
+    fi
+    
+    # Try to authenticate with GitHub Container Registry if we have a token
+    if [[ -n "$github_token" ]]; then
+        if docker_login_github "$github_token" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
+        fi
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token found - public images only"
     fi
     
     # Test Docker Compose configuration
@@ -285,6 +333,27 @@ service_start_with_validation() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
     
+    # Ensure Docker environment is initialized (which includes authentication)
+    if ! docker_init "" "" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker initialization failed"
+        return 1
+    fi
+    
+    # Validate that we can access private images if needed
+    local github_token="${GITHUB_TOKEN:-}"
+    if [[ -f "$DOCKER_ENV_FILE" ]]; then
+        source "$DOCKER_ENV_FILE"
+        github_token="${GITHUB_TOKEN:-$github_token}"
+    fi
+    
+    # If we have a token, ensure authentication is working
+    if [[ -n "$github_token" ]]; then
+        if ! docker_login_github "$github_token" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "GitHub authentication failed - cannot access private images"
+            return 1
+        fi
+    fi
+    
     # Start the service(s)
     if ! docker_execute "start" "$service" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start ${service:-services}"
@@ -476,6 +545,8 @@ service_update_zero_downtime() {
 # =============================================================================
 
 # Export new consolidated functions
+export -f docker_init
+export -f docker_login_github
 export -f docker_execute
 export -f milou_docker_compose
 export -f health_check_service

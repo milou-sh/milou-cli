@@ -359,58 +359,39 @@ setup_analyze_system() {
     
     milou_log "INFO" "✓ Analyzing system state..."
     
-    # Detect installation type first
-    local installation_type
-    installation_type=$(setup_detect_installation_type)
-    export MILOU_INSTALLATION_TYPE="$installation_type"
+    # Check if this is a fresh server installation
+    if setup_detect_fresh_server; then
+        SETUP_IS_FRESH_SERVER="true"
+        milou_log "INFO" "✓ Fresh server detected"
+    else
+        milou_log "INFO" "✓ Existing system detected"
+    fi
     
-    # Report installation type with user-friendly messaging
-    case "$installation_type" in
-        "fresh")
-            milou_log "INFO" "🆕 FRESH INSTALLATION detected"
-            milou_log "INFO" "   → This will be a brand new Milou setup"
-            SETUP_IS_FRESH_SERVER="true"
-            ;;
-        "update")
-            milou_log "INFO" "🔄 UPDATE MODE detected"
-            milou_log "INFO" "   → Existing Milou system is running - this will update it safely"
-            ;;
-        "reinstall")
-            milou_log "INFO" "🔧 REINSTALL MODE detected" 
-            milou_log "INFO" "   → Existing configuration found, will restart stopped services"
-            ;;
-        "broken")
-            milou_log "WARN" "⚠️  PARTIAL INSTALLATION detected"
-            milou_log "WARN" "   → Incomplete setup found - will repair and complete installation"
-            ;;
-    esac
-    
-    # Early credential preservation decision for existing installations
-    if [[ "$installation_type" != "fresh" ]]; then
-        setup_handle_credential_preservation_decision "$installation_type"
+    # Check for existing Milou installation
+    local has_existing_installation=false
+    if setup_check_existing_installation; then
+        has_existing_installation=true
+        milou_log "INFO" "✓ Found existing Milou installation"
     fi
     
     # Determine dependency needs
     if ! setup_check_dependencies_status; then
         SETUP_NEEDS_DEPS="true"
         milou_log "INFO" "✓ Dependencies installation required"
-    else
-        milou_log "INFO" "✓ All critical dependencies are satisfied"
     fi
     
     # Determine user management needs
     if ! setup_check_user_status; then
         SETUP_NEEDS_USER="true"
         milou_log "INFO" "✓ User management required"
-    else
-        milou_log "INFO" "✓ User configuration is already optimal"
     fi
     
     # Summary
     milou_log "SUCCESS" "✓ System Analysis Complete:"
-    milou_log "INFO" "  ✓ Installation Type: $installation_type"
+    milou_log "INFO" "  ✓ Fresh Server: $SETUP_IS_FRESH_SERVER"
     milou_log "INFO" "  ✓ Needs Dependencies: $SETUP_NEEDS_DEPS"
     milou_log "INFO" "  ✓ Needs User Setup: $SETUP_NEEDS_USER"
+    milou_log "INFO" "  ✓ Existing Installation: $has_existing_installation"
     
     return 0
 }
@@ -518,127 +499,55 @@ setup_check_existing_installation() {
 
 # Check dependency installation status
 setup_check_dependencies_status() {
-    local critical_missing=()
-    local optional_missing=()
-    local docker_accessible=false
+    local missing_deps=()
     
-    milou_log "DEBUG" "Checking dependency installation status..."
-    
-    # Check Docker installation and accessibility
+    # Check Docker
     if ! command -v docker >/dev/null 2>&1; then
-        critical_missing+=("docker")
-        milou_log "DEBUG" "Docker command not found"
-    else
-        milou_log "DEBUG" "Docker command found, checking accessibility..."
-        
-        # Test Docker accessibility with better error handling
-        if docker version >/dev/null 2>&1; then
-            docker_accessible=true
-            milou_log "DEBUG" "Docker is accessible and working"
-        else
-            # Check if it's a permission issue
-            if docker version 2>&1 | grep -q "permission denied\|Cannot connect to the Docker daemon"; then
-                milou_log "DEBUG" "Docker installed but user lacks permissions"
-                # Don't add to critical_missing if Docker is installed but needs permissions
-                # This will be handled by user management
-            else
-                critical_missing+=("docker-service")
-                milou_log "DEBUG" "Docker installed but service not working"
-            fi
-        fi
+        missing_deps+=("docker")
+    elif ! docker version >/dev/null 2>&1; then
+        missing_deps+=("docker-service")
     fi
     
-    # Check Docker Compose (only if Docker is accessible)
-    if [[ "$docker_accessible" == "true" ]]; then
-        if ! docker compose version >/dev/null 2>&1; then
-            # Try alternative compose command
-            if ! docker-compose version >/dev/null 2>&1; then
-                critical_missing+=("docker-compose")
-                milou_log "DEBUG" "Docker Compose not available"
-            else
-                milou_log "DEBUG" "Docker Compose available (legacy command)"
-            fi
-        else
-            milou_log "DEBUG" "Docker Compose available (plugin)"
-        fi
-    else
-        milou_log "DEBUG" "Skipping Docker Compose check (Docker not accessible)"
+    # Check Docker Compose
+    if ! docker compose version >/dev/null 2>&1; then
+        missing_deps+=("docker-compose")
     fi
     
-    # Check optional tools (these don't prevent setup from continuing)
+    # Check basic tools
     for tool in curl wget jq openssl; do
         if ! command -v "$tool" >/dev/null 2>&1; then
-            optional_missing+=("$tool")
-            milou_log "DEBUG" "Optional tool missing: $tool"
+            missing_deps+=("$tool")
         fi
     done
     
-    # Report findings
-    if [[ ${#critical_missing[@]} -eq 0 ]]; then
-        milou_log "DEBUG" "All critical dependencies are satisfied"
-        if [[ ${#optional_missing[@]} -gt 0 ]]; then
-            milou_log "DEBUG" "Optional tools missing: ${optional_missing[*]} (will be installed if needed)"
-        fi
+    if [[ ${#missing_deps[@]} -eq 0 ]]; then
+        milou_log "DEBUG" "All dependencies are installed"
         return 0
     else
-        milou_log "DEBUG" "Critical dependencies missing: ${critical_missing[*]}"
-        if [[ ${#optional_missing[@]} -gt 0 ]]; then
-            milou_log "DEBUG" "Optional tools also missing: ${optional_missing[*]}"
-        fi
+        milou_log "DEBUG" "Missing dependencies: ${missing_deps[*]}"
         return 1
     fi
 }
 
 # Check user management status
 setup_check_user_status() {
-    milou_log "DEBUG" "Checking user management status..."
-    
     # Check if running as root and if milou user exists
     if [[ $EUID -eq 0 ]]; then
         if id milou >/dev/null 2>&1; then
             milou_log "DEBUG" "Milou user already exists"
-            
-            # Verify milou user has Docker access
-            if groups milou 2>/dev/null | grep -q docker; then
-                milou_log "DEBUG" "Milou user is in docker group"
-                return 0
-            else
-                milou_log "DEBUG" "Milou user exists but not in docker group"
-                return 1
-            fi
+            return 0
         else
             milou_log "DEBUG" "Running as root, milou user needed"
             return 1
         fi
     else
-        local current_user="${USER:-$(whoami)}"
-        milou_log "DEBUG" "Running as user: $current_user"
-        
         # Check if current user has Docker access
         if docker version >/dev/null 2>&1; then
-            milou_log "DEBUG" "Current user has working Docker access"
+            milou_log "DEBUG" "Current user has Docker access"
             return 0
         else
-            # Check if it's just a permission issue
-            if command -v docker >/dev/null 2>&1; then
-                if docker version 2>&1 | grep -q "permission denied\|Cannot connect to the Docker daemon"; then
-                    milou_log "DEBUG" "Docker installed but current user lacks permissions"
-                    
-                    # Check if user is in docker group
-                    if groups "$current_user" 2>/dev/null | grep -q docker; then
-                        milou_log "DEBUG" "User is in docker group but Docker daemon may not be running"
-                    else
-                        milou_log "DEBUG" "User needs to be added to docker group"
-                    fi
-                    return 1
-                else
-                    milou_log "DEBUG" "Docker installed but service issues detected"
-                    return 1
-                fi
-            else
-                milou_log "DEBUG" "Docker not installed - user management will be handled during installation"
-                return 1
-            fi
+            milou_log "DEBUG" "Current user needs Docker access"
+            return 1
         fi
     fi
 }
@@ -1024,16 +933,6 @@ setup_generate_configuration() {
 setup_generate_configuration_interactive() {
     local preserve_creds="${1:-auto}"
     
-    # Use early credential decision if available
-    if [[ -n "${MILOU_CREDENTIAL_DECISION:-}" ]]; then
-        case "${MILOU_CREDENTIAL_DECISION}" in
-            "preserve") preserve_creds="true" ;;
-            "new") preserve_creds="false" ;;
-            "auto") preserve_creds="auto" ;;
-        esac
-        milou_log "DEBUG" "Using early credential decision: $preserve_creds"
-    fi
-    
     log_section "✓ Interactive Configuration" "Let's personalize your Milou setup"
     echo -e "${DIM}We'll ask you a few quick questions to configure everything perfectly for your needs.${NC}"
     echo
@@ -1188,16 +1087,6 @@ setup_generate_configuration_interactive() {
 setup_generate_configuration_automated() {
     local preserve_creds="${1:-auto}"
     
-    # Use early credential decision if available
-    if [[ -n "${MILOU_CREDENTIAL_DECISION:-}" ]]; then
-        case "${MILOU_CREDENTIAL_DECISION}" in
-            "preserve") preserve_creds="true" ;;
-            "new") preserve_creds="false" ;;
-            "auto") preserve_creds="auto" ;;
-        esac
-        milou_log "DEBUG" "Using early credential decision: $preserve_creds"
-    fi
-    
     milou_log "INFO" "✓ Automated Configuration Generation"
     
     local domain="${DOMAIN:-localhost}"
@@ -1226,16 +1115,6 @@ setup_generate_configuration_automated() {
 # Smart configuration generation
 setup_generate_configuration_smart() {
     local preserve_creds="${1:-auto}"
-    
-    # Use early credential decision if available
-    if [[ -n "${MILOU_CREDENTIAL_DECISION:-}" ]]; then
-        case "${MILOU_CREDENTIAL_DECISION}" in
-            "preserve") preserve_creds="true" ;;
-            "new") preserve_creds="false" ;;
-            "auto") preserve_creds="auto" ;;
-        esac
-        milou_log "DEBUG" "Using early credential decision: $preserve_creds"
-    fi
     
     milou_log "INFO" "✓ Smart Configuration Generation"
     
@@ -1751,8 +1630,6 @@ export -f setup_run
 
 # System analysis functions
 export -f setup_analyze_system
-export -f setup_detect_installation_type
-export -f setup_handle_credential_preservation_decision
 export -f setup_detect_fresh_server
 export -f setup_check_existing_installation
 export -f setup_check_dependencies_status
@@ -1854,166 +1731,6 @@ setup_force_container_recreation() {
     
     [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✓ Complete system cleanup finished - ready for fresh initialization"
     return 0
-}
-
-# Detect installation type with clear categorization
-setup_detect_installation_type() {
-    local has_containers=false
-    local has_running_containers=false
-    local has_config=false
-    local has_volumes=false
-    local config_valid=false
-    
-    milou_log "DEBUG" "Detecting installation type..."
-    
-    # Check for existing containers
-    if docker ps -a --filter "name=milou-\|static-" --format "{{.Names}}" 2>/dev/null | grep -q -E "(milou|static)"; then
-        has_containers=true
-        milou_log "DEBUG" "Found existing containers"
-        
-        # Check if any containers are running
-        if docker ps --filter "name=milou-\|static-" --format "{{.Names}}" 2>/dev/null | grep -q -E "(milou|static)"; then
-            has_running_containers=true
-            milou_log "DEBUG" "Found running containers"
-        fi
-    fi
-    
-    # Check for configuration file
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-        has_config=true
-        milou_log "DEBUG" "Found existing configuration file"
-        
-        # Basic validation of config file
-        if grep -q "POSTGRES_" "${SCRIPT_DIR:-$(pwd)}/.env" 2>/dev/null && \
-           grep -q "ADMIN_" "${SCRIPT_DIR:-$(pwd)}/.env" 2>/dev/null; then
-            config_valid=true
-            milou_log "DEBUG" "Configuration appears valid"
-        else
-            milou_log "DEBUG" "Configuration appears incomplete"
-        fi
-    fi
-    
-    # Check for data volumes
-    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
-        has_volumes=true
-        milou_log "DEBUG" "Found existing data volumes"
-    fi
-    
-    # Determine installation type based on what we found
-    local installation_type=""
-    
-    if [[ "$has_running_containers" == "true" && "$has_config" == "true" && "$config_valid" == "true" ]]; then
-        installation_type="update"
-        milou_log "DEBUG" "Installation type: UPDATE (running system with valid config)"
-    elif [[ "$has_containers" == "true" && "$has_config" == "true" && "$config_valid" == "true" ]]; then
-        installation_type="reinstall"
-        milou_log "DEBUG" "Installation type: REINSTALL (stopped system with valid config)"
-    elif [[ "$has_volumes" == "true" || "$has_containers" == "true" || "$has_config" == "true" ]]; then
-        installation_type="broken"
-        milou_log "DEBUG" "Installation type: BROKEN (partial installation detected)"
-    else
-        installation_type="fresh"
-        milou_log "DEBUG" "Installation type: FRESH (no existing installation)"
-    fi
-    
-    echo "$installation_type"
-    return 0
-}
-
-# Handle credential preservation decision for existing installations
-setup_handle_credential_preservation_decision() {
-    local installation_type="$1"
-    
-    # Skip if running in non-interactive mode
-    if [[ "${MILOU_INTERACTIVE:-true}" != "true" ]]; then
-        milou_log "DEBUG" "Non-interactive mode: using auto credential preservation"
-        export MILOU_CREDENTIAL_DECISION="auto"
-        return 0
-    fi
-    
-    echo
-    log_section "🔐 Credential & Data Protection" "Protecting your existing data and access"
-    
-    case "$installation_type" in
-        "update")
-            echo -e "${BOLD}${BLUE}🔄 UPDATE MODE DETECTED${NC}"
-            echo -e "${DIM}Your Milou system is currently running with existing data.${NC}"
-            echo
-            echo -e "${BOLD}${GREEN}✅ RECOMMENDED: Preserve existing credentials${NC}"
-            echo -e "   ${GREEN}✓${NC} Keep all your existing data accessible"
-            echo -e "   ${GREEN}✓${NC} Users can continue logging in with current passwords"
-            echo -e "   ${GREEN}✓${NC} API integrations will continue working"
-            echo -e "   ${GREEN}✓${NC} Database connections remain intact"
-            echo
-            echo -e "${BOLD}${RED}⚠️  ALTERNATIVE: Generate new credentials${NC}"
-            echo -e "   ${RED}✗${NC} ${BOLD}ALL EXISTING DATA WILL BECOME INACCESSIBLE${NC}"
-            echo -e "   ${RED}✗${NC} Users will need new passwords"
-            echo -e "   ${RED}✗${NC} API integrations will break"
-            echo -e "   ${RED}✗${NC} Database will be reset"
-            ;;
-        "reinstall")
-            echo -e "${BOLD}${YELLOW}🔧 REINSTALL MODE DETECTED${NC}"
-            echo -e "${DIM}Your Milou system is stopped but has existing configuration.${NC}"
-            echo
-            echo -e "${BOLD}${GREEN}✅ RECOMMENDED: Preserve existing credentials${NC}"
-            echo -e "   ${GREEN}✓${NC} Restart with your existing data intact"
-            echo -e "   ${GREEN}✓${NC} Users keep their current accounts"
-            echo -e "   ${GREEN}✓${NC} Previous configuration is maintained"
-            echo
-            echo -e "${BOLD}${RED}⚠️  ALTERNATIVE: Generate new credentials${NC}"
-            echo -e "   ${RED}✗${NC} ${BOLD}EXISTING DATA WILL BE LOST${NC}"
-            echo -e "   ${RED}✗${NC} Fresh start with empty database"
-            ;;
-        "broken")
-            echo -e "${BOLD}${YELLOW}⚠️  PARTIAL INSTALLATION DETECTED${NC}"
-            echo -e "${DIM}Your Milou system has incomplete setup that needs repair.${NC}"
-            echo
-            echo -e "${BOLD}${GREEN}✅ RECOMMENDED: Try preserving credentials first${NC}"
-            echo -e "   ${GREEN}✓${NC} May recover existing data if possible"
-            echo -e "   ${GREEN}✓${NC} Will fall back to new credentials if needed"
-            echo
-            echo -e "${BOLD}${RED}⚠️  ALTERNATIVE: Generate new credentials${NC}"
-            echo -e "   ${RED}✗${NC} Clean slate - any existing data will be lost"
-            ;;
-    esac
-    
-    echo
-    local default_choice="Y"
-    if [[ "$installation_type" == "broken" ]]; then
-        default_choice="Y"  # Still default to preserve for broken, but explain it might not work
-    fi
-    
-    if confirm "Preserve existing credentials to keep your data safe?" "$default_choice"; then
-        export MILOU_CREDENTIAL_DECISION="preserve"
-        echo
-        echo -e "${GREEN}${CHECKMARK} Excellent choice!${NC} Your existing credentials will be preserved."
-        echo -e "${DIM}Your data and user accounts will remain accessible after the update.${NC}"
-        echo
-    else
-        export MILOU_CREDENTIAL_DECISION="new"
-        echo
-        echo -e "${RED}${CROSSMARK} New credentials will be generated.${NC}"
-        
-        # Extra confirmation for destructive operations
-        if [[ "$installation_type" == "update" ]]; then
-            echo
-            echo -e "${BOLD}${RED}⚠️  FINAL WARNING: DATA LOSS RISK ⚠️${NC}"
-            echo -e "${RED}Generating new credentials will make your existing data inaccessible.${NC}"
-            echo -e "${RED}This includes user accounts, settings, and all stored information.${NC}"
-            echo
-            if ! confirm "Are you ABSOLUTELY SURE you want to generate new credentials?" "N"; then
-                echo -e "${GREEN}${CHECKMARK} Wise choice! Switching to credential preservation.${NC}"
-                export MILOU_CREDENTIAL_DECISION="preserve"
-                echo
-            else
-                echo -e "${RED}${CROSSMARK} Confirmed: New credentials will be generated.${NC}"
-                echo -e "${YELLOW}✓ Tip:${NC} Make sure you have backups of any important data."
-                echo
-            fi
-        fi
-    fi
-    
-    milou_log "DEBUG" "Credential preservation decision: ${MILOU_CREDENTIAL_DECISION}"
 }
 
 milou_log "DEBUG" "Setup module loaded successfully" 

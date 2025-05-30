@@ -268,12 +268,25 @@ setup_run() {
     
     # Step 2: Prerequisites Assessment
     setup_announce_step 2 "Prerequisites Assessment" "Checking what needs to be installed" 
-    if ! setup_assess_prerequisites; then
-        setup_show_error "Prerequisites assessment failed" "Could not determine system prerequisites" \
-            "Check system permissions" \
-            "Ensure Docker is accessible" \
-            "Contact support if issues persist"
-        return 1
+
+    # For fresh systems or when we know we need deps, missing prerequisites are expected
+    if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]] || [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
+        # On fresh systems, we expect prerequisites to be missing
+        if ! setup_assess_prerequisites; then
+            milou_log "INFO" "✓ Missing prerequisites detected (expected for fresh installation)"
+            milou_log "INFO" "✓ Missing prerequisites will be installed during setup"
+        else
+            milou_log "SUCCESS" "✓ All prerequisites already satisfied"
+        fi
+    else
+        # On existing systems, missing prerequisites are unexpected
+        if ! setup_assess_prerequisites; then
+            setup_show_error "Prerequisites assessment failed" "Could not determine system prerequisites" \
+                "Check system permissions" \
+                "Ensure Docker is accessible" \
+                "Contact support if issues persist"
+            return 1
+        fi
     fi
     
     # Step 3: Setup Mode Determination
@@ -540,13 +553,31 @@ setup_check_user_status() {
 setup_assess_prerequisites() {
     milou_log "STEP" "Step 2: Prerequisites Assessment"
     
-    # Use unified validation with install mode for complete checking
-    if validate_system_dependencies "install" "unknown" "false"; then
+    # Check if Docker is missing
+    local docker_missing=false
+    if ! command -v docker >/dev/null 2>&1; then
+        docker_missing=true
+    elif ! docker info >/dev/null 2>&1; then
+        docker_missing=true
+    elif ! docker compose version >/dev/null 2>&1; then
+        docker_missing=true
+    fi
+    
+    # On fresh systems, missing Docker is expected and normal
+    if [[ "$docker_missing" == "true" ]]; then
+        if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]] || [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
+            milou_log "INFO" "✓ Docker installation needed (will be installed automatically)"
+            return 1  # Return 1 to indicate missing deps, but this is expected
+        else
+            # On existing systems, missing Docker is an error
+            milou_log "ERROR" "Docker is not installed"
+            milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
+            milou_log "ERROR" "System validation failed with 1 error(s)"
+            return 1
+        fi
+    else
         milou_log "SUCCESS" "✓ All prerequisites satisfied"
         return 0
-    else
-        milou_log "INFO" "✓ Missing prerequisites will be installed during setup"
-        return 1  # Still return 1 to indicate missing deps, but setup continues
     fi
 }
 

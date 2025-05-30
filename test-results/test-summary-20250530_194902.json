@@ -1,0 +1,140 @@
+{
+  "timestamp": "20250530_194902",
+  "start_time": "1748627342",
+  "project": "milou-cli",
+  "version": "4.0.0",
+  "test_suites": [
+    {
+      "name": "core-module",
+      "description": "Core functionality and utilities",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 14,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "core-module-20250530_194902.log"
+    },
+    {
+      "name": "docker-module",
+      "description": "Docker operations and management",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 8,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "docker-module-20250530_194902.log"
+    },
+    {
+      "name": "service-lifecycle",
+      "description": "Service lifecycle management functions",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 10,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "service-lifecycle-20250530_194902.log"
+    },
+    {
+      "name": "config-module",
+      "description": "Configuration management",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 14,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "config-module-20250530_194902.log"
+    },
+    {
+      "name": "validation-module",
+      "description": "System validation and checks",
+      "result": "PASSED",
+      "duration": 2,
+      "tests_run": 7,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "validation-module-20250530_194902.log"
+    },
+    {
+      "name": "error-recovery",
+      "description": "Error recovery and rollback systems",
+      "result": "PASSED",
+      "duration": 3,
+      "tests_run": 10,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "error-recovery-20250530_194902.log"
+    },
+    {
+      "name": "setup-module",
+      "description": "Installation and setup procedures",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 9,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "setup-module-20250530_194902.log"
+    },
+    {
+      "name": "admin-module",
+      "description": "Additional module tests",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 9,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "admin-module-20250530_194902.log"
+    },
+    {
+      "name": "backup-core",
+      "description": "Additional module tests",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 6,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "backup-core-20250530_194902.log"
+    },
+    {
+      "name": "self-update",
+      "description": "Additional module tests",
+      "result": "PASSED",
+      "duration": 2,
+      "tests_run": 7,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "self-update-20250530_194902.log"
+    },
+    {
+      "name": "ssl-module",
+      "description": "Additional module tests",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 11,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "ssl-module-20250530_194902.log"
+    },
+    {
+      "name": "user-module",
+      "description": "Additional module tests",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 12,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "user-module-20250530_194902.log"
+    }
+  ]
+}

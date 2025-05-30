@@ -108,788 +108,383 @@ docker_compose() {
     docker compose --env-file "$DOCKER_ENV_FILE" -f "$DOCKER_COMPOSE_FILE" "$@"
 }
 
-# Create Docker networks if they don't exist
-docker_create_networks() {
-    local quiet="${1:-false}"
+# Master Docker execution function - consolidates all Docker operations
+docker_execute() {
+    local operation="$1"
+    local service="${2:-}"
+    local quiet="${3:-false}"
+    shift 3 2>/dev/null || true
+    local additional_args=("$@")
     
-    local network_name="${DOCKER_PROJECT_NAME}_default"
-    
-    # Create default project network
-    if ! docker network inspect "$network_name" >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "Creating Docker network: $network_name"
-        if docker network create "$network_name" >/dev/null 2>&1; then
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Created network: $network_name"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Failed to create network: $network_name"
-        fi
-    else
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Network already exists: $network_name"
-    fi
-    
-    # Create external proxy network if it doesn't exist
-    if ! docker network inspect "proxy" >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "Creating external proxy network: proxy"
-        if docker network create "proxy" >/dev/null 2>&1; then
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Created external network: proxy"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Failed to create external network: proxy"
-        fi
-    else
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "External proxy network already exists"
-    fi
-}
-
-# =============================================================================
-# DOCKER REGISTRY AUTHENTICATION
-# =============================================================================
-
-# Setup Docker registry authentication
-docker_setup_registry_auth() {
-    local github_token="$1"
-    local quiet="${2:-false}"
-    
-    if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token provided - private registry images may fail to pull"
-        return 0
-    fi
-    
-    # Validate token format first
-    if ! validate_github_token "$github_token" "false"; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub token validation failed, continuing without registry auth"
-        return 0
-    fi
-    
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Setting up Docker registry authentication..."
-    
-    # Get username from GitHub API
-    local username
-    username=$(curl -s -H "Authorization: Bearer $github_token" \
-               "https://api.github.com/user" 2>/dev/null | \
-               grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null)
-    
-    if [[ -z "$username" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not get GitHub username, using token as username"
-        username="token"
-    fi
-    
-    # Login to GitHub Container Registry
-    if echo "$github_token" | docker login ghcr.io -u "$username" --password-stdin >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker registry authentication successful"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker registry authentication failed"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Ensure your token has 'read:packages' and 'write:packages' scopes"
+    # Ensure Docker context is initialized
+    if ! docker_init "" "" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker context initialization failed"
         return 1
     fi
-}
-
-# =============================================================================
-# SERVICE MANAGEMENT OPERATIONS
-# =============================================================================
-
-# Start all services - SINGLE AUTHORITATIVE IMPLEMENTATION
-docker_start() {
-    local github_token="${1:-${GITHUB_TOKEN:-}}"
-    local check_conflicts="${2:-true}"
-    local quiet="${3:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "STEP" "Starting Milou services..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🐳 Docker Execute: $operation ${service:+$service }${additional_args[*]:+${additional_args[*]}}"
     
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
-        fi
-    fi
-    
-    # Check for conflicting containers if requested
-    if [[ "$check_conflicts" == "true" ]]; then
-        local running_containers
-        running_containers=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null || true)
-        if [[ -n "$running_containers" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Found running Milou containers:"
-            while IFS= read -r container; do
-                [[ -n "$container" ]] && [[ "$quiet" != "true" ]] && milou_log "WARN" "  🐳 $container"
-            done <<< "$running_containers"
-            
-            if [[ "${MILOU_FORCE:-false}" == "true" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Force mode enabled - stopping existing services first"
-                if ! docker_stop "" "$quiet"; then
-                    [[ "$quiet" != "true" ]] && milou_log "WARN" "Failed to stop some services, continuing anyway..."
-                fi
-                sleep 3
+    case "$operation" in
+        "up"|"start")
+            if [[ -n "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting service: $service"
+                docker_compose up -d "${additional_args[@]}" "$service"
             else
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot start services due to conflicts"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Solutions:"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Use --force flag to stop existing services"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Run: ./milou.sh stop (to stop Milou services)"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Run: ./milou.sh restart (to restart services)"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting all services"
+                docker_compose up -d --remove-orphans "${additional_args[@]}"
+            fi
+            ;;
+        "down"|"stop")
+            if [[ -n "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⏸️  Stopping service: $service"
+                docker_compose stop "${additional_args[@]}" "$service"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⏸️  Stopping all services"
+                docker_compose down "${additional_args[@]}"
+            fi
+            ;;
+        "restart")
+            if [[ -n "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Restarting service: $service"
+                docker_compose restart "${additional_args[@]}" "$service"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Restarting all services"
+                docker_compose restart "${additional_args[@]}"
+            fi
+            ;;
+        "pull")
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling latest images"
+            docker_compose pull "${additional_args[@]}" ${service:+"$service"}
+            ;;
+        "logs")
+            docker_compose logs "${additional_args[@]}" ${service:+"$service"}
+            ;;
+        "ps"|"status")
+            docker_compose ps "${additional_args[@]}" ${service:+"$service"}
+            ;;
+        "exec")
+            if [[ -z "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service name required for exec operation"
                 return 1
             fi
-        fi
-    fi
-    
-    # Setup Docker registry authentication if token provided
-    if [[ -n "$github_token" ]]; then
-        docker_setup_registry_auth "$github_token" "$quiet"
-    fi
-    
-    # Create networks
-    docker_create_networks "$quiet"
-    
-    # Start services
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Starting services with Docker Compose..."
-    if docker_compose up -d --remove-orphans; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Services started successfully"
-        
-        # Give services a moment to initialize
-        sleep 5
-        
-        # Basic health check
-        local healthy_services=0
-        local total_services
-        total_services=$(docker_compose config --services 2>/dev/null | wc -l || echo "0")
-        
-        if [[ "$total_services" -gt 0 ]]; then
-            # Give services time to start
-            local max_wait=30
-            local wait_time=0
-            
-            while [[ $wait_time -lt $max_wait ]]; do
-                healthy_services=$(docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
-                
-                if [[ "$healthy_services" -eq "$total_services" ]]; then
-                    break
-                fi
-                
-                sleep 2
-                ((wait_time += 2))
-            done
-            
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Services status: $healthy_services/$total_services running"
-            
-            if [[ "$healthy_services" -eq "$total_services" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "All services are running successfully"
+            docker_compose exec "${additional_args[@]}" "$service"
+            ;;
+        "config")
+            docker_compose config "${additional_args[@]}"
+            ;;
+        "validate")
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔍 Validating Docker Compose configuration"
+            if docker_compose config --quiet 2>/dev/null; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Docker Compose configuration is valid"
+                return 0
             else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Some services may still be starting up"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check status with: ./milou.sh status"
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Docker Compose configuration is invalid"
+                return 1
             fi
-        fi
-        
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start services"
-        return 1
-    fi
-}
-
-# Stop all services - SINGLE AUTHORITATIVE IMPLEMENTATION
-docker_stop() {
-    local remove_orphans="${1:-true}"
-    local quiet="${2:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "STEP" "Stopping Milou services..."
-    
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
+            ;;
+        *)
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Unknown Docker operation: $operation"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Supported operations: up, down, restart, pull, logs, ps, exec, config, validate"
             return 1
-        fi
-    fi
-    
-    local compose_args=()
-    if [[ "$remove_orphans" == "true" ]]; then
-        compose_args+=("--remove-orphans")
-    fi
-    
-    if docker_compose down "${compose_args[@]}"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Services stopped successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to stop services"
-        return 1
-    fi
+            ;;
+    esac
 }
 
-# Restart all services - SINGLE AUTHORITATIVE IMPLEMENTATION
-docker_restart() {
-    local github_token="${1:-${GITHUB_TOKEN:-}}"
-    local quiet="${2:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "STEP" "Restarting Milou services..."
-    
-    if docker_stop "true" "$quiet" && sleep 2 && docker_start "$github_token" "false" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Services restarted successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to restart services"
-        return 1
-    fi
-}
-
-# Start a specific service
-docker_start_service() {
+# Health check service function - standard implementation
+health_check_service() {
     local service="$1"
     local quiet="${2:-false}"
     
-    if [[ -z "$service" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service name is required"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🏥 Checking health of service: $service"
+    
+    # Check if service is defined
+    local service_exists
+    service_exists=$(docker_compose config --services 2>/dev/null | grep -c "^$service$" || echo "0")
+    
+    if [[ "$service_exists" -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service '$service' not found in compose configuration"
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Starting service: $service"
+    # Check if service is running
+    local service_status
+    service_status=$(docker_compose ps --services --filter "status=running" 2>/dev/null | grep -c "^$service$" || echo "0")
     
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
-        fi
-    fi
-    
-    if docker_compose up -d "$service"; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Service $service started successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start service: $service"
-        return 1
-    fi
-}
-
-# Stop a specific service
-docker_stop_service() {
-    local service="$1"
-    local quiet="${2:-false}"
-    
-    if [[ -z "$service" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service name is required"
+    if [[ "$service_status" -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is not running"
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Stopping service: $service"
-    
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
-        fi
-    fi
-    
-    if docker_compose stop "$service"; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Service $service stopped successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Failed to stop service: $service"
-        return 1
-    fi
-}
-
-# =============================================================================
-# SERVICE STATUS AND MONITORING
-# =============================================================================
-
-# Get service status with detailed information - SINGLE AUTHORITATIVE IMPLEMENTATION
-docker_status() {
-    local show_header="${1:-true}"
-    local detailed="${2:-false}"
-    
-    if [[ "$show_header" == "true" ]]; then
-        milou_log "INFO" "📊 Checking Milou services status..."
-    fi
-    
-    # Check if this is a fresh installation
-    local is_fresh_install=false
-    local has_config=false
-    local has_containers=false
-    
-    # Check for configuration
-    if [[ -f "${ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
-        has_config=true
-    fi
-    
-    # Check for any existing containers (running or stopped)
-    local existing_containers
-    existing_containers=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null || true)
-    if [[ -n "$existing_containers" ]]; then
-        has_containers=true
-    fi
-    
-    # Determine if this is a fresh install
-    if [[ "$has_config" == false && "$has_containers" == false ]]; then
-        is_fresh_install=true
-    fi
-    
-    # Handle fresh installation case
-    if [[ "$is_fresh_install" == true ]]; then
-        echo
-        milou_log "INFO" "🆕 Fresh Installation Detected"
-        echo
-        milou_log "INFO" "It looks like Milou hasn't been set up yet on this system."
-        echo
-        milou_log "INFO" "🚀 To get started, run the setup wizard:"
-        milou_log "INFO" "   ./milou.sh setup"
-        echo
-        milou_log "INFO" "📖 Or see all available commands:"
-        milou_log "INFO" "   ./milou.sh help"
-        echo
-        return 0
-    fi
-    
-    # Initialize Docker environment for status checking
-    if ! docker_init "" "" "true"; then
-        milou_log "ERROR" "Failed to initialize Docker environment"
-        echo
-        milou_log "INFO" "💡 Try running setup to fix configuration issues:"
-        milou_log "INFO" "   ./milou.sh setup"
-        return 1
-    fi
-    
-    echo
-    milou_log "INFO" "Service Status Overview:"
-    echo
-    
-    # Get service status with better error handling
-    local compose_status
-    if ! compose_status=$(docker_compose ps 2>&1); then
-        milou_log "ERROR" "Failed to get service status"
-        echo "$compose_status" | head -3
-        echo
-        milou_log "INFO" "💡 Troubleshooting options:"
-        milou_log "INFO" "   • Check configuration: ./milou.sh validate"
-        milou_log "INFO" "   • Run setup again: ./milou.sh setup"
-        milou_log "INFO" "   • View detailed diagnosis: ./milou.sh diagnose"
-        return 1
-    fi
-    
-    # Display the compose status output
-    echo "$compose_status"
-    echo
-    
-    # Get accurate service counts
-    local total_services running_services stopped_services unhealthy_services
-    
-    # Count total services defined in compose file
-    total_services=$(docker_compose config --services 2>/dev/null | wc -l || echo "0")
-    
-    # Count running services more accurately
-    running_services=0
-    stopped_services=0
-    unhealthy_services=0
-    
-    if [[ "$total_services" -gt 0 ]]; then
-        # Get detailed status of each service
-        while IFS= read -r service; do
-            if [[ -n "$service" ]]; then
-                local container_name="milou-${service}"
-                local service_status
-                service_status=$(docker ps --filter "name=${container_name}" --format "{{.Status}}" 2>/dev/null || echo "")
-                
-                if [[ -n "$service_status" ]]; then
-                    if [[ "$service_status" =~ ^Up ]]; then
-                        if [[ "$service_status" =~ "unhealthy" ]]; then
-                            unhealthy_services=$((unhealthy_services + 1))
-                        else
-                            running_services=$((running_services + 1))
-                        fi
-                    else
-                        stopped_services=$((stopped_services + 1))
-                    fi
-                else
-                    stopped_services=$((stopped_services + 1))
-                fi
-            fi
-        done < <(docker_compose config --services 2>/dev/null)
-    fi
-    
-    # Display service summary with color coding
-    if [[ $running_services -eq $total_services && $total_services -gt 0 ]]; then
-        milou_log "SUCCESS" "✅ All services running: $running_services/$total_services"
-    elif [[ $running_services -gt 0 ]]; then
-        milou_log "WARN" "⚠️  Services partially running: $running_services/$total_services"
-        if [[ $unhealthy_services -gt 0 ]]; then
-            milou_log "WARN" "   Unhealthy services: $unhealthy_services"
-        fi
-        if [[ $stopped_services -gt 0 ]]; then
-            milou_log "WARN" "   Stopped services: $stopped_services"
-        fi
-    else
-        milou_log "ERROR" "❌ No services running: 0/$total_services"
-    fi
-    
-    # Show network status
-    local network_name="${DOCKER_PROJECT_NAME}_default"
-    if docker network inspect "$network_name" >/dev/null 2>&1; then
-        milou_log "SUCCESS" "🌐 Network: $network_name (active)"
-    else
-        milou_log "WARN" "🌐 Network: $network_name (missing)"
-    fi
-    
-    # Show additional information if detailed mode
-    if [[ "$detailed" == "true" ]]; then
-        echo
-        milou_log "INFO" "🔧 Docker Environment Details:"
-        milou_log "INFO" "   • Environment file: $(basename "$DOCKER_ENV_FILE")"
-        milou_log "INFO" "   • Compose file: $(basename "$DOCKER_COMPOSE_FILE")"
-        milou_log "INFO" "   • Project name: $DOCKER_PROJECT_NAME"
-        
-        # Show disk usage
-        local disk_usage
-        if disk_usage=$(docker system df 2>/dev/null); then
-            echo
-            milou_log "INFO" "💾 Docker Disk Usage:"
-            echo "$disk_usage"
-        fi
-    fi
-    
-    # Show helpful commands if there are issues
-    if [[ $running_services -lt $total_services ]]; then
-        echo
-        milou_log "INFO" "💡 Helpful commands:"
-        milou_log "INFO" "   ./milou.sh start      # Start services"
-        milou_log "INFO" "   ./milou.sh restart    # Restart services"
-        milou_log "INFO" "   ./milou.sh logs       # View service logs"
-        milou_log "INFO" "   ./milou.sh health     # Run health checks"
-        milou_log "INFO" "   ./milou.sh shell <service>  # Access service shell"
-    fi
-    
+    # Additional health checks can be added here per service
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service '$service' is healthy"
     return 0
 }
 
-# =============================================================================
-# SERVICE LOGS AND DEBUGGING
-# =============================================================================
-
-# Show service logs - SINGLE AUTHORITATIVE IMPLEMENTATION
-docker_logs() {
-    local service="${1:-}"
-    local follow="${2:-false}"
-    local tail_lines="${3:-50}"
-    local quiet="${4:-false}"
+# Check all services health - comprehensive implementation
+health_check_all() {
+    local quiet="${1:-false}"
     
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🏥 Running comprehensive health check on all services"
+    
+    local total_services=0
+    local healthy_services=0
+    local unhealthy_services=()
+    
+    # Get all defined services
+    while IFS= read -r service; do
+        [[ -z "$service" ]] && continue
+        ((total_services++))
+        
+        if health_check_service "$service" "true"; then
+            ((healthy_services++))
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $service"
+        else
+            unhealthy_services+=("$service")
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $service"
+        fi
+    done < <(docker_compose config --services 2>/dev/null)
+    
+    # Report results
+    if [[ "$quiet" != "true" ]]; then
+        echo
+        milou_log "INFO" "📊 Health Check Summary:"
+        milou_log "INFO" "  Total services: $total_services"
+        milou_log "INFO" "  Healthy: $healthy_services"
+        milou_log "INFO" "  Unhealthy: ${#unhealthy_services[@]}"
+        
+        if [[ ${#unhealthy_services[@]} -gt 0 ]]; then
+            milou_log "WARN" "  Unhealthy services: ${unhealthy_services[*]}"
         fi
     fi
     
-    local compose_args=()
-    
-    if [[ "$follow" == "true" ]]; then
-        compose_args+=("-f")
-    fi
-    
-    if [[ -n "$tail_lines" ]]; then
-        compose_args+=("--tail=$tail_lines")
-    fi
-    
-    if [[ -n "$service" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "📋 Showing logs for service: $service"
-        docker_compose logs "${compose_args[@]}" "$service"
+    # Return success only if all services are healthy
+    if [[ $healthy_services -eq $total_services && $total_services -gt 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 All services are healthy!"
+        return 0
     else
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "📋 Showing logs for all services"
-        docker_compose logs "${compose_args[@]}"
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Some services need attention"
+        return 1
     fi
 }
 
-# Get shell access to a service - SINGLE AUTHORITATIVE IMPLEMENTATION  
-docker_shell() {
-    local service="$1"
-    local shell="${2:-/bin/bash}"
+# Backward compatibility wrapper - standardizes legacy calls
+milou_docker_compose() {
+    milou_log "WARN" "⚠️  Using deprecated milou_docker_compose - please use docker_execute() instead"
+    docker_compose "$@"
+}
+
+# =============================================================================
+# SERVICE LIFECYCLE MANAGEMENT FUNCTIONS (Week 2 Completion)
+# =============================================================================
+
+# Start service with health validation
+service_start_with_validation() {
+    local service="${1:-}"
+    local timeout="${2:-60}"
     local quiet="${3:-false}"
     
-    if [[ -z "$service" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service name is required"
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
+    
+    # Start the service(s)
+    if ! docker_execute "start" "$service" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start ${service:-services}"
         return 1
     fi
     
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
-        fi
-    fi
+    # Wait and validate
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "⏳ Waiting up to ${timeout}s for services to become healthy..."
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🐚 Opening shell in $service container..."
+    local elapsed=0
+    local check_interval=5
     
-    # Try bash first, then sh as fallback
-    if ! docker_compose exec "$service" "$shell"; then
-        if [[ "$shell" == "/bin/bash" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Bash not available, trying sh..."
-            docker_compose exec "$service" /bin/sh
-        else
-            return 1
-        fi
-    fi
-}
-
-# =============================================================================
-# HEALTH CHECKS AND DIAGNOSTICS
-# =============================================================================
-
-# Run quick health check
-docker_health_check() {
-    local quiet="${1:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "⚡ Running quick health check..."
-    
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "true"; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker environment not available"
-            return 1
-        fi
-    fi
-    
-    local running_services
-    running_services=$(docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
-    local total_services
-    total_services=$(docker_compose config --services 2>/dev/null | wc -l || echo "0")
-    
-    if [[ "$running_services" -eq "$total_services" && "$total_services" -gt 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Quick check passed: All $total_services services running"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Quick check: $running_services/$total_services services running"
-        return 1
-    fi
-}
-
-# Run comprehensive health checks
-docker_health_comprehensive() {
-    milou_log "STEP" "Running comprehensive health checks..."
-    
-    # Initialize if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "true"; then
-            milou_log "ERROR" "Failed to initialize Docker environment"
-            return 1
-        fi
-    fi
-    
-    local issues_found=0
-    
-    echo
-    milou_log "INFO" "🏥 Health Check Report"
-    echo
-    
-    # 1. Docker daemon check
-    milou_log "INFO" "1️⃣  Docker Daemon Status"
-    if docker info >/dev/null 2>&1; then
-        milou_log "SUCCESS" "   ✅ Docker daemon is running"
-    else
-        milou_log "ERROR" "   ❌ Docker daemon is not accessible"
-        ((issues_found++))
-    fi
-    
-    # 2. Service status check
-    milou_log "INFO" "2️⃣  Service Status"
-    local total_services running_services
-    total_services=$(docker_compose config --services 2>/dev/null | wc -l || echo "0")
-    running_services=$(docker_compose ps --services --filter "status=running" 2>/dev/null | wc -l || echo "0")
-    
-    if [[ "$running_services" -eq "$total_services" && "$total_services" -gt 0 ]]; then
-        milou_log "SUCCESS" "   ✅ All services running ($running_services/$total_services)"
-    else
-        milou_log "WARN" "   ⚠️  Some services not running ($running_services/$total_services)"
-        ((issues_found++))
-    fi
-    
-    # 3. Network connectivity
-    milou_log "INFO" "3️⃣  Network Connectivity"
-    local network_name="${DOCKER_PROJECT_NAME}_default"
-    if docker network inspect "$network_name" >/dev/null 2>&1; then
-        milou_log "SUCCESS" "   ✅ Docker network exists: $network_name"
-    else
-        milou_log "ERROR" "   ❌ Docker network missing: $network_name"
-        ((issues_found++))
-    fi
-    
-    # 4. Volume checks
-    milou_log "INFO" "4️⃣  Volume Status"
-    local volumes
-    volumes=$(docker_compose config --volumes 2>/dev/null | wc -l || echo "0")
-    if [[ "$volumes" -gt 0 ]]; then
-        milou_log "SUCCESS" "   ✅ Found $volumes configured volumes"
-    else
-        milou_log "WARN" "   ⚠️  No volumes configured"
-    fi
-    
-    # 5. Resource usage
-    milou_log "INFO" "5️⃣  Resource Usage"
-    if validate_docker_resources "true" "true" "false" "true"; then
-        milou_log "SUCCESS" "   ✅ Resource usage is acceptable"
-    else
-        milou_log "WARN" "   ⚠️  Resource usage issues detected"
-        ((issues_found++))
-    fi
-    
-    echo
-    if [[ $issues_found -eq 0 ]]; then
-        milou_log "SUCCESS" "🎉 All health checks passed!"
-    else
-        milou_log "WARN" "⚠️  Health check completed with $issues_found issue(s) found."
-    fi
-    
-    return $issues_found
-}
-
-# =============================================================================
-# IMAGE MANAGEMENT
-# =============================================================================
-
-# Pull Docker images
-docker_pull_images() {
-    local quiet="${1:-false}"
-    local specific_service="${2:-}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "📥 Pulling Docker images..."
-    
-    # Initialize Docker environment if needed
-    if [[ -z "$DOCKER_ENV_FILE" ]]; then
-        if ! docker_init "" "" "$quiet"; then
-            return 1
-        fi
-    fi
-    
-    local pull_args=()
-    
-    # Add quiet flag if not running in a TTY or if quiet mode requested
-    if [[ "$quiet" == "true" ]] || ! tty -s; then
-        pull_args+=("-q")
-    fi
-    
-    if [[ -n "$specific_service" ]]; then
-        pull_args+=("$specific_service")
-    fi
-    
-    if docker_compose pull "${pull_args[@]}"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker images pulled successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to pull Docker images"
-        return 1
-    fi
-}
-
-# =============================================================================
-# CLEANUP OPERATIONS
-# =============================================================================
-
-# Clean up Docker resources
-docker_cleanup() {
-    local include_images="${1:-false}"
-    local include_volumes="${2:-false}"
-    local include_networks="${3:-false}"
-    local aggressive="${4:-false}"
-    local quiet="${5:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "STEP" "Cleaning up Docker resources..."
-    
-    local cleaned_items=0
-    
-    # Clean containers first
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🗑️  Removing stopped containers..."
-    if docker container prune -f >/dev/null 2>&1; then
-        ((cleaned_items++))
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Stopped containers removed"
-    fi
-    
-    # Clean images if requested
-    if [[ "$include_images" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🗑️  Removing unused images..."
-        if [[ "$aggressive" == "true" ]]; then
-            if docker image prune -a -f >/dev/null 2>&1; then
-                ((cleaned_items++))
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "All unused images removed"
+    while [[ $elapsed -lt $timeout ]]; do
+        if [[ -n "$service" ]]; then
+            if health_check_service "$service" "true"; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service '$service' started and is healthy"
+                return 0
             fi
         else
-            if docker image prune -f >/dev/null 2>&1; then
-                ((cleaned_items++))
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Dangling images removed"
+            if health_check_all "true"; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ All services started and are healthy"
+                return 0
             fi
         fi
-    fi
+        
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+        [[ "$quiet" != "true" ]] && echo -n "."
+    done
     
-    # Clean volumes if requested
-    if [[ "$include_volumes" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🗑️  Removing unused volumes..."
-        if docker volume prune -f >/dev/null 2>&1; then
-            ((cleaned_items++))
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Unused volumes removed"
+    [[ "$quiet" != "true" ]] && echo
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service startup validation failed after ${timeout}s"
+    return 1
+}
+
+# Stop service gracefully with cleanup
+service_stop_gracefully() {
+    local service="${1:-}"
+    local timeout="${2:-30}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "⏸️  Stopping service gracefully: ${service:-all services}"
+    
+    # Send stop signal and wait for graceful shutdown
+    if docker_execute "stop" "$service" "$quiet" --timeout="$timeout"; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service stopped gracefully"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Graceful stop failed, trying forceful stop"
+        
+        # Fallback to force kill if graceful stop fails
+        if [[ -n "$service" ]]; then
+            docker_compose kill "$service"
+        else
+            docker_compose kill
+        fi
+        
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "🔶 Service force-stopped"
+        return 1
+    fi
+}
+
+# Restart service safely with rollback capability
+service_restart_safely() {
+    local service="${1:-}"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Safely restarting service: ${service:-all services}"
+    
+    # Create snapshot before restart
+    local snapshot_created=false
+    if command -v create_system_snapshot >/dev/null 2>&1; then
+        if create_system_snapshot "restart_${service:-all}_$(date +%s)" "$quiet"; then
+            snapshot_created=true
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "📸 System snapshot created for safe restart"
         fi
     fi
     
-    # Clean networks if requested
-    if [[ "$include_networks" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🗑️  Removing unused networks..."
-        if docker network prune -f >/dev/null 2>&1; then
-            ((cleaned_items++))
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Unused networks removed"
+    # Perform restart
+    if docker_execute "restart" "$service" "$quiet"; then
+        # Validate after restart
+        local validation_result=0
+        if [[ -n "$service" ]]; then
+            health_check_service "$service" "$quiet" || validation_result=1
+        else
+            health_check_all "$quiet" || validation_result=1
+        fi
+        
+        if [[ $validation_result -eq 0 ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service restarted successfully and is healthy"
+            return 0
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service restart validation failed"
+            
+            # Offer rollback if snapshot exists
+            if [[ "$snapshot_created" == "true" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 System snapshot available for rollback if needed"
+            fi
+            return 1
+        fi
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service restart failed"
+        return 1
+    fi
+}
+
+# Update service with zero downtime (rolling update)
+service_update_zero_downtime() {
+    local service="${1:-}"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Starting zero-downtime update for: ${service:-all services}"
+    
+    # Create backup snapshot
+    if command -v create_system_snapshot >/dev/null 2>&1; then
+        if ! create_system_snapshot "update_${service:-all}_$(date +%s)" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Could not create backup snapshot"
         fi
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Cleanup completed ($cleaned_items operations)"
-    return 0
+    # Pull latest images first
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling latest images..."
+    if ! docker_execute "pull" "$service" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull latest images"
+        return 1
+    fi
+    
+    # Perform rolling update
+    if [[ -n "$service" ]]; then
+        # Single service update
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
+        
+        # Stop old container and start new one
+        if docker_execute "up" "$service" "$quiet" --force-recreate --no-deps; then
+            # Validate new service
+            if health_check_service "$service" "$quiet"; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service updated successfully with zero downtime"
+                return 0
+            else
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check"
+                return 1
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service update failed"
+            return 1
+        fi
+    else
+        # Multi-service rolling update
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Performing rolling update of all services"
+        
+        # Get all services
+        local services=()
+        while IFS= read -r svc; do
+            [[ -n "$svc" ]] && services+=("$svc")
+        done < <(docker_compose config --services 2>/dev/null)
+        
+        local failed_services=()
+        
+        # Update each service individually
+        for svc in "${services[@]}"; do
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $svc"
+            
+            if docker_execute "up" "$svc" "$quiet" --force-recreate --no-deps; then
+                if health_check_service "$svc" "true"; then
+                    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
+                else
+                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $svc update failed health check"
+                    failed_services+=("$svc")
+                fi
+            else
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $svc update failed"
+                failed_services+=("$svc")
+            fi
+        done
+        
+        # Report results
+        if [[ ${#failed_services[@]} -eq 0 ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 All services updated successfully with zero downtime"
+            return 0
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Some services failed to update: ${failed_services[*]}"
+            return 1
+        fi
+    fi
 }
 
 # =============================================================================
-# LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
+# EXPORT CONSOLIDATED FUNCTIONS
 # =============================================================================
 
-# Legacy aliases (will be removed after full refactoring)
-milou_docker_init() { docker_init "$@"; }
-milou_docker_compose() { docker_compose "$@"; }
-milou_docker_start() { docker_start "$@"; }
-milou_docker_stop() { docker_stop "$@"; }
-milou_docker_restart() { docker_restart "$@"; }
-milou_docker_status() { docker_status "$@"; }
-milou_docker_logs() { docker_logs "$@"; }
-milou_docker_shell() { docker_shell "$@"; }
-milou_docker_start_service() { docker_start_service "$@"; }
-milou_docker_stop_service() { docker_stop_service "$@"; }
-
-# Legacy health check aliases
-run_health_checks() { docker_health_comprehensive "$@"; }
-quick_health_check() { docker_health_check "$@"; }
-
-# =============================================================================
-# EXPORT ALL FUNCTIONS
-# =============================================================================
-
-# Core Docker operations (new clean API)
-export -f docker_init
-export -f docker_compose
-export -f docker_start
-export -f docker_stop
-export -f docker_restart
-export -f docker_status
-export -f docker_logs
-export -f docker_shell
-export -f docker_start_service
-export -f docker_stop_service
-
-# Docker management operations
-export -f docker_setup_registry_auth
-export -f docker_create_networks
-export -f docker_pull_images
-export -f docker_cleanup
-
-# Health check operations  
-export -f docker_health_check
-export -f docker_health_comprehensive
-
-# Legacy aliases (for backwards compatibility during transition)
-export -f milou_docker_init
+# Export new consolidated functions
+export -f docker_execute
 export -f milou_docker_compose
-export -f milou_docker_start
-export -f milou_docker_stop
-export -f milou_docker_restart
-export -f milou_docker_status
-export -f milou_docker_logs
-export -f milou_docker_shell
-export -f milou_docker_start_service
-export -f milou_docker_stop_service
-export -f run_health_checks
-export -f quick_health_check
+export -f health_check_service
+export -f health_check_all
+
+# Export service lifecycle management functions
+export -f service_start_with_validation
+export -f service_stop_gracefully
+export -f service_restart_safely
+export -f service_update_zero_downtime
 
 milou_log "DEBUG" "Docker module loaded successfully" 

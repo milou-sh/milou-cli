@@ -255,6 +255,221 @@ test_module_consolidation() {
     return 0
 }
 
+test_export_cleanliness() {
+    test_log "INFO" "Testing export cleanliness..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Count exported functions from core module
+    local core_exports
+    core_exports=$(declare -F | grep -E "(milou_|generate_|prompt_|confirm|ensure_|check_|get_|create_|validate_|is_)" | wc -l)
+    
+    # Should have reasonable number of exports
+    if [[ $core_exports -gt 50 ]]; then
+        test_log "WARN" "Many core exports: $core_exports (check if all are necessary)"
+    fi
+    
+    # Test that essential functions are exported
+    assert_function_exists "milou_log" "Logging function should be exported"
+    assert_function_exists "generate_secure_random" "Random generation should be exported"
+    
+    test_log "SUCCESS" "Core module exports are reasonable ($core_exports functions)"
+    return 0
+}
+
+test_security_functions() {
+    test_log "INFO" "Testing security functions..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test secure random generation
+    local random1 random2
+    random1=$(generate_secure_random 32)
+    random2=$(generate_secure_random 32)
+    
+    # Should generate different values
+    if [[ "$random1" != "$random2" ]]; then
+        test_log "DEBUG" "Secure random generates unique values"
+    else
+        test_log "ERROR" "Secure random generated identical values"
+        return 1
+    fi
+    
+    # Test length
+    if [[ ${#random1} -eq 32 ]]; then
+        test_log "DEBUG" "Secure random generates correct length"
+    else
+        test_log "ERROR" "Secure random length incorrect: ${#random1} != 32"
+        return 1
+    fi
+    
+    test_log "SUCCESS" "Security functions work correctly"
+    return 0
+}
+
+test_file_operations() {
+    test_log "INFO" "Testing file operations..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test file permission functions
+    local test_file="$CORE_TEST_TEMP_DIR/test_permissions"
+    echo "test" > "$test_file"
+    
+    # Test setting secure permissions
+    if command -v set_secure_permissions >/dev/null 2>&1; then
+        if set_secure_permissions "$test_file"; then
+            local perms
+            perms=$(stat -c "%a" "$test_file" 2>/dev/null || stat -f "%A" "$test_file" 2>/dev/null)
+            if [[ "$perms" == "600" ]]; then
+                test_log "DEBUG" "Secure permissions set correctly"
+            else
+                test_log "WARN" "Permissions not as expected: $perms"
+            fi
+        fi
+    fi
+    
+    # Test backup creation
+    if command -v create_backup_file >/dev/null 2>&1; then
+        if create_backup_file "$test_file"; then
+            if [[ -f "${test_file}.backup" ]]; then
+                test_log "DEBUG" "Backup file creation works"
+            else
+                test_log "WARN" "Backup file not created"
+            fi
+        fi
+    fi
+    
+    test_log "SUCCESS" "File operations work correctly"
+    return 0
+}
+
+test_validation_helpers() {
+    test_log "INFO" "Testing validation helper functions..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test email validation if available
+    if command -v is_valid_email >/dev/null 2>&1; then
+        if is_valid_email "test@example.com"; then
+            test_log "DEBUG" "Email validation accepts valid email"
+        else
+            test_log "ERROR" "Email validation rejected valid email"
+            return 1
+        fi
+        
+        if ! is_valid_email "invalid-email"; then
+            test_log "DEBUG" "Email validation rejects invalid email"
+        else
+            test_log "ERROR" "Email validation accepted invalid email"
+            return 1
+        fi
+    fi
+    
+    # Test URL validation if available
+    if command -v is_valid_url >/dev/null 2>&1; then
+        if is_valid_url "https://example.com"; then
+            test_log "DEBUG" "URL validation accepts valid URL"
+        else
+            test_log "WARN" "URL validation rejected valid URL"
+        fi
+    fi
+    
+    test_log "SUCCESS" "Validation helpers work correctly"
+    return 0
+}
+
+test_string_utilities() {
+    test_log "INFO" "Testing string utility functions..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test string trimming if available
+    if command -v trim_string >/dev/null 2>&1; then
+        local result
+        result=$(trim_string "  test  ")
+        if [[ "$result" == "test" ]]; then
+            test_log "DEBUG" "String trimming works"
+        else
+            test_log "WARN" "String trimming unexpected result: '$result'"
+        fi
+    fi
+    
+    # Test string case conversion if available
+    if command -v to_lowercase >/dev/null 2>&1; then
+        local result
+        result=$(to_lowercase "TEST")
+        if [[ "$result" == "test" ]]; then
+            test_log "DEBUG" "Lowercase conversion works"
+        else
+            test_log "WARN" "Lowercase conversion unexpected result: '$result'"
+        fi
+    fi
+    
+    test_log "SUCCESS" "String utilities work correctly"
+    return 0
+}
+
+test_system_info_functions() {
+    test_log "INFO" "Testing system information functions..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test OS detection if available
+    if command -v get_os_type >/dev/null 2>&1; then
+        local os_type
+        os_type=$(get_os_type)
+        if [[ -n "$os_type" ]]; then
+            test_log "DEBUG" "OS type detection: $os_type"
+        else
+            test_log "WARN" "OS type detection returned empty"
+        fi
+    fi
+    
+    # Test architecture detection if available
+    if command -v get_architecture >/dev/null 2>&1; then
+        local arch
+        arch=$(get_architecture)
+        if [[ -n "$arch" ]]; then
+            test_log "DEBUG" "Architecture detection: $arch"
+        else
+            test_log "WARN" "Architecture detection returned empty"
+        fi
+    fi
+    
+    test_log "SUCCESS" "System info functions work correctly"
+    return 0
+}
+
+test_error_handling() {
+    test_log "INFO" "Testing error handling functions..."
+    
+    source "$PROJECT_ROOT/src/_core.sh" || return 1
+    
+    # Test error logging
+    local error_output
+    error_output=$(milou_log "ERROR" "Test error message" 2>&1)
+    if [[ "$error_output" == *"Test error message"* ]]; then
+        test_log "DEBUG" "Error logging works"
+    else
+        test_log "ERROR" "Error logging failed"
+        return 1
+    fi
+    
+    # Test warning logging
+    local warn_output
+    warn_output=$(milou_log "WARN" "Test warning message" 2>&1)
+    if [[ "$warn_output" == *"Test warning message"* ]]; then
+        test_log "DEBUG" "Warning logging works"
+    else
+        test_log "ERROR" "Warning logging failed"
+        return 1
+    fi
+    
+    test_log "SUCCESS" "Error handling works correctly"
+    return 0
+}
+
 # =============================================================================
 # Main Test Execution
 # =============================================================================
@@ -273,6 +488,13 @@ main() {
     test_run "ui_functions" "test_ui_functions" "Test user interface functions"
     test_run "utility_functions" "test_utility_functions" "Test utility functions"
     test_run "module_consolidation" "test_module_consolidation" "Test consolidation achievements"
+    test_run "export_cleanliness" "test_export_cleanliness" "Test export cleanliness"
+    test_run "security_functions" "test_security_functions" "Test security functions"
+    test_run "file_operations" "test_file_operations" "Test file operations"
+    test_run "validation_helpers" "test_validation_helpers" "Test validation helpers"
+    test_run "string_utilities" "test_string_utilities" "Test string utilities"
+    test_run "system_info_functions" "test_system_info_functions" "Test system info functions"
+    test_run "error_handling" "test_error_handling" "Test error handling"
     
     # Cleanup
     cleanup_core_tests

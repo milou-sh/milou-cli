@@ -1,0 +1,12 @@
+# Milou CLI Performance Benchmarks
+Generated: Fri May 30 07:42:48 PM CEST 2025
+
+## CLI Startup Performance
+- Average startup time: 283ms
+- Target: <2000ms
+- Status: ✅ TARGET ACHIEVED
+
+## State Detection Performance
+- Average state detection time: 471ms
+- Target: <1000ms
+- Status: ✅ TARGET ACHIEVED

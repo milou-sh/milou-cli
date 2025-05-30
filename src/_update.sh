@@ -231,9 +231,13 @@ _milou_update_selective_services() {
         if command -v milou_docker_start_service >/dev/null 2>&1; then
             milou_docker_start_service "$service"
         else
-            # Use docker compose to start specific service
-            if command -v milou_docker_compose >/dev/null 2>&1; then
-                milou_docker_compose up -d "$service"
+            # Use consolidated docker execute function
+            if command -v docker_execute >/dev/null 2>&1; then
+                docker_execute "start" "$service" "false"
+            else
+                # Fallback for standalone execution
+                milou_log "WARN" "Docker execute function not available, using fallback"
+                docker compose up -d "$service"
             fi
         fi
     done
@@ -249,11 +253,12 @@ _milou_update_all_services() {
     
     milou_log "INFO" "🔄 Performing full system update to version: $target_version"
     
-    # Stop all services gracefully
-    milou_log "INFO" "🛑 Stopping all services..."
-    if command -v milou_docker_stop >/dev/null 2>&1; then
-        milou_docker_stop
+    # Stop services during update
+    milou_log "INFO" "⏸️  Stopping services for update..."
+    if command -v docker_execute >/dev/null 2>&1; then
+        docker_execute "stop" "" "false"
     else
+        # Fallback for standalone execution
         docker compose down 2>/dev/null || true
     fi
     
@@ -265,8 +270,12 @@ _milou_update_all_services() {
     if command -v milou_docker_start >/dev/null 2>&1; then
         milou_docker_start
     else
-        if command -v milou_docker_compose >/dev/null 2>&1; then
-            milou_docker_compose up -d
+        if command -v docker_execute >/dev/null 2>&1; then
+            docker_execute "start" "" "false"
+        else
+            # Fallback for standalone execution
+            milou_log "WARN" "Docker execute function not available, using fallback"
+            docker compose up -d
         fi
     fi
     

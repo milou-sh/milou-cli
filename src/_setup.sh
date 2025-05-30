@@ -268,7 +268,13 @@ setup_run() {
     
     # Step 2: Prerequisites Assessment
     setup_announce_step 2 "Prerequisites Assessment" "Checking what needs to be installed" 
-    setup_assess_prerequisites || true  # Always continue regardless of result
+    if ! setup_assess_prerequisites; then
+        setup_show_error "Prerequisites assessment failed" "Could not determine system prerequisites" \
+            "Check system permissions" \
+            "Ensure Docker is accessible" \
+            "Contact support if issues persist"
+        return 1
+    fi
     
     # Step 3: Setup Mode Determination
     setup_announce_step 3 "Setup Mode Selection" "Choosing the best setup approach" 
@@ -497,36 +503,10 @@ setup_check_existing_installation() {
     fi
 }
 
-# Check dependency installation status
+# Check dependency installation status - SIMPLIFIED using unified validation
 setup_check_dependencies_status() {
-    local missing_deps=()
-    
-    # Check Docker
-    if ! command -v docker >/dev/null 2>&1; then
-        missing_deps+=("docker")
-    elif ! docker version >/dev/null 2>&1; then
-        missing_deps+=("docker-service")
-    fi
-    
-    # Check Docker Compose
-    if ! docker compose version >/dev/null 2>&1; then
-        missing_deps+=("docker-compose")
-    fi
-    
-    # Check basic tools
-    for tool in curl wget jq openssl; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            missing_deps+=("$tool")
-        fi
-    done
-    
-    if [[ ${#missing_deps[@]} -eq 0 ]]; then
-        milou_log "DEBUG" "All dependencies are installed"
-        return 0
-    else
-        milou_log "DEBUG" "Missing dependencies: ${missing_deps[*]}"
-        return 1
-    fi
+    # Use unified validation system instead of duplicating logic
+    validate_system_dependencies "basic" "unknown" "true"
 }
 
 # Check user management status
@@ -556,43 +536,16 @@ setup_check_user_status() {
 # PREREQUISITES ASSESSMENT FUNCTIONS
 # =============================================================================
 
-# Assess system prerequisites - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Assess system prerequisites - SIMPLIFIED using unified validation
 setup_assess_prerequisites() {
     milou_log "STEP" "Step 2: Prerequisites Assessment"
     
-    local critical_missing=()
-    local optional_missing=()
-    
-    # Critical prerequisites
-    if ! command -v docker >/dev/null 2>&1; then
-        critical_missing+=("docker")
-    fi
-    
-    if ! docker compose version >/dev/null 2>&1; then
-        critical_missing+=("docker-compose")
-    fi
-    
-    # Optional but recommended
-    for tool in curl wget jq openssl; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            optional_missing+=("$tool")
-        fi
-    done
-    
-    # Report status
-    if [[ ${#critical_missing[@]} -eq 0 ]]; then
-        milou_log "SUCCESS" "✓ All critical prerequisites satisfied"
-        if [[ ${#optional_missing[@]} -gt 0 ]]; then
-            milou_log "WARN" "✓ Optional tools missing: ${optional_missing[*]}"
-            milou_log "INFO" "✓ These will be installed if needed during setup"
-        fi
+    # Use unified validation with install mode for complete checking
+    if validate_system_dependencies "install" "unknown" "false"; then
+        milou_log "SUCCESS" "✓ All prerequisites satisfied"
         return 0
     else
-        milou_log "INFO" "✓ Critical prerequisites to be installed: ${critical_missing[*]}"
-        if [[ ${#optional_missing[@]} -gt 0 ]]; then
-            milou_log "INFO" "✓ Optional tools to be installed: ${optional_missing[*]}"
-        fi
-        milou_log "INFO" "✓ Don't worry - setup will install these automatically"
+        milou_log "INFO" "✓ Missing prerequisites will be installed during setup"
         return 1  # Still return 1 to indicate missing deps, but setup continues
     fi
 }
@@ -1211,7 +1164,7 @@ setup_validate_system_readiness() {
     fi
     
     # Check Docker access
-    if ! validate_docker_access "true"; then
+    if ! validate_system_dependencies "basic" "unknown" "false"; then
         milou_log "ERROR" "Docker validation failed"
         ((errors++))
     fi
@@ -1506,7 +1459,7 @@ handle_setup_modular() {
                 preserve_creds="true"
                 shift
                 ;;
-            --new-creds|--new-credentials)
+            --new-creds|--new-credentials|--force-new-creds)
                 preserve_creds="false"
                 shift
                 ;;
@@ -1595,7 +1548,8 @@ show_setup_help() {
     echo ""
     echo "CREDENTIAL OPTIONS:"
     echo "  --preserve-creds       Preserve existing credentials (recommended for updates)"
-    echo "  --new-creds           Generate new credentials (will affect existing data!)"
+    echo "  --new-creds            Generate new credentials (⚠️  may affect data access)"
+    echo "  --force-new-creds      Force new credentials even on existing installations"
     echo ""
     echo "INSTALLATION OPTIONS:"
     echo "  --clean               Clean install - DELETE ALL EXISTING DATA"
@@ -1607,130 +1561,27 @@ show_setup_help() {
     echo "  --help, -h            Show this help"
     echo ""
     echo "EXAMPLES:"
-    echo "  ./milou.sh setup                           # Interactive setup with credential preservation"
+    echo "  ./milou.sh setup                           # Smart setup (preserves credentials automatically)"
     echo "  ./milou.sh setup --automated               # Automated setup using environment variables"
     echo "  ./milou.sh setup --preserve-creds          # Explicitly preserve existing credentials"
-    echo "  ./milou.sh setup --new-creds               # Generate new credentials (WARNING: affects data)"
-    echo "  ./milou.sh setup --clean                   # Clean install (WARNING: deletes all data)"
+    echo "  ./milou.sh setup --force-new-creds         # Generate new credentials (⚠️  affects data)"
+    echo "  ./milou.sh setup --clean                   # Clean install (⚠️  deletes all data)"
     echo ""
-    echo "CREDENTIAL PRESERVATION:"
-    echo "  ✓ UPDATE: Credentials are preserved by default to protect your data"
-    echo "  ✓ FRESH INSTALL: New credentials are generated for security"
-    echo "  ✓  OVERRIDE: Use --new-creds to force new credentials (may affect data access)"
+    echo "🔒 INTELLIGENT CREDENTIAL MANAGEMENT:"
+    echo "  ✅ EXISTING INSTALLATION: Credentials preserved automatically (safe default)"
+    echo "  ✅ FRESH INSTALLATION: New credentials generated securely"
+    echo "  ⚠️  OVERRIDE: Use --force-new-creds to force new credentials (may break data access)"
+    echo "  💡 TIP: The system automatically detects your situation and chooses the safest option"
     echo ""
     echo "For more information, see: docs/USER_GUIDE.md"
 }
 
 # =============================================================================
-# EXPORT ALL FUNCTIONS
+# EXPORT ESSENTIAL FUNCTIONS ONLY
 # =============================================================================
 
-# Main setup orchestration
-export -f setup_run
-
-# System analysis functions
-export -f setup_analyze_system
-export -f setup_detect_fresh_server
-export -f setup_check_existing_installation
-export -f setup_check_dependencies_status
-export -f setup_check_user_status
-
-# Prerequisites assessment
-export -f setup_assess_prerequisites
-
-# Setup mode determination
-export -f setup_determine_mode
-export -f setup_can_run_automated
-
-# Dependencies installation
-export -f setup_install_dependencies
-export -f setup_install_dependencies_interactive
-export -f setup_install_dependencies_automated
-export -f setup_install_dependencies_smart
-export -f setup_install_dependencies_core
-export -f setup_install_docker
-export -f setup_install_docker_compose
-export -f setup_install_system_tools
-
-# User management
-export -f setup_manage_user
-export -f setup_create_milou_user
-export -f setup_configure_current_user
-
-# Configuration generation
-export -f setup_generate_configuration
-export -f setup_generate_configuration_interactive
-export -f setup_generate_configuration_automated
-export -f setup_generate_configuration_smart
-
-# Validation and service startup
-export -f setup_validate_and_start_services
-export -f setup_validate_system_readiness
-export -f setup_configure_ssl
-export -f setup_generate_basic_ssl_certificates
-export -f setup_prepare_docker_environment
-export -f setup_start_services
-export -f setup_validate_service_health
-
-# Completion and reporting
-export -f setup_display_completion_report
-
-# Container management
-export -f setup_force_container_recreation
-
-# Setup command handlers
+# Main setup functions
 export -f handle_setup_modular
 export -f show_setup_help
-
-# Legacy aliases (for backwards compatibility during transition)
-export -f setup_run_configuration_wizard
-export -f setup_final_validation
-
-# Force clean restart when credentials change
-setup_force_container_recreation() {
-    local quiet="${1:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "✓ Forcing complete system recreation for credential updates"
-    
-    # Stop all containers first
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Stopping all containers..."
-    docker compose down --remove-orphans --volumes 2>/dev/null || true
-    
-    # Force stop any remaining containers
-    local running_containers=$(docker ps -q --filter "name=milou")
-    if [[ -n "$running_containers" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Force stopping remaining containers"
-        echo "$running_containers" | xargs docker stop 2>/dev/null || true
-        echo "$running_containers" | xargs docker rm -f 2>/dev/null || true
-    fi
-    
-    # Clean up ALL volumes related to milou (this is critical for credential updates)
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Cleaning up all data volumes for fresh initialization..."
-    
-    # Remove all milou-related volumes
-    local milou_volumes=$(docker volume ls -q | grep -E "milou|static" 2>/dev/null || true)
-    if [[ -n "$milou_volumes" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing volumes: $(echo $milou_volumes | tr '\n' ' ')"
-        echo "$milou_volumes" | xargs docker volume rm -f 2>/dev/null || true
-    fi
-    
-    # Also clean up any anonymous volumes that might exist
-    docker volume prune -f >/dev/null 2>&1 || true
-    
-    # Clean up networks
-    docker network prune -f >/dev/null 2>&1 || true
-    
-    # Clean up any orphaned containers
-    docker container prune -f >/dev/null 2>&1 || true
-    
-    # Ensure docker-compose file exists and pull latest images
-    if [[ -f "docker-compose.yml" ]] || [[ -f "static/docker-compose.yml" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Pulling latest images to ensure fresh start"
-        docker compose pull >/dev/null 2>&1 || true
-    fi
-    
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✓ Complete system cleanup finished - ready for fresh initialization"
-    return 0
-}
 
 milou_log "DEBUG" "Setup module loaded successfully" 

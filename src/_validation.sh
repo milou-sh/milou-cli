@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # =============================================================================
-# Milou CLI - Validation Module
-# Consolidated validation functions to eliminate code duplication
-# Version: 3.1.0 - Refactored Edition
+# Milou CLI - Unified Validation Module
+# Consolidated validation system to eliminate code duplication
+# Version: 4.0.0 - State-Based Architecture
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly
@@ -18,7 +18,7 @@ if [[ "${MILOU_VALIDATION_LOADED:-}" == "true" ]]; then
 fi
 readonly MILOU_VALIDATION_LOADED="true"
 
-# Ensure core module is loaded for logging
+# Ensure core modules are loaded
 if [[ "${MILOU_CORE_LOADED:-}" != "true" ]]; then
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     source "${script_dir}/_core.sh" || {
@@ -26,6 +26,281 @@ if [[ "${MILOU_CORE_LOADED:-}" != "true" ]]; then
         return 1
     }
 fi
+
+# =============================================================================
+# UNIFIED SYSTEM VALIDATION
+# =============================================================================
+
+# Master validation function - consolidates all duplicate logic
+validate_system_dependencies() {
+    local mode="${1:-basic}"           # basic, install, update, resume
+    local installation_state="${2:-unknown}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Running system validation (mode: $mode, state: $installation_state)"
+    
+    local errors=0
+    local warnings=0
+    
+    # Mode-specific validation
+    case "$mode" in
+        "basic")
+            # Just check if Docker is accessible
+            if ! _validate_docker_basic "$quiet"; then
+                ((errors++))
+            fi
+            ;;
+        "install")
+            # Full validation for fresh installation
+            if ! _validate_docker_complete "$quiet"; then
+                ((errors++))
+            fi
+            if ! _validate_system_tools "$quiet"; then
+                ((warnings++))  # System tools are warnings, not errors
+            fi
+            ;;
+        "update"|"resume")
+            # Check Docker + existing installation components
+            if ! _validate_docker_basic "$quiet"; then
+                ((errors++))
+            fi
+            if [[ "$installation_state" == *"configured"* ]] || [[ "$installation_state" == *"running"* ]]; then
+                if ! _validate_existing_installation "$quiet"; then
+                    ((warnings++))
+                fi
+            fi
+            ;;
+        "repair")
+            # Comprehensive validation for repair mode
+            if ! _validate_docker_complete "$quiet"; then
+                ((errors++))
+            fi
+            if ! _validate_existing_installation "$quiet"; then
+                ((warnings++))  # Existing installation issues are expected in repair
+            fi
+            ;;
+        *)
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Unknown validation mode: $mode"
+            if ! _validate_docker_basic "$quiet"; then
+                ((errors++))
+            fi
+            ;;
+    esac
+    
+    # Report results
+    if [[ $errors -eq 0 ]]; then
+        if [[ $warnings -eq 0 ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "System validation passed"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "System validation passed with $warnings warning(s)"
+        fi
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "System validation failed with $errors error(s)"
+        return 1
+    fi
+}
+
+# =============================================================================
+# INTERNAL VALIDATION FUNCTIONS
+# =============================================================================
+
+# Basic Docker validation - minimal requirements
+_validate_docker_basic() {
+    local quiet="${1:-false}"
+    
+    # Check if Docker command exists
+    if ! command -v docker >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker is not installed"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
+        return 1
+    fi
+    
+    # Check daemon access
+    if ! docker info >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot access Docker daemon"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo systemctl start docker"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo usermod -aG docker \$USER && newgrp docker"
+        return 1
+    fi
+    
+    # Check Docker Compose
+    if ! docker compose version >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose not available"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Update Docker to get the compose plugin"
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker basic validation passed"
+    return 0
+}
+
+# Complete Docker validation - includes permissions and resources
+_validate_docker_complete() {
+    local quiet="${1:-false}"
+    
+    # Run basic validation first
+    if ! _validate_docker_basic "$quiet"; then
+        return 1
+    fi
+    
+    local warnings=0
+    
+    # Check user permissions
+    if [[ $EUID -ne 0 ]] && ! groups | grep -q docker 2>/dev/null; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "User not in docker group"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Add user to docker group: sudo usermod -aG docker \$USER"
+        ((warnings++))
+    fi
+    
+    # Check basic connectivity
+    if command -v curl >/dev/null 2>&1; then
+        if ! curl -s --max-time 5 "https://ghcr.io/v2/" >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Container registry not accessible"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check network connectivity"
+            ((warnings++))
+        fi
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker complete validation passed (warnings: $warnings)"
+    return 0
+}
+
+# System tools validation - checks for useful but not critical tools
+_validate_system_tools() {
+    local quiet="${1:-false}"
+    
+    local missing_tools=()
+    local recommended_tools=("curl" "wget" "jq" "openssl")
+    
+    for tool in "${recommended_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    if [[ ${#missing_tools[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "All recommended tools available"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Missing recommended tools: ${missing_tools[*]}"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 These can be installed during setup if needed"
+        return 1
+    fi
+}
+
+# Existing installation validation
+_validate_existing_installation() {
+    local quiet="${1:-false}"
+    
+    local issues=()
+    
+    # Check for configuration file
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        issues+=("missing .env file")
+    fi
+    
+    # Check for Docker Compose file
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
+        issues+=("missing docker-compose.yml")
+    fi
+    
+    # Validate configuration using consolidated function
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" && -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
+        if command -v docker_execute >/dev/null 2>&1; then
+            # Initialize docker context to ensure proper validation
+            if command -v initialize_docker_context >/dev/null 2>&1; then
+                initialize_docker_context "${SCRIPT_DIR:-$(pwd)}/.env" "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" "true"
+            fi
+            
+            if ! docker_execute "validate" "" "true"; then
+                issues+=("invalid Docker Compose configuration")
+            fi
+        else
+            # Fallback validation
+            if ! docker compose --env-file "${SCRIPT_DIR:-$(pwd)}/.env" \
+                               -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" \
+                               config --quiet 2>/dev/null; then
+                issues+=("invalid Docker Compose configuration")
+            fi
+        fi
+    fi
+    
+    if [[ ${#issues[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Existing installation validation passed"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Installation issues: ${issues[*]}"
+        return 1
+    fi
+}
+
+# =============================================================================
+# LEGACY COMPATIBILITY FUNCTIONS - SIMPLIFIED
+# =============================================================================
+
+# Essential legacy functions (simplified versions)
+validate_docker_access() {
+    local check_daemon="${1:-true}"
+    local check_permissions="${2:-true}"
+    local check_compose="${3:-true}"
+    local quiet="${4:-false}"
+    
+    if [[ "$check_permissions" == "true" ]]; then
+        validate_system_dependencies "install" "unknown" "$quiet"
+    else
+        validate_system_dependencies "basic" "unknown" "$quiet"
+    fi
+}
+
+validate_docker_resources() {
+    local quiet="${1:-false}"
+    validate_system_dependencies "basic" "unknown" "$quiet"
+}
+
+validate_docker_compose_config() {
+    local env_file="${1:-${SCRIPT_DIR:-$(pwd)}/.env}"
+    local compose_file="${2:-${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔍 Validating Docker Compose configuration"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Environment: $env_file"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Compose file: $compose_file"
+    
+    # Use consolidated validation if available
+    if command -v docker_execute >/dev/null 2>&1; then
+        # Initialize docker context with specific files
+        if command -v initialize_docker_context >/dev/null 2>&1; then
+            if initialize_docker_context "$env_file" "$compose_file" "$quiet"; then
+                if docker_execute "validate" "" "$quiet"; then
+                    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Docker Compose configuration is valid"
+                    return 0
+                else
+                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Docker Compose configuration is invalid"
+                    return 1
+                fi
+            else
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to initialize Docker context"
+                return 1
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker context initialization not available, using direct validation"
+        fi
+    fi
+    
+    # Fallback to direct validation
+    if docker compose --env-file "$env_file" -f "$compose_file" config --quiet 2>/dev/null; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Docker Compose configuration is valid"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Docker Compose configuration is invalid"
+        return 1
+    fi
+}
+
+# Legacy aliases (will be removed in future versions)
+milou_check_docker_access() { validate_docker_access "$@"; }
+milou_validate_docker_compose_config() { validate_docker_compose_config "$@"; }
 
 # =============================================================================
 # GITHUB TOKEN VALIDATION (Consolidated from 3+ implementations)
@@ -165,207 +440,6 @@ milou_validate_github_token() {
 
 milou_test_github_authentication() {
     test_github_authentication "$@"
-}
-
-# =============================================================================
-# DOCKER VALIDATION (Consolidated from 6+ implementations)
-# =============================================================================
-
-# Check Docker installation and accessibility - SINGLE AUTHORITATIVE IMPLEMENTATION
-validate_docker_access() {
-    local check_daemon="${1:-true}"
-    local check_permissions="${2:-true}"
-    local check_compose="${3:-true}"
-    local quiet="${4:-false}"
-    
-    local errors=0
-    
-    # Check if Docker command exists
-    if ! command -v docker >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker is not installed"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
-        ((errors++))
-    fi
-    
-    # Check daemon access
-    if [[ "$check_daemon" == "true" ]]; then
-        if ! docker info >/dev/null 2>&1; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot access Docker daemon"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo systemctl start docker"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try: sudo usermod -aG docker \$USER && newgrp docker"
-            ((errors++))
-        else
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker daemon accessible"
-        fi
-    fi
-    
-    # Check user permissions
-    if [[ "$check_permissions" == "true" ]]; then
-        if [[ $EUID -ne 0 ]] && ! groups | grep -q docker; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "User not in docker group"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Add user to docker group: sudo usermod -aG docker \$USER"
-            ((errors++))
-        else
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker permissions OK"
-        fi
-    fi
-    
-    # Check Docker Compose
-    if [[ "$check_compose" == "true" ]]; then
-        if ! docker compose version >/dev/null 2>&1; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose not available"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Update Docker to get the compose plugin"
-            ((errors++))
-        else
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Compose available"
-        fi
-    fi
-    
-    if [[ $errors -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker access validation passed"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker validation failed with $errors error(s)"
-        return 1
-    fi
-}
-
-# Check Docker resource usage and system health
-validate_docker_resources() {
-    local check_disk="${1:-true}"
-    local check_memory="${2:-true}"
-    local check_connectivity="${3:-true}"
-    local quiet="${4:-false}"
-    
-    local warnings=0
-    
-    if ! docker info >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker daemon not accessible for resource checking"
-        return 1
-    fi
-    
-    # Check disk usage
-    if [[ "$check_disk" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking Docker disk usage..."
-        if docker system df >/dev/null 2>&1; then
-            local disk_usage
-            disk_usage=$(docker system df 2>/dev/null)
-            
-            # Extract total size and check if cleanup is needed
-            local total_size
-            total_size=$(echo "$disk_usage" | grep "Total" | awk '{print $3}' | sed 's/[^0-9.]//g' 2>/dev/null || echo "0")
-            if [[ -n "$total_size" ]] && command -v bc >/dev/null 2>&1; then
-                if (( $(echo "$total_size > 10" | bc -l 2>/dev/null || echo "0") )); then
-                    [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker using significant disk space (${total_size}GB)"
-                    [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Consider running: docker system prune -f"
-                    ((warnings++))
-                fi
-            fi
-        else
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Cannot check Docker disk usage"
-            ((warnings++))
-        fi
-    fi
-    
-    # Check memory usage of running containers
-    if [[ "$check_memory" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking container memory usage..."
-        local container_count
-        container_count=$(docker ps --format "{{.Names}}" 2>/dev/null | wc -l || echo "0")
-        
-        if [[ "$container_count" -gt 0 ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found $container_count running containers"
-            
-            # Check for containers using excessive memory (basic check)
-            if docker stats --no-stream --format "{{.MemUsage}}" >/dev/null 2>&1; then
-                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Container memory stats accessible"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Cannot access container memory stats"
-                ((warnings++))
-            fi
-        else
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "No running containers found"
-        fi
-    fi
-    
-    # Check network connectivity to registries
-    if [[ "$check_connectivity" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking registry connectivity..."
-        if command -v curl >/dev/null 2>&1; then
-            # Test GitHub Container Registry
-            local ghcr_response
-            ghcr_response=$(curl -s -o /dev/null -w "%{http_code}" "https://ghcr.io/v2/" 2>/dev/null || echo "000")
-            if [[ "$ghcr_response" == "200" || "$ghcr_response" == "401" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "TRACE" "GitHub Container Registry accessible"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub Container Registry not accessible (HTTP: $ghcr_response)"
-                ((warnings++))
-            fi
-            
-            # Test Docker Hub connectivity
-            local dockerhub_response
-            dockerhub_response=$(curl -s -o /dev/null -w "%{http_code}" "https://registry-1.docker.io/v2/" 2>/dev/null || echo "000")
-            if [[ "$dockerhub_response" == "200" || "$dockerhub_response" == "401" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Hub accessible"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker Hub not accessible (HTTP: $dockerhub_response)"
-                ((warnings++))
-            fi
-        else
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "curl not available for connectivity testing"
-            ((warnings++))
-        fi
-    fi
-    
-    if [[ $warnings -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker resource check passed"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker resource check completed with $warnings warning(s)"
-        return 0  # Return 0 for warnings, 1 only for critical errors
-    fi
-}
-
-# Validate Docker Compose configuration
-validate_docker_compose_config() {
-    local env_file="$1"
-    local compose_file="$2"
-    local quiet="${3:-false}"
-    
-    if [[ ! -f "$env_file" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Environment file not found: $env_file"
-        return 1
-    fi
-    
-    if [[ ! -f "$compose_file" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Compose file not found: $compose_file"
-        return 1
-    fi
-    
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing Docker Compose configuration..."
-    
-    if docker compose --env-file "$env_file" -f "$compose_file" config --quiet; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker Compose configuration is valid"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose configuration is invalid"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your environment file: $env_file"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your compose file: $compose_file"
-        return 1
-    fi
-}
-
-# Legacy aliases for backwards compatibility (will be removed after refactoring)
-milou_check_docker_access() {
-    validate_docker_access "$@"
-}
-
-milou_check_docker_resources() {
-    validate_docker_resources "$@"
-}
-
-milou_validate_docker_compose_config() {
-    validate_docker_compose_config "$@"
 }
 
 # =============================================================================
@@ -662,33 +736,17 @@ milou_check_connectivity() {
 }
 
 # =============================================================================
-# EXPORT ALL FUNCTIONS
+# EXPORT ESSENTIAL FUNCTIONS ONLY
 # =============================================================================
 
-# GitHub validation (consolidated)
-export -f validate_github_token
-export -f milou_validate_github_token
-export -f test_github_authentication
-export -f milou_test_github_authentication
-
-# Docker validation (consolidated)
+# Core validation functions (no aliases needed)
+export -f validate_system_dependencies
 export -f validate_docker_access
-export -f milou_check_docker_access
-export -f validate_docker_resources
-export -f milou_check_docker_resources
 export -f validate_docker_compose_config
-export -f milou_validate_docker_compose_config
-
-# Environment validation (consolidated)
-export -f get_required_environment_variables
+export -f validate_github_token
+export -f test_github_authentication
 export -f validate_environment
-export -f milou_config_validate_environment_production
-export -f milou_config_validate_environment_essential
-
-# Network validation (consolidated)
 export -f validate_port_availability
-export -f milou_check_port_availability
 export -f test_connectivity
-export -f milou_check_connectivity
 
 milou_log "DEBUG" "Validation module loaded successfully" 

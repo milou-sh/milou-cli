@@ -58,80 +58,91 @@ declare -gA PRESERVED_CONFIG=()
 # CONFIGURATION GENERATION FUNCTIONS
 # =============================================================================
 
-# Main configuration generation function - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Consolidated configuration generation function with enterprise-grade safety
 config_generate() {
-    local domain="$1"
-    local admin_email="$2"
+    local domain="${1:-localhost}"
+    local admin_email="${2:-admin@localhost}"
     local ssl_mode="${3:-generate}"
-    local use_latest_images="${4:-true}"
+    local quiet="${4:-false}"
     local preserve_credentials="${5:-auto}"
-    local quiet="${6:-false}"
+    local skip_existing="${6:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating configuration with credential preservation"
+    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
     
-    # Detect installation type
-    local installation_type
-    installation_type=$(config_detect_installation_type "$quiet")
+    [[ "$quiet" != "true" ]] && milou_log "STEP" "Configuration Generation"
     
-    # Handle credential preservation logic
-    local should_preserve="false"
-    
-    if [[ "$preserve_credentials" == "auto" ]]; then
-        # Auto-detect: preserve for updates, generate new for fresh installs
-        if [[ "$installation_type" == "update" ]]; then
-            should_preserve="true"
-        else
-            should_preserve="false"
-        fi
-    elif [[ "$preserve_credentials" == "true" ]]; then
-        should_preserve="true"
-    elif [[ "$preserve_credentials" == "false" ]]; then
-        should_preserve="false"
-        # Warn user if this is an update with existing data
-        if [[ "$installation_type" == "update" ]]; then
-            if ! config_warn_credential_impact "$installation_type" "true"; then
-                return 1
-            fi
+    # ENTERPRISE SAFETY: Always backup existing credentials first
+    if [[ -f "$env_file" ]]; then
+        if ! config_backup_credentials "$env_file" "" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to backup existing credentials - ABORTING for safety"
+            return 1
         fi
     fi
     
-    # Show credential preservation status
-    config_warn_credential_impact "$installation_type" "$([[ "$should_preserve" == "false" ]] && echo "true" || echo "false")"
+    # Determine preservation strategy
+    local should_preserve="false"
+    if [[ "$preserve_credentials" == "auto" ]]; then
+        if [[ -f "$env_file" ]]; then
+            should_preserve="true"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 AUTO: Preserving existing credentials (safe update mode)"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🆕 AUTO: Generating new credentials (fresh installation)"
+        fi
+    elif [[ "$preserve_credentials" == "true" ]]; then
+        should_preserve="true"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 FORCED: Preserving existing credentials"
+    elif [[ "$preserve_credentials" == "false" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "🚨 FORCED: Generating new credentials (will affect data access!)"
+    fi
     
     # Preserve existing credentials if needed
     if [[ "$should_preserve" == "true" ]]; then
         config_preserve_existing_credentials "${SCRIPT_DIR:-$(pwd)}/.env" "$quiet"
     fi
     
-    # Generate credentials (using preserved ones where available)
-    local credentials
+    # Generate configuration
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "📝 Generating configuration..."
+    
     if [[ "$should_preserve" == "true" && "${CREDENTIALS_PRESERVED:-false}" == "true" ]]; then
-        credentials=$(config_generate_credentials_with_preservation "$quiet")
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Generated configuration preserving existing credentials"
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Using preserved credentials for safe update"
     else
-        credentials=$(config_generate_credentials "$quiet")
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Generated configuration with new credentials"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Generating fresh credentials"
     fi
     
-    # Create environment file
-    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "$use_latest_images" "$credentials" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Configuration file created successfully"
+    # Generate the actual configuration
+    if config_write_env_file "$domain" "$admin_email" "$ssl_mode" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Configuration written successfully"
         
-        # Show credential preservation summary
-        if [[ "$should_preserve" == "true" ]]; then
-            echo ""
-            echo "🔐 CREDENTIAL PRESERVATION SUMMARY"
-            echo "================================="
-            echo "✅ Existing credentials preserved - your data remains accessible"
-            echo "✅ Services will start with existing database connections"
-            echo "✅ Users can continue to log in with existing accounts"
-            echo "✅ API integrations will continue to work"
-            echo ""
+        # ENTERPRISE VALIDATION: Verify no credentials were lost
+        if [[ -n "${MILOU_CREDENTIAL_BACKUP:-}" ]]; then
+            if ! config_validate_credential_integrity "$MILOU_CREDENTIAL_BACKUP" "$env_file" "$quiet"; then
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "🚨 CRITICAL: Credential integrity check FAILED!"
+                
+                # Automatic rollback to protect client data
+                if [[ "${MILOU_AUTO_ROLLBACK:-true}" == "true" ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "WARN" "🛡️  Initiating automatic rollback to protect client data..."
+                    if config_rollback_credentials "$MILOU_CREDENTIAL_BACKUP" "$env_file" "$quiet"; then
+                        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Rollback completed - client data protected"
+                        return 1  # Still return failure so calling process knows something went wrong
+                    else
+                        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ CRITICAL: Rollback failed - manual intervention required!"
+                        return 1
+                    fi
+                else
+                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Auto-rollback disabled - manual intervention required"
+                    return 1
+                fi
+            fi
         fi
         
         return 0
     else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Configuration file creation failed"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Configuration generation failed"
+        
+        # If we have a backup and generation failed, offer rollback
+        if [[ -n "${MILOU_CREDENTIAL_BACKUP:-}" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Backup available for rollback if needed"
+        fi
         return 1
     fi
 }
@@ -1193,6 +1204,129 @@ config_migrate() {
 }
 
 # =============================================================================
+# ENTERPRISE-GRADE CREDENTIAL PRESERVATION SYSTEM
+# =============================================================================
+
+# Backup credentials before any changes - FAIL-SAFE MECHANISM
+config_backup_credentials() {
+    local env_file="${1:-${SCRIPT_DIR}/.env}"
+    local backup_dir="${2:-${SCRIPT_DIR}/backups/credentials}"
+    local quiet="${3:-false}"
+    
+    if [[ ! -f "$env_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No credentials to backup - fresh installation"
+        return 0
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 Creating credential backup for safety..."
+    
+    # Create backup directory with secure permissions
+    ensure_directory "$backup_dir" "700"
+    
+    # Create timestamp for backup
+    local backup_timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_file="${backup_dir}/credentials_${backup_timestamp}.env"
+    
+    # Copy credentials with secure permissions
+    if cp "$env_file" "$backup_file"; then
+        chmod 600 "$backup_file"
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credentials backed up to: $(basename "$backup_file")"
+        
+        # Keep only last 10 backups to avoid disk bloat
+        find "$backup_dir" -name "credentials_*.env" -type f | sort -r | tail -n +11 | xargs rm -f 2>/dev/null || true
+        
+        # Export backup path for potential rollback
+        export MILOU_CREDENTIAL_BACKUP="$backup_file"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to backup credentials"
+        return 1
+    fi
+}
+
+# Validate that no critical credentials were lost during updates
+config_validate_credential_integrity() {
+    local old_env="${1:-$MILOU_CREDENTIAL_BACKUP}"
+    local new_env="${2:-${SCRIPT_DIR}/.env}"
+    local quiet="${3:-false}"
+    
+    if [[ ! -f "$old_env" ]] || [[ ! -f "$new_env" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Cannot validate credential integrity - missing files"
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Validating credential integrity..."
+    
+    # Critical credentials that should never be lost
+    local critical_creds=(
+        "POSTGRES_PASSWORD"
+        "DB_PASSWORD" 
+        "JWT_SECRET"
+        "SESSION_SECRET"
+        "ENCRYPTION_KEY"
+        "ADMIN_PASSWORD"
+        "REDIS_PASSWORD"
+        "RABBITMQ_PASSWORD"
+    )
+    
+    local missing_creds=()
+    local preserved_count=0
+    
+    for cred in "${critical_creds[@]}"; do
+        local old_value=$(grep "^${cred}=" "$old_env" 2>/dev/null | cut -d'=' -f2-)
+        local new_value=$(grep "^${cred}=" "$new_env" 2>/dev/null | cut -d'=' -f2-)
+        
+        if [[ -n "$old_value" ]]; then
+            if [[ -n "$new_value" ]]; then
+                ((preserved_count++))
+                [[ "$quiet" != "true" ]] && milou_log "TRACE" "✓ $cred preserved"
+            else
+                missing_creds+=("$cred")
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "✗ $cred LOST during update!"
+            fi
+        fi
+    done
+    
+    if [[ ${#missing_creds[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ All critical credentials preserved ($preserved_count found)"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ CRITICAL: ${#missing_creds[@]} credentials lost: ${missing_creds[*]}"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "🚨 CLIENT DATA AT RISK - automatic rollback recommended"
+        return 1
+    fi
+}
+
+# Emergency rollback to previous credentials
+config_rollback_credentials() {
+    local backup_file="${1:-$MILOU_CREDENTIAL_BACKUP}"
+    local target_env="${2:-${SCRIPT_DIR}/.env}"
+    local quiet="${3:-false}"
+    
+    if [[ ! -f "$backup_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "No credential backup available for rollback"
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "WARN" "🚨 EMERGENCY: Rolling back to previous credentials"
+    
+    # Create rollback backup
+    local rollback_backup="${target_env}.rollback_$(date +%s)"
+    cp "$target_env" "$rollback_backup" 2>/dev/null || true
+    
+    # Restore credentials
+    if cp "$backup_file" "$target_env"; then
+        chmod 600 "$target_env"
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credentials rolled back successfully"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💾 Failed config saved as: $(basename "$rollback_backup")"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ CRITICAL: Rollback failed!"
+        return 1
+    fi
+}
+
+# =============================================================================
 # LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
 # =============================================================================
 
@@ -1214,12 +1348,15 @@ validate_config_inputs() { config_validate_inputs "$@"; }
 # EXPORT ALL FUNCTIONS
 # =============================================================================
 
-# Core configuration operations (new clean API)
+# Main configuration functions
 export -f config_generate
 export -f config_validate
-export -f config_backup_single
-export -f config_migrate
 export -f config_show
+
+# Enterprise-grade safety functions
+export -f config_backup_credentials
+export -f config_validate_credential_integrity
+export -f config_rollback_credentials
 
 # Configuration management operations
 export -f config_get_env_variable

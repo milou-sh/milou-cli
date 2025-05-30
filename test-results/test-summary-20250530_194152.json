@@ -1,0 +1,63 @@
+{
+  "timestamp": "20250530_194152",
+  "start_time": "1748626912",
+  "project": "milou-cli",
+  "version": "4.0.0",
+  "test_suites": [
+    {
+      "name": "core-module",
+      "description": "Core functionality and utilities",
+      "result": "PASSED",
+      "duration": 0,
+      "tests_run": 7,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "core-module-20250530_194152.log"
+    },
+    {
+      "name": "docker-module",
+      "description": "Docker operations and management",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 8,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "docker-module-20250530_194152.log"
+    },
+    {
+      "name": "service-lifecycle",
+      "description": "Service lifecycle management functions",
+      "result": "PASSED",
+      "duration": 1,
+      "tests_run": 10,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "service-lifecycle-20250530_194152.log"
+    },
+    {
+      "name": "config-module",
+      "description": "Configuration management",
+      "result": "PASSED",
+      "duration": 2,
+      "tests_run": 9,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "config-module-20250530_194152.log"
+    },
+    {
+      "name": "validation-module",
+      "description": "System validation and checks",
+      "result": "FAILED",
+      "duration": 1,
+      "tests_run": 0,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "log_file": "validation-module-20250530_194152.log"
+    }
+  ]
+}

@@ -43,6 +43,14 @@ if [[ "${MILOU_CONFIG_LOADED:-}" != "true" ]]; then
     }
 fi
 
+if [[ "${MILOU_DOCKER_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_docker.sh" || {
+        echo "ERROR: Cannot load docker module" >&2
+        return 1
+    }
+fi
+
 # =============================================================================
 # SETUP CONSTANTS AND DEFAULTS
 # =============================================================================

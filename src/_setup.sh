@@ -1482,6 +1482,7 @@ handle_setup_modular() {
     local skip_validation="false"
     local preserve_creds="auto"
     local clean="false"
+    local github_token=""
     
     # Parse command line options
     while [[ $# -gt 0 ]]; do
@@ -1523,6 +1524,10 @@ handle_setup_modular() {
                 export MILOU_DEV_MODE=1
                 shift
                 ;;
+            --token)
+                github_token="$2"
+                shift 2
+                ;;
             --help|-h)
                 show_setup_help
                 return 0
@@ -1533,6 +1538,12 @@ handle_setup_modular() {
                 ;;
         esac
     done
+    
+    # Set GitHub token if provided via command line
+    if [[ -n "$github_token" ]]; then
+        export GITHUB_TOKEN="$github_token"
+        milou_log "INFO" "✓ GitHub token provided via command line"
+    fi
     
     # Handle clean install first
     if [[ "$clean" == "true" ]]; then

@@ -77,17 +77,17 @@ setup_show_logo() {
         echo -e "${BOLD}${PURPLE}"
         cat << 'EOF'
 
-    ✓   ✓      ✓ ✓   ✓
-    ✓ ✓     ✓   ✓  
-    ✓     ✓   ✓   ✓  
-    ✓     ✓   ✓   ✓  
-    ✓ ✓ ✓  
-    ✓     ✓ ✓  ✓   
+    ███╗   ███╗██╗██╗      ██████╗ ██╗   ██╗
+    ████╗ ████║██║██║     ██╔═══██╗██║   ██║  
+    ██╔████╔██║██║██║     ██║   ██║██║   ██║  
+    ██║╚██╔╝██║██║██║     ██║   ██║██║   ██║  
+    ██║ ╚═╝ ██║██║███████╗╚██████╔╝╚██████╔╝  
+    ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝  ╚═════╝   
     
-    ✓
-    ✓   Professional Docker Management        ✓
-    ✓   ✓ Simple ✓ Secure ✓ Reliable        ✓
-    ✓
+    ┌─────────────────────────────────────────┐
+    │   🚀 Professional Docker Management     │
+    │   Simple • Secure • Reliable           │
+    └─────────────────────────────────────────┘
 
 EOF
         echo -e "${NC}"
@@ -676,7 +676,13 @@ setup_install_dependencies() {
 
 # Interactive dependencies installation
 setup_install_dependencies_interactive() {
-    milou_log "INFO" "✓ Interactive Dependencies Installation"
+    log_section "▼ Step 4: Dependencies Installation" "Installing Docker and required tools"
+    
+    echo -e "${BOLD}${CYAN}🔧 Required Dependencies:${NC}"
+    echo -e "   • Docker Engine - Container platform"
+    echo -e "   • Docker Compose - Multi-container applications"
+    echo -e "   • System tools - curl, wget, jq, openssl"
+    echo
     
     if ! confirm "Install missing dependencies now?" "Y"; then
         milou_log "INFO" "Dependencies installation skipped by user"
@@ -740,15 +746,24 @@ setup_install_dependencies_core() {
 
 # Install Docker
 setup_install_docker() {
-    milou_log "INFO" "✓ Installing Docker..."
+    milou_log "INFO" "🐳 Installing Docker..."
     
-    # Use official Docker installation script
+    # Show progress indicator for user feedback
+    printf "${CYAN}${BULLET} Installing Docker Engine...${NC}"
+    
+    # Use official Docker installation script with suppressed output
     if command -v curl >/dev/null 2>&1; then
-        if curl -fsSL https://get.docker.com | sh; then
-            systemctl start docker 2>/dev/null || true
-            systemctl enable docker 2>/dev/null || true
-            milou_log "SUCCESS" "✓ Docker installed successfully"
+        if curl -fsSL https://get.docker.com | sh >/dev/null 2>&1; then
+            printf "\r${GREEN}${CHECKMARK} Docker Engine installed successfully${NC}\n"
+            
+            # Start and enable Docker service quietly
+            systemctl start docker >/dev/null 2>&1 || true
+            systemctl enable docker >/dev/null 2>&1 || true
+            
+            milou_log "SUCCESS" "✓ Docker installation completed"
             return 0
+        else
+            printf "\r${RED}${CROSSMARK} Docker installation failed${NC}\n"
         fi
     fi
     
@@ -758,32 +773,45 @@ setup_install_docker() {
 
 # Install Docker Compose
 setup_install_docker_compose() {
-    milou_log "INFO" "✓ Installing Docker Compose..."
+    milou_log "INFO" "🐳 Installing Docker Compose..."
+    
+    printf "${CYAN}${BULLET} Installing Docker Compose plugin...${NC}"
     
     # Try package manager first
+    local install_success=false
     if command -v apt-get >/dev/null 2>&1; then
-        if apt-get update && apt-get install -y docker-compose-plugin; then
-            milou_log "SUCCESS" "✓ Docker Compose plugin installed"
-            return 0
+        if apt-get update >/dev/null 2>&1 && apt-get install -y docker-compose-plugin >/dev/null 2>&1; then
+            install_success=true
         fi
     elif command -v yum >/dev/null 2>&1; then
-        if yum install -y docker-compose-plugin; then
-            milou_log "SUCCESS" "✓ Docker Compose plugin installed"
-            return 0
+        if yum install -y docker-compose-plugin >/dev/null 2>&1; then
+            install_success=true
         fi
     fi
     
+    if [[ "$install_success" == "true" ]]; then
+        printf "\r${GREEN}${CHECKMARK} Docker Compose plugin installed successfully${NC}\n"
+        milou_log "SUCCESS" "✓ Docker Compose plugin installed"
+        return 0
+    fi
+    
+    printf "\r${YELLOW}⚠️  Package manager failed, trying manual installation...${NC}\n"
     milou_log "WARN" "Package manager installation failed, trying manual installation"
     
     # Manual installation fallback
     local compose_version="v2.20.0"
     local compose_url="https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-$(uname -s)-$(uname -m)"
     
+    printf "${CYAN}${BULLET} Downloading Docker Compose binary...${NC}"
+    
     if command -v curl >/dev/null 2>&1; then
-        if curl -L "$compose_url" -o /usr/local/bin/docker-compose; then
+        if curl -L "$compose_url" -o /usr/local/bin/docker-compose >/dev/null 2>&1; then
             chmod +x /usr/local/bin/docker-compose
+            printf "\r${GREEN}${CHECKMARK} Docker Compose installed manually${NC}\n"
             milou_log "SUCCESS" "✓ Docker Compose installed manually"
             return 0
+        else
+            printf "\r${RED}${CROSSMARK} Manual installation failed${NC}\n"
         fi
     fi
     
@@ -793,7 +821,7 @@ setup_install_docker_compose() {
 
 # Install system tools
 setup_install_system_tools() {
-    milou_log "INFO" "✓ Installing system tools..."
+    milou_log "INFO" "🔧 Installing system tools..."
     
     local tools=("curl" "wget" "jq" "openssl")
     local to_install=()
@@ -809,21 +837,36 @@ setup_install_system_tools() {
         return 0
     fi
     
-    milou_log "INFO" "Installing: ${to_install[*]}"
+    printf "${CYAN}${BULLET} Installing: ${to_install[*]}...${NC}"
     
+    local install_success=false
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update && apt-get install -y "${to_install[@]}"
+        if apt-get update >/dev/null 2>&1 && apt-get install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y "${to_install[@]}"
+        if yum install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y "${to_install[@]}"
+        if dnf install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
     else
+        printf "\r${RED}${CROSSMARK} Unsupported package manager${NC}\n"
         milou_log "WARN" "Unsupported package manager"
         return 1
     fi
     
-    milou_log "SUCCESS" "✓ System tools installed"
-    return 0
+    if [[ "$install_success" == "true" ]]; then
+        printf "\r${GREEN}${CHECKMARK} System tools installed successfully${NC}\n"
+        milou_log "SUCCESS" "✓ System tools installed"
+        return 0
+    else
+        printf "\r${RED}${CROSSMARK} Failed to install system tools${NC}\n"
+        milou_log "ERROR" "Failed to install system tools"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -1414,37 +1457,26 @@ setup_start_services() {
     # If no token and we're in interactive mode, prompt for it
     if [[ -z "$github_token" && "$SETUP_CURRENT_MODE" == "$SETUP_MODE_INTERACTIVE" ]]; then
         echo ""
-        echo "✓ GITHUB CONTAINER REGISTRY ACCESS"
-        echo "===================================="
-        echo ""
-        echo "Milou uses private Docker images from GitHub Container Registry."
-        echo "To access these images, you need a GitHub Personal Access Token."
-        echo ""
-        echo "You can either:"
-        echo "1) Enter your GitHub token now (recommended)"
-        echo "2) Skip and set it later in the .env file"
+        log_section "🔐 GitHub Container Registry Access" "Authentication required for private images"
+        
+        echo -e "${BOLD}${CYAN}📦 About GitHub Container Registry:${NC}"
+        echo -e "   • Milou uses private Docker images from GitHub Container Registry"
+        echo -e "   • A Personal Access Token is required for authentication"
+        echo -e "   • You can create one at: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
+        echo
+        echo -e "${BOLD}${YELLOW}📝 Required Token Scopes:${NC}"
+        echo -e "   • ${BOLD}read:packages${NC} - Access to GitHub Packages"
+        echo
+        echo -e "${BOLD}${GREEN}⚡ Quick Setup Options:${NC}"
+        echo -e "   1) Enter your token now (${BOLD}recommended${NC})"
+        echo -e "   2) Skip and configure later in .env file"
         echo ""
         
         if confirm "Do you have a GitHub Personal Access Token?" "Y"; then
             echo ""
-            echo "Enter your GitHub Personal Access Token:"
-            echo "(You can create one at: https://github.com/settings/tokens)"
-            echo "Required scopes: read:packages"
-            echo ""
-            
-            # Ask if user wants to see the token while typing (security vs usability)
-            local show_token="false"
-            if confirm "Do you want to see the token as you type? (less secure but easier)" "N"; then
-                show_token="true"
-            fi
-            
+            echo -e "${BOLD}${CYAN}🔑 Token Input:${NC}"
             echo -ne "GitHub Token: "
-            if [[ "$show_token" == "true" ]]; then
-                read -r github_token
-            else
-                read -rs github_token
-                echo  # New line after hidden input
-            fi
+            read -r github_token
             echo ""
             
             if [[ -n "$github_token" ]]; then
@@ -1515,10 +1547,14 @@ setup_start_services() {
         else
             milou_log "INFO" "Skipping GitHub token setup"
             echo ""
-            echo "✓ To set up authentication later:"
-            echo "  1. Get a token from: https://github.com/settings/tokens"
-            echo "  2. Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
-            echo "  3. Restart services: ./milou.sh restart"
+            log_section "⏭️  Setup Later" "Token configuration postponed"
+            
+            echo -e "${BOLD}${CYAN}📋 How to configure authentication later:${NC}"
+            echo -e "   1. Get a token from: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
+            echo -e "   2. Add to .env file: ${BOLD}GITHUB_TOKEN=ghp_your_token_here${NC}"
+            echo -e "   3. Restart services: ${BOLD}./milou.sh restart${NC}"
+            echo
+            echo -e "${YELLOW}💡 Tip:${NC} Services may fail to start without authentication"
             echo ""
         fi
     elif [[ -n "$github_token" ]]; then

@@ -267,49 +267,49 @@ display_system_versions() {
         local current_version="${!running_var:-}"
         local service_status="${!status_var:-stopped}"
         
-        echo -n "   ${BOLD}├─ ${service}:${NC}"
-        printf "%-12s" ""
+        # Print service name with consistent padding
+        printf "   ${BOLD}├─ %-15s${NC}" "${service}:"
         
         # LOCAL VERSION (current)
         if [[ -n "$current_version" && "$current_version" != "latest" ]]; then
             if [[ "$service_status" == "running" ]]; then
-                echo -n "${GREEN}LOCAL: v$current_version (running)${NC}"
+                echo -en "${GREEN}LOCAL: v$current_version (running)${NC}"
             elif [[ "$service_status" == "restarting" ]]; then
-                echo -n "${YELLOW}LOCAL: v$current_version (restarting)${NC}"
+                echo -en "${YELLOW}LOCAL: v$current_version (restarting)${NC}"
             else
-                echo -n "${RED}LOCAL: v$current_version (stopped)${NC}"
+                echo -en "${RED}LOCAL: v$current_version (stopped)${NC}"
             fi
         else
-            echo -n "${RED}LOCAL: not installed${NC}"
+            echo -en "${RED}LOCAL: not installed${NC}"
         fi
         
-        echo -n " | "
+        echo -en " | "
         
         # REMOTE VERSION (latest available)
         if [[ -n "$github_token" ]]; then
-            echo -n "🌐 "
+            echo -en "🌐 "
             local remote_version
             if remote_version=$(get_latest_registry_version "$service" "$github_token" "true"); then
                 if [[ "$target_version" == "latest" ]]; then
-                    echo "${GREEN}REMOTE: v$remote_version (latest)${NC}"
+                    echo -e "${GREEN}REMOTE: v$remote_version (latest)${NC}"
                 else
                     # Check if target version is available
                     local all_versions
                     if all_versions=$(get_all_available_versions "$service" "$github_token"); then
                         if [[ "$all_versions" =~ (^|,)$target_version($|,) ]]; then
-                            echo "${GREEN}REMOTE: v$target_version (available)${NC}"
+                            echo -e "${GREEN}REMOTE: v$target_version (available)${NC}"
                         else
-                            echo "${RED}REMOTE: v$target_version (NOT AVAILABLE)${NC}"
+                            echo -e "${RED}REMOTE: v$target_version (NOT AVAILABLE)${NC}"
                         fi
                     else
-                        echo "${RED}REMOTE: API error${NC}"
+                        echo -e "${RED}REMOTE: API error${NC}"
                     fi
                 fi
             else
-                echo "${RED}REMOTE: API unavailable${NC}"
+                echo -e "${RED}REMOTE: API unavailable${NC}"
             fi
         else
-            echo "${YELLOW}REMOTE: no token provided${NC}"
+            echo -e "${YELLOW}REMOTE: no token provided${NC}"
         fi
     done
     
@@ -320,12 +320,12 @@ display_system_versions() {
         local dep_status
         if dep_status=$(docker ps --filter "name=milou-$dep_service" --format "{{.Status}}" 2>/dev/null); then
             if [[ "$dep_status" =~ Up|running ]]; then
-                echo -e "      ├─ $dep_service: ${GREEN}running${NC}"
+                printf "      ├─ %-15s${GREEN}running${NC}\n" "$dep_service:"
             else
-                echo -e "      ├─ $dep_service: ${RED}stopped${NC}"
+                printf "      ├─ %-15s${RED}stopped${NC}\n" "$dep_service:"
             fi
         else
-            echo -e "      ├─ $dep_service: ${RED}not installed${NC}"
+            printf "      ├─ %-15s${RED}not installed${NC}\n" "$dep_service:"
         fi
     done
     

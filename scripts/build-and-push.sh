@@ -1,24 +1,40 @@
 #!/bin/bash
 
 # =============================================================================
-# Milou CLI - Docker Build and Push Script
-# Builds and pushes Docker images to GitHub Container Registry (GHCR)
-# Supports versioning, smart rebuilds, selective building, and image management
+# Milou CLI - Enhanced Docker Build and Push Script v3.1
+# Full-featured professional Docker management with ALL advanced features
 # =============================================================================
 
 set -euo pipefail
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m' # No Color
+# Colors and formatting - with better terminal compatibility
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+    readonly RED=$(tput setaf 1)
+    readonly GREEN=$(tput setaf 2)
+    readonly YELLOW=$(tput setaf 3)
+    readonly BLUE=$(tput setaf 4)
+    readonly PURPLE=$(tput setaf 5)
+    readonly CYAN=$(tput setaf 6)
+    readonly BOLD=$(tput bold)
+    readonly DIM=$(tput dim)
+    readonly NC=$(tput sgr0)
+else
+    # Fallback ANSI codes for when tput is not available
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly BLUE='\033[0;34m'
+    readonly PURPLE='\033[0;35m'
+    readonly CYAN='\033[0;36m'
+    readonly BOLD='\033[1m'
+    readonly DIM='\033[2m'
+    readonly NC='\033[0m'
+fi
 
-# Global variables
+# Global configuration
 GITHUB_ORG="milou-sh"
 REPO_NAME="milou"
+REGISTRY_URL="ghcr.io"
 VERSION=""
 SERVICE=""
 PUSH_TO_REGISTRY=false
@@ -31,339 +47,1303 @@ LIST_IMAGES=false
 GITHUB_TOKEN_PROVIDED=""
 SAVE_TOKEN=false
 NON_INTERACTIVE=false
+CLEANUP_AFTER_BUILD=false
+BUILD_PROGRESS=true
+USE_CACHE=true
+MULTI_PLATFORM=false
+BUILD_ARGS=""
+PRUNE_AFTER_BUILD=false
+PARALLEL_BUILDS=false
+VERBOSE=false
+QUIET=false
+AUTO_TAG=true
+PLATFORMS="linux/amd64"
+CACHE_FROM=""
+CACHE_TO=""
+TARGET_STAGE=""
+SECRETS=""
+SSH_KEYS=""
+BUILD_TIMEOUT="1800"
+MAX_PARALLEL_JOBS=3
+TEST_MODE=false
+QUICK_TEST=false
+DELETE_DAYS=30
+DELETE_UNTAGGED_ONLY=false
+DELETE_ALL=false
+FORCE_DELETE=false
 
-# Available services and their configurations
-declare -A SERVICES=(
-    ["database"]="./docker/database/Dockerfile|./docker/database"
-    ["backend"]="./dashboard/backend/Dockerfile.backend|./dashboard"
-    ["frontend"]="./dashboard/frontend/Dockerfile.frontend|./dashboard"
-    ["engine"]="./engine/Dockerfile|./engine"
-    ["nginx"]="./docker/nginx/Dockerfile|./docker/nginx"
+# Service configurations
+declare -A SERVICE_CONFIGS=(
+    ["database"]="./docker/database/Dockerfile|./docker/database|PostgreSQL Database|Essential"
+    ["backend"]="./dashboard/backend/Dockerfile.backend|./dashboard|Backend API|Critical"
+    ["frontend"]="./dashboard/frontend/Dockerfile.frontend|./dashboard|Frontend UI|Critical"
+    ["engine"]="./engine/Dockerfile|./engine|Processing Engine|Essential"
+    ["nginx"]="./docker/nginx/Dockerfile|./docker/nginx|Web Server|Important"
 )
 
-# Logging functions
-milou_log() {
+declare -a AVAILABLE_SERVICES=(database backend frontend engine nginx)
+declare -a successful_services=()
+declare -a failed_services=()
+declare -a skipped_services=()
+
+# =============================================================================
+# LOGGING AND OUTPUT FUNCTIONS
+# =============================================================================
+
+log() {
     local level="$1"
     shift
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp=$(date '+%H:%M:%S')
+    
+    if [[ "$QUIET" == "true" && "$level" != "ERROR" ]]; then
+        return 0
+    fi
+    
     case "$level" in
-        "INFO")  echo -e "${GREEN}[INFO]${NC} $*" ;;
-        "WARN")  echo -e "${YELLOW}[WARN]${NC} $*" >&2 ;;
-        "ERROR") echo -e "${RED}[ERROR]${NC} $*" >&2 ;;
-        "DEBUG") [[ "${DEBUG:-}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" >&2 ;;
-        "SUCCESS") echo -e "${GREEN}[SUCCESS]${NC} $*" ;;
-        "STEP") echo -e "${BLUE}[STEP]${NC} $*" ;;
-        "TRACE") [[ "${DEBUG:-}" == "true" ]] && echo -e "${BLUE}[TRACE]${NC} $*" >&2 ;;
+        "INFO")    printf "${BLUE}[%s]${NC} ${GREEN}[INFO]${NC} %s\n" "$timestamp" "$*" ;;
+        "WARN")    printf "${BLUE}[%s]${NC} ${YELLOW}[WARN]${NC} %s\n" "$timestamp" "$*" >&2 ;;
+        "ERROR")   printf "${BLUE}[%s]${NC} ${RED}[ERROR]${NC} %s\n" "$timestamp" "$*" >&2 ;;
+        "DEBUG")   [[ "${VERBOSE}" == "true" ]] && printf "${BLUE}[%s]${NC} ${DIM}[DEBUG]${NC} %s\n" "$timestamp" "$*" >&2 ;;
+        "SUCCESS") printf "${BLUE}[%s]${NC} ${GREEN}[SUCCESS]${NC} %s\n" "$timestamp" "$*" ;;
+        "STEP")    printf "${BLUE}[%s]${NC} ${PURPLE}[STEP]${NC} %s\n" "$timestamp" "$*" ;;
+        *)         printf "${BLUE}[%s]${NC} [INFO] %s\n" "$timestamp" "$*" ;;
     esac
 }
 
-# Source validation functions from main Milou CLI if available
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MILOU_CLI_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+show_progress() {
+    if [[ "$BUILD_PROGRESS" == "true" && "$QUIET" != "true" ]]; then
+        printf "${CYAN}%s${NC}\n" "$*"
+    fi
+}
 
-if [[ -f "$MILOU_CLI_DIR/src/_validation.sh" ]]; then
-    source "$MILOU_CLI_DIR/src/_validation.sh"
-fi
+show_banner() {
+    if [[ "$QUIET" != "true" ]]; then
+        printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+        printf "${BOLD}${BLUE}               🐳 MILOU DOCKER BUILD & PUSH SYSTEM v3.1                    ${NC}\n"
+        printf "${BOLD}${BLUE}                        Professional Docker Management                      ${NC}\n"
+        printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    fi
+}
 
-# Enhanced GitHub token validation (fallback if not available from main CLI)
-validate_github_token() {
-    local token="$1"
-    local strict="${2:-true}"
-    
-    if [[ -z "$token" ]]; then
-        milou_log "ERROR" "GitHub token is required"
+# =============================================================================
+# VALIDATION FUNCTIONS  
+# =============================================================================
+
+validate_service() {
+    local service="$1"
+    if [[ " ${AVAILABLE_SERVICES[*]} " =~ " ${service} " ]]; then
+        return 0
+    else
+        log "ERROR" "Invalid service: $service"
+        log "ERROR" "Available services: ${AVAILABLE_SERVICES[*]}"
         return 1
     fi
-    
-    # Enhanced GitHub token patterns for different types
-    local token_valid=false
-    
-    # Personal Access Token (classic): ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (40 chars total)
-    if [[ "$token" =~ ^ghp_[A-Za-z0-9]{36}$ ]]; then
-        token_valid=true
-    # OAuth App token: gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  
-    elif [[ "$token" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
-        token_valid=true
-    # User access token: ghu_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    elif [[ "$token" =~ ^ghu_[A-Za-z0-9]{36}$ ]]; then
-        token_valid=true
-    # Server access token: ghs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    elif [[ "$token" =~ ^ghs_[A-Za-z0-9]{36}$ ]]; then
-        token_valid=true
-    # Refresh token: ghr_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    elif [[ "$token" =~ ^ghr_[A-Za-z0-9]{36}$ ]]; then
-        token_valid=true
-    # Fine-grained personal access token: github_pat_xxxxxxxxxx (much longer)
-    elif [[ "$token" =~ ^github_pat_[A-Za-z0-9_]{22,255}$ ]]; then
-        token_valid=true
+}
+
+validate_github_token() {
+    local token="$1"
+    if [[ -z "$token" ]]; then
+        return 1
     fi
-    
-    if [[ "$token_valid" != "true" ]]; then
-        milou_log "ERROR" "Invalid GitHub token format"
-        milou_log "INFO" "Expected patterns:"
-        milou_log "INFO" "  • Classic PAT: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (40 chars)"
-        milou_log "INFO" "  • Fine-grained: github_pat_xxxxxxxxxxxxxxxxxxxx (longer)"
-        milou_log "INFO" "  • OAuth: gho_*, User: ghu_*, Server: ghs_*, Refresh: ghr_*"
-        
-        if [[ "$strict" == "true" ]]; then
-            return 1
-        else
-            milou_log "WARN" "Token format validation failed but continuing in non-strict mode"
-        fi
+    if [[ "$token" =~ ^gh[ps]_[A-Za-z0-9]{36}$ ]] || \
+       [[ "$token" =~ ^github_pat_[A-Za-z0-9_]{22,}$ ]] || \
+       [[ "$token" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
+        return 0
+    else
+        log "ERROR" "Invalid GitHub token format"
+        return 1
     fi
+}
+
+check_dependencies() {
+    local missing_deps=()
+    command -v docker >/dev/null 2>&1 || missing_deps+=("docker")
+    command -v curl >/dev/null 2>&1 || missing_deps+=("curl")
+    command -v jq >/dev/null 2>&1 || missing_deps+=("jq")
     
-    milou_log "TRACE" "GitHub token format validation passed"
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log "ERROR" "Missing required dependencies:"
+        printf '%s\n' "${missing_deps[@]}" | sed 's/^/  - /'
+        return 1
+    fi
     return 0
 }
 
-# Test GitHub authentication with API and Docker registry (fallback if not available)
-test_github_authentication() {
-    local token="$1"
-    local quiet="${2:-false}"
-    local test_registry="${3:-true}"
+# =============================================================================
+# AUTHENTICATION AND REGISTRY MANAGEMENT
+# =============================================================================
+
+setup_authentication() {
+    local token=""
+    
+    if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
+        token="$GITHUB_TOKEN_PROVIDED"
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        token="$GITHUB_TOKEN"
+    elif load_token_from_env; then
+        token="$GITHUB_TOKEN"
+    elif [[ "$NON_INTERACTIVE" != "true" ]]; then
+        printf "${CYAN}GitHub Personal Access Token required for registry access.${NC}\n"
+        printf "${DIM}Create one at: https://github.com/settings/tokens${NC}\n"
+        printf "Enter token: "
+        read -rs token
+        echo
+    else
+        log "ERROR" "No GitHub token available and running in non-interactive mode"
+        return 1
+    fi
+    
+    if [[ -z "$token" ]]; then
+        log "ERROR" "No GitHub token provided"
+        return 1
+    fi
     
     if ! validate_github_token "$token"; then
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "STEP" "Testing GitHub authentication..."
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Token validation: length=${#token}, preview=${token:0:10}..."
+    if ! test_github_auth "$token"; then
+        return 1
+    fi
     
-    # Test authentication with GitHub API first
-    local api_base="${GITHUB_API_BASE:-https://api.github.com}"
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing API call to: $api_base/user"
+    export GITHUB_TOKEN="$token"
+    
+    if [[ "$SAVE_TOKEN" == "true" ]]; then
+        save_token_to_env "$token"
+    fi
+    
+    return 0
+}
+
+test_github_auth() {
+    local token="$1"
+    log "INFO" "🔐 Testing GitHub authentication..."
     
     local response
-    local curl_error
-    curl_error=$(mktemp)
-    
-    # Disable errexit temporarily to capture curl errors properly
-    set +e
-    response=$(curl -s -H "Authorization: Bearer $token" \
+    response=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $token" \
                -H "Accept: application/vnd.github.v3+json" \
-               "$api_base/user" 2>"$curl_error")
-    local curl_exit_code=$?
-    set -e
+               "https://api.github.com/user" 2>/dev/null)
     
-    if [[ $curl_exit_code -ne 0 ]]; then
-        milou_log "ERROR" "Failed to connect to GitHub API"
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "curl command failed with exit code: $curl_exit_code"
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "curl stderr: $(cat "$curl_error" 2>/dev/null || echo 'no error output')"
-        rm -f "$curl_error"
-        return 1
-    fi
+    local http_code="${response: -3}"
+    local body="${response%???}"
     
-    rm -f "$curl_error"
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "API call succeeded, response length: ${#response}"
-    
-    # Check if authentication was successful
-    local username=""
-    if echo "$response" | grep -q '"login"'; then
-        username=$(echo "$response" | grep -o '"login": *"[^"]*"' | cut -d'"' -f4)
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "GitHub API authentication successful (user: $username)"
+    if [[ "$http_code" == "200" ]]; then
+        local username
+        username=$(echo "$body" | jq -r '.login // "unknown"' 2>/dev/null || echo "unknown")
+        log "SUCCESS" "✅ GitHub API authentication successful (user: $username)"
         
-        # Set the username for later use
-        export GITHUB_USERNAME="$username"
-        
-        # Test Docker registry authentication if requested
-        if [[ "$test_registry" == "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing Docker registry authentication..."
-            if echo "$token" | docker login ghcr.io -u "${username:-token}" --password-stdin >/dev/null 2>&1; then
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker registry authentication successful"
-                docker logout ghcr.io >/dev/null 2>&1
-                return 0
-            else
-                milou_log "ERROR" "Docker registry authentication failed"
-                milou_log "INFO" "💡 Ensure your token has 'read:packages' and 'write:packages' scopes"
-                return 1
-            fi
-        else
+        if echo "$token" | docker login "$REGISTRY_URL" -u "$username" --password-stdin >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Docker registry authentication successful"
             return 0
+        else
+            log "ERROR" "❌ Docker registry authentication failed"
+            return 1
         fi
     else
-        milou_log "ERROR" "GitHub API authentication failed"
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "API Response: $response"
-        
-        # Check for specific error messages
-        if echo "$response" | grep -q "Bad credentials"; then
-            milou_log "INFO" "💡 The provided token is invalid or expired"
-        elif echo "$response" | grep -q "rate limit"; then
-            milou_log "INFO" "💡 GitHub API rate limit exceeded, try again later"
-        fi
-        
+        log "ERROR" "❌ GitHub API authentication failed (HTTP $http_code)"
         return 1
     fi
 }
 
-# Show help
-show_help() {
-    echo -e "${BOLD}Milou Docker Build and Push Script${NC}"
-    echo
-    echo "Usage: $0 [OPTIONS]"
-    echo
-    echo "Options:"
-    echo "  --service SERVICE     Build specific service (database, backend, frontend, engine, nginx)"
-    echo "  --version VERSION     Tag with version number (e.g., 1.0.0)"
-    echo "  --all                 Build all services"
-    echo "  --push                Push to GHCR after building"
-    echo "  --force               Force rebuild even if image exists and is recent"
-    echo "  --no-diff-check       Skip checking for source code differences"
-    echo "  --list-images         List all images in GHCR with tags"
-    echo "  --delete-images       Delete images from GHCR (interactive)"
-    echo "  --token TOKEN         GitHub Personal Access Token"
-    echo "  --save-token          Save provided token to .env file"
-    echo "  --non-interactive     Run in non-interactive mode (fail if no token)"
-    echo "  --org ORG             GitHub organization (default: milou-sh)"
-    echo "  --repo REPO           Repository name (default: milou)"
-    echo "  --dry-run             Show what would be done without executing"
-    echo "  --debug               Enable debug logging"
-    echo "  --help, -h            Show this help"
-    echo
-    echo "Token Authentication:"
-    echo "  The script needs a GitHub Personal Access Token with these scopes:"
-    echo "  • read:packages (to pull Docker images)"
-    echo "  • write:packages (to push Docker images)"
-    echo "  • delete:packages (to delete images, if needed)"
-    echo
-    echo "  You can provide the token via:"
-    echo "  1. --token TOKEN                  (command line argument)"
-    echo "  2. GITHUB_TOKEN=token ./script    (environment variable)"
-    echo "  3. Interactive prompt             (if neither above is provided)"
-    echo "  4. .env file in project root      (GITHUB_TOKEN=token)"
-    echo
-    echo "Examples:"
-    echo "  $0 --service backend --version 1.0.0 --push --token ghp_...    # Build and push backend v1.0.0"
-    echo "  $0 --all --version 1.2.0 --push --save-token                   # Build all, save token to .env"
-    echo "  $0 --service frontend --push                                    # Build and push frontend with latest tag"
-    echo "  $0 --all --force --push --non-interactive                      # Force rebuild all and push (CI mode)"
-    echo "  $0 --list-images                                               # List all images with tags"
-    echo "  $0 --delete-images --service backend                           # Delete backend images"
-    echo
-    echo "Available services: ${!SERVICES[*]}"
-    echo
-    echo "Token Creation:"
-    echo "  Create a token at: https://github.com/settings/tokens"
-    echo "  For classic tokens: Select 'repo' and 'write:packages' scopes"
-    echo "  For fine-grained tokens: Select repository access and package permissions"
-    echo
-    echo "Tag Management:"
-    echo "  • When you push with --version 1.2.0, both tags are created: 1.2.0 and latest"
-    echo "  • The 'latest' tag automatically moves to the newest version"
-    echo "  • Previous versions keep their specific version tags (1.1.0, 1.0.0, etc.)"
-}
-
-# Parse command line arguments
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --service)
-                SERVICE="$2"
-                if [[ ! "${SERVICES[$SERVICE]:-}" ]]; then
-                    milou_log "ERROR" "Invalid service: $SERVICE"
-                    milou_log "ERROR" "Available services: ${!SERVICES[*]}"
-                    exit 1
-                fi
-                shift 2
-                ;;
-            --version)
-                VERSION="$2"
-                if [[ ! $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                    milou_log "ERROR" "Version must be in format x.y.z (e.g., 1.0.0)"
-                    exit 1
-                fi
-                shift 2
-                ;;
-            --token)
-                GITHUB_TOKEN_PROVIDED="$2"
-                shift 2
-                ;;
-            --save-token)
-                SAVE_TOKEN=true
-                shift
-                ;;
-            --non-interactive)
-                NON_INTERACTIVE=true
-                shift
-                ;;
-            --all)
-                BUILD_ALL=true
-                shift
-                ;;
-            --push)
-                PUSH_TO_REGISTRY=true
-                shift
-                ;;
-            --force)
-                FORCE_BUILD=true
-                shift
-                ;;
-            --no-diff-check)
-                CHECK_DIFF=false
-                shift
-                ;;
-            --list-images)
-                LIST_IMAGES=true
-                shift
-                ;;
-            --delete-images)
-                DELETE_IMAGES=true
-                shift
-                ;;
-            --org)
-                GITHUB_ORG="$2"
-                shift 2
-                ;;
-            --repo)
-                REPO_NAME="$2"
-                shift 2
-                ;;
-            --dry-run)
-                DRY_RUN=true
-                shift
-                ;;
-            --debug)
-                export DEBUG=true
-                shift
-                ;;
-            --help|-h)
-                show_help
-                exit 0
-                ;;
-            *)
-                milou_log "ERROR" "Unknown option: $1"
-                show_help
-                exit 1
-                ;;
-        esac
-    done
-    
-    # Validate arguments for build operations
-    if [[ "$LIST_IMAGES" == "false" && "$DELETE_IMAGES" == "false" ]]; then
-        if [[ "$BUILD_ALL" == "false" && -z "$SERVICE" ]]; then
-            milou_log "ERROR" "Either specify --service or use --all"
-            show_help
-            exit 1
-        fi
-        
-        if [[ "$BUILD_ALL" == "true" && -n "$SERVICE" ]]; then
-            milou_log "ERROR" "Cannot use both --service and --all"
-            exit 1
-        fi
-    fi
-}
-
-# Load token from .env file
 load_token_from_env() {
-    local env_file="$MILOU_CLI_DIR/.env"
-    
+    local env_file="$(dirname "$0")/../.env"
     if [[ -f "$env_file" ]]; then
-        milou_log "DEBUG" "Loading environment from: $env_file"
-        # Only source GITHUB_TOKEN to avoid conflicts
         local token
         token=$(grep "^GITHUB_TOKEN=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"'"'" || echo "")
         if [[ -n "$token" ]]; then
             export GITHUB_TOKEN="$token"
-            milou_log "DEBUG" "Loaded GITHUB_TOKEN from .env file"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+save_token_to_env() {
+    local token="$1"
+    local env_file="$(dirname "$0")/../.env"
+    
+    log "INFO" "💾 Saving token to .env file..."
+    
+    if [[ ! -f "$env_file" ]]; then
+        touch "$env_file"
+        chmod 600 "$env_file"
+    fi
+    
+    if grep -q "^GITHUB_TOKEN=" "$env_file" 2>/dev/null; then
+        sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$token/" "$env_file"
+    else
+        echo "GITHUB_TOKEN=$token" >> "$env_file"
+    fi
+    
+    chmod 600 "$env_file"
+    log "SUCCESS" "✅ Token saved to .env file"
+}
+
+# =============================================================================
+# ADVANCED IMAGE MANAGEMENT AND REGISTRY OPERATIONS
+# =============================================================================
+
+list_ghcr_images() {
+    # DISABLE STRICT MODE temporarily
+    set +euo pipefail
+    
+    log "STEP" "📋 Listing images in GitHub Container Registry..."
+    
+    # Token handling
+    local token=""
+    if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
+        token="$GITHUB_TOKEN_PROVIDED"
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        token="$GITHUB_TOKEN"
+    elif load_token_from_env; then
+        token="$GITHUB_TOKEN"
+    else
+        log "ERROR" "No GitHub token available for API access"
+        set -euo pipefail  # Restore before return
+        return 1
+    fi
+    
+    # Quick token validation
+    if ! validate_github_token "$token"; then
+        set -euo pipefail  # Restore before return
+        return 1
+    fi
+    
+    # Simple array like in working test
+    local services=()
+    if [[ "$BUILD_ALL" == "true" || -z "$SERVICE" ]]; then
+        services=(database backend frontend engine nginx)
+    else
+        services=("$SERVICE")
+    fi
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "                        📋 GHCR IMAGE INVENTORY                               "
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local total_images=0
+    local total_services=0
+    
+    # EXACT working logic from test-minimal.sh
+    for service in "${services[@]}"; do
+        echo ""
+        echo "🐳 $service"
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        
+        local package_name="$REPO_NAME%2F$service"
+        local api_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name/versions"
+        
+        local response=""
+        response=$(timeout 10 curl -s --fail --max-time 5 \
+                       -H "Authorization: Bearer $token" \
+                       -H "Accept: application/vnd.github.v3+json" \
+                       "$api_url" 2>/dev/null || echo '{"error": "api_failure"}')
+        
+        if [[ "$response" == '{"error": "api_failure"}' ]]; then
+            echo "  ❌ API call failed"
+            total_services=$((total_services + 1))
+            continue
+        fi
+        
+        if ! echo "$response" | jq empty 2>/dev/null; then
+            echo "  ❌ Invalid JSON response"
+            total_services=$((total_services + 1))
+            continue
+        fi
+        
+        if echo "$response" | jq -e '.message' >/dev/null 2>&1; then
+            local error_msg=""
+            error_msg=$(echo "$response" | jq -r '.message' 2>/dev/null || echo "Unknown error")
+            echo "  ❌ API Error: $error_msg"
+            total_services=$((total_services + 1))
+            continue
+        fi
+        
+        if echo "$response" | jq -e '. | type == "array" and length > 0' >/dev/null 2>&1; then
+            local image_count=""
+            image_count=$(echo "$response" | jq '. | length' 2>/dev/null || echo "0")
+            
+            echo "$response" | jq -r '.[] | 
+                "  📦 " + ((.metadata.container.tags // ["untagged"]) | join(",")) + 
+                "  │  📅 " + (.created_at[0:10]) + 
+                "  │  🆔 " + (.name[0:12])' 2>/dev/null || echo "  ⚠️  Format failed"
+            
+            echo "  Total versions: $image_count"
+            total_images=$((total_images + image_count))
+        else
+            echo "  📭 No images found"
+        fi
+        
+        total_services=$((total_services + 1))
+        sleep 0.1
+    done
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "SUMMARY: Checked $total_services services, found $total_images total images"
+    echo "💡 Use '--delete-images' to clean up old versions"
+    echo ""
+    
+    # RESTORE STRICT MODE
+    set -euo pipefail
+    return 0
+}
+
+delete_ghcr_images() {
+    # DISABLE STRICT MODE temporarily
+    set +euo pipefail
+    
+    log "STEP" "🗑️ Managing images in GitHub Container Registry..."
+    
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+        if ! setup_authentication; then
+            set -euo pipefail  # Restore before return
+            return 1
+        fi
+    fi
+    
+    local services_to_clean=()
+    if [[ "$BUILD_ALL" == "true" || -z "$SERVICE" ]]; then
+        services_to_clean=("${AVAILABLE_SERVICES[@]}")
+    else
+        services_to_clean=("$SERVICE")
+    fi
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "                        🗑️ IMAGE DELETION PREVIEW                            "
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local total_images_found=0
+    declare -A service_data  # Store service -> working_url:response
+    
+    # First pass: collect and display all images
+    for service in "${services_to_clean[@]}"; do
+        echo ""
+        echo "🐳 $service"
+        echo "─────────────────────────────────────────────────────────────────────────────"
+        
+        # Try organization packages first, then user packages
+        local package_name="$REPO_NAME%2F$service"
+        local api_urls=(
+            "https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name/versions"
+            "https://api.github.com/user/packages/container/$package_name/versions"
+        )
+        
+        local response=""
+        local working_url=""
+        
+        for api_url in "${api_urls[@]}"; do
+            log "DEBUG" "Trying API endpoint: $api_url"
+            response=$(timeout 10 curl -s --fail --max-time 5 \
+                           -H "Authorization: Bearer $GITHUB_TOKEN" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$api_url" 2>/dev/null || echo "[]")
+            
+            # Check if we got a valid response (not an error)
+            if echo "$response" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                if echo "$response" | jq -e '. | length > 0' >/dev/null 2>&1; then
+                    working_url="$api_url"
+                    log "DEBUG" "Found images using: $working_url"
+                    break
+                fi
+            elif echo "$response" | jq -e '.message' >/dev/null 2>&1; then
+                log "DEBUG" "API error: $(echo "$response" | jq -r '.message')"
+            fi
+        done
+        
+        if [[ -z "$working_url" ]]; then
+            echo "  📭 No images found"
+            continue
+        fi
+        
+        if echo "$response" | jq -e '. | length > 0' >/dev/null 2>&1; then
+            local service_images_found=0
+            service_images_found=$(echo "$response" | jq '. | length' 2>/dev/null || echo "0")
+            total_images_found=$((total_images_found + service_images_found))
+            
+            # Display all images for this service
+            echo "$response" | jq -r '.[] | 
+                if ((.metadata.container.tags // []) | length) > 0 then
+                    "  📦 " + ((.metadata.container.tags // []) | join(",")) + "  │  📅 " + (.created_at[0:10]) + "  │  🆔 " + (.name[0:12])
+                else
+                    "  📦 (untagged)  │  📅 " + (.created_at[0:10]) + "  │  🆔 " + (.name[0:12])
+                end' 2>/dev/null || echo "  ⚠️  Format failed"
+            
+            echo "  Total: $service_images_found images"
+            
+            # Store the service data properly - encode the response to avoid issues
+            local encoded_response
+            encoded_response=$(echo "$response" | base64 -w 0)
+            service_data["$service"]="$working_url|$encoded_response"
+        else
+            echo "  📭 No images found"
+        fi
+    done
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📊 TOTAL: $total_images_found images found across all services"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ $total_images_found -eq 0 ]]; then
+        log "INFO" "ℹ️ No images found to delete"
+        set -euo pipefail
+        return 0
+    fi
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "INFO" "🧪 [DRY RUN] Would delete all $total_images_found images above"
+        set -euo pipefail
+        return 0
+    fi
+    
+    echo ""
+    if [[ "$FORCE_DELETE" != "true" && "$NON_INTERACTIVE" != "true" ]]; then
+        echo "⚠️  This will PERMANENTLY DELETE all $total_images_found images shown above!"
+        echo ""
+        read -p "Do you want to delete ALL these images? (type 'DELETE ALL' to confirm): " confirmation
+        if [[ "$confirmation" != "DELETE ALL" ]]; then
+            log "INFO" "Operation cancelled by user"
+            set -euo pipefail
+            return 0
+        fi
+    fi
+    
+    # Second pass: delete all images
+    local total_deleted=0
+    local total_errors=0
+    
+    echo ""
+    echo "🗑️ Starting deletion process..."
+    echo ""
+    
+    # Process each service that has images
+    for service in "${!service_data[@]}"; do
+        log "INFO" "🗑️ Deleting images for $service..."
+        
+        local service_info="${service_data[$service]}"
+        local working_url="${service_info%|*}"
+        local encoded_response="${service_info#*|}"
+        local response
+        response=$(echo "$encoded_response" | base64 -d)
+        
+        local package_name="$REPO_NAME%2F$service"
+        
+        # Extract all image IDs and delete them
+        local temp_file
+        temp_file=$(mktemp)
+        echo "$response" | jq -r '.[] | .id' 2>/dev/null > "$temp_file"
+        
+        while IFS= read -r image_id; do
+            if [[ -n "$image_id" ]]; then
+                # Determine the correct delete URL
+                local delete_url=""
+                if [[ "$working_url" == *"/user/"* ]]; then
+                    delete_url="https://api.github.com/user/packages/container/$package_name/versions/$image_id"
+                else
+                    delete_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name/versions/$image_id"
+                fi
+                
+                local delete_response=""
+                delete_response=$(timeout 10 curl -s -w "%{http_code}" -X DELETE \
+                                    -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                    -H "Accept: application/vnd.github.v3+json" \
+                                    "$delete_url" 2>/dev/null)
+                
+                local http_code="${delete_response: -3}"
+                local response_body="${delete_response%???}"
+                
+                if [[ "$http_code" == "204" ]]; then
+                    log "SUCCESS" "  ✅ Deleted image: $image_id"
+                    total_deleted=$((total_deleted + 1))
+                else
+                    # Try to parse the error message from GitHub
+                    local error_msg=""
+                    if [[ -n "$response_body" ]] && echo "$response_body" | jq -e '.message' >/dev/null 2>&1; then
+                        error_msg=$(echo "$response_body" | jq -r '.message' 2>/dev/null)
+                        
+                        # Handle specific GitHub restrictions and API bugs
+                        if [[ "$error_msg" == *"5000 downloads"* ]]; then
+                            # Check if this is actually a private package (which shouldn't have this restriction)
+                            local package_visibility
+                            package_visibility=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                                     -H "Accept: application/vnd.github.v3+json" \
+                                                     "https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name" 2>/dev/null | \
+                                                     jq -r '.visibility // "unknown"' 2>/dev/null)
+                            
+                            if [[ "$package_visibility" == "private" ]]; then
+                                log "ERROR" "  🐛 GitHub API BUG: Image $image_id cannot be deleted"
+                                log "ERROR" "     GitHub is incorrectly applying 5000+ download restriction to PRIVATE packages!"
+                                log "ERROR" "     This is a known GitHub API bug. Package is private but still restricted."
+                                log "ERROR" "     Workaround: Delete via GitHub web interface or contact GitHub Support"
+                            else
+                                log "WARN" "  ⚠️  Cannot delete image: $image_id (too popular - 5000+ downloads)"
+                                log "WARN" "     GitHub restricts deletion of popular public packages"
+                            fi
+                        elif [[ "$error_msg" == *"does not exist"* || "$error_msg" == *"not found"* ]]; then
+                            log "WARN" "  ⚠️  Image already deleted: $image_id"
+                        elif [[ "$error_msg" == *"permission"* || "$error_msg" == *"access"* ]]; then
+                            log "ERROR" "  ❌ Permission denied for image: $image_id"
+                            log "ERROR" "     Check if your token has 'delete:packages' scope"
+                        else
+                            log "ERROR" "  ❌ Failed to delete image: $image_id - $error_msg"
+                        fi
+                    else
+                        log "ERROR" "  ❌ Failed to delete image: $image_id (HTTP $http_code)"
+                        log "ERROR" "     Raw response: $response_body"
+                    fi
+                    
+                    log "DEBUG" "Delete URL: $delete_url"
+                    total_errors=$((total_errors + 1))
+                fi
+            fi
+        done < "$temp_file"
+        
+        rm -f "$temp_file"
+    done
+    
+    echo ""
+    log "INFO" "🗑️ Deletion Summary:"
+    log "INFO" "   📊 Total images processed: $total_images_found"
+    log "INFO" "   ✅ Successfully deleted: $total_deleted"
+    log "INFO" "   ❌ Failed to delete: $total_errors"
+    
+    # RESTORE STRICT MODE
+    set -euo pipefail
+    
+    if [[ $total_errors -eq 0 ]]; then
+        log "SUCCESS" "✅ All images deleted successfully!"
+        return 0
+    else
+        log "WARN" "⚠️ Image deletion completed with some errors"
+        return 1
+    fi
+}
+
+# =============================================================================
+# ADVANCED BUILD FUNCTIONS
+# =============================================================================
+
+build_image_advanced() {
+    local service="$1"
+    local dockerfile="$2"
+    local context="$3"
+    local tags=("${@:4}")
+    
+    log "STEP" "🔨 Building $service with advanced options..."
+    
+    local build_cmd="docker build"
+    local build_args_array=()
+    
+    if [[ "$MULTI_PLATFORM" == "true" ]]; then
+        build_cmd="docker buildx build"
+        build_args_array+=("--platform" "$PLATFORMS")
+    fi
+    
+    if [[ "$BUILD_PROGRESS" == "true" ]]; then
+        build_args_array+=("--progress" "auto")
+    else
+        build_args_array+=("--progress" "quiet")
+    fi
+    
+    if [[ "$USE_CACHE" == "true" && -n "$CACHE_FROM" ]]; then
+        build_args_array+=("--cache-from" "$CACHE_FROM")
+    fi
+    
+    if [[ "$USE_CACHE" == "true" && -n "$CACHE_TO" ]]; then
+        build_args_array+=("--cache-to" "$CACHE_TO")
+    fi
+    
+    if [[ -n "$TARGET_STAGE" ]]; then
+        build_args_array+=("--target" "$TARGET_STAGE")
+    fi
+    
+    if [[ -n "$BUILD_ARGS" ]]; then
+        IFS=',' read -ra args_array <<< "$BUILD_ARGS"
+        for arg in "${args_array[@]}"; do
+            build_args_array+=("--build-arg" "$arg")
+        done
+    fi
+    
+    if [[ -n "$SECRETS" ]]; then
+        IFS=',' read -ra secrets_array <<< "$SECRETS"
+        for secret in "${secrets_array[@]}"; do
+            build_args_array+=("--secret" "$secret")
+        done
+    fi
+    
+    if [[ -n "$SSH_KEYS" ]]; then
+        build_args_array+=("--ssh" "$SSH_KEYS")
+    fi
+    
+    local build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    build_args_array+=(
+        "--label" "org.opencontainers.image.created=$build_date"
+        "--label" "org.opencontainers.image.title=milou-$service"
+        "--label" "org.opencontainers.image.description=Milou ${service^} Service"
+        "--label" "org.opencontainers.image.vendor=Milou Security"
+        "--label" "org.opencontainers.image.source=https://github.com/$GITHUB_ORG/$REPO_NAME"
+    )
+    
+    if [[ -n "$VERSION" ]]; then
+        build_args_array+=("--label" "org.opencontainers.image.version=$VERSION")
+    fi
+    
+    build_args_array+=("-f" "$dockerfile")
+    
+    for tag in "${tags[@]}"; do
+        build_args_array+=("-t" "$tag")
+    done
+    
+    build_args_array+=("$context")
+    
+    log "DEBUG" "Build command: $build_cmd ${build_args_array[*]}"
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "INFO" "[DRY RUN] Would execute: $build_cmd ${build_args_array[*]}"
+        return 0
+    fi
+    
+    show_progress "🔨 Building $service..."
+    
+    local start_time=$(date +%s)
+    
+    if timeout "$BUILD_TIMEOUT" $build_cmd "${build_args_array[@]}"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        log "SUCCESS" "✅ Successfully built $service (${duration}s)"
+        
+        local primary_tag="${tags[0]}"
+        local image_size
+        image_size=$(docker images --format "table {{.Size}}" "$primary_tag" | tail -n 1)
+        log "INFO" "📦 Image size: $image_size"
+        
+        return 0
+    else
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        log "ERROR" "❌ Failed to build $service (${duration}s)"
+        return 1
+    fi
+}
+
+push_image_advanced() {
+    local tags=("$@")
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        for tag in "${tags[@]}"; do
+            log "INFO" "[DRY RUN] Would push: $tag"
+        done
+        return 0
+    fi
+    
+    log "STEP" "📤 Pushing images to registry..."
+    
+    local pushed_count=0
+    local failed_count=0
+    
+    for tag in "${tags[@]}"; do
+        show_progress "📤 Pushing $tag..."
+        
+        local start_time=$(date +%s)
+        
+        if docker push "$tag"; then
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
+            log "SUCCESS" "✅ Successfully pushed $tag (${duration}s)"
+            ((pushed_count++))
+        else
+            log "ERROR" "❌ Failed to push $tag"
+            ((failed_count++))
+        fi
+    done
+    
+    if [[ $failed_count -eq 0 ]]; then
+        log "SUCCESS" "✅ All images pushed successfully ($pushed_count images)"
+        return 0
+    else
+        log "ERROR" "❌ Push completed with failures ($pushed_count success, $failed_count failed)"
+        return 1
+    fi
+}
+
+# =============================================================================
+# HELP AND ARGUMENT PARSING
+# =============================================================================
+
+show_help() {
+    cat << EOF
+${BOLD}${BLUE}🐳 Milou Docker Build & Push System v3.1${NC}
+
+${BOLD}USAGE:${NC}
+  $0 [OPTIONS]
+
+${BOLD}CORE OPTIONS:${NC}
+  --service SERVICE         Build specific service (${AVAILABLE_SERVICES[*]})
+  --version VERSION         Tag with version (e.g., 1.0.0, latest)
+  --all                     Build all services
+  --push                    Push to registry after building
+  --force                   Force rebuild even if image exists
+  --dry-run                 Show what would be done without executing
+
+${BOLD}AUTHENTICATION:${NC}
+  --token TOKEN             GitHub Personal Access Token
+  --save-token              Save provided token to .env file
+  --non-interactive         Run without user prompts
+
+${BOLD}BUILD OPTIONS:${NC}
+  --no-diff-check           Skip checking for source code differences
+  --no-cache                Disable build cache
+  --cache-from IMAGE        Use external cache source
+  --cache-to DEST           Export cache to destination
+  --build-arg KEY=VALUE     Pass build arguments (comma-separated)
+  --target STAGE            Build specific stage
+  --platform PLATFORMS     Target platforms (default: linux/amd64)
+  --parallel                Build services in parallel
+  --timeout SECONDS         Build timeout (default: 1800)
+
+${BOLD}IMAGE MANAGEMENT:${NC}
+  --list-images             List all images in registry with details
+  --delete-images           Show all images and ask to delete them all
+  --force-delete            Skip confirmation prompts for deletion
+  --prune                   Prune local Docker resources after build
+  --cleanup                 Clean up Docker resources after completion
+
+${BOLD}OUTPUT OPTIONS:${NC}
+  --verbose                 Enable detailed logging
+  --quiet                   Suppress non-essential output
+  --no-progress             Disable build progress display
+
+${BOLD}REGISTRY OPTIONS:${NC}
+  --registry URL            Registry URL (default: ghcr.io)
+  --org ORG                 GitHub organization (default: milou-sh)
+  --repo REPO               Repository name (default: milou)
+
+${BOLD}ADVANCED OPTIONS:${NC}
+  --secrets KEY=VALUE       Build secrets (comma-separated)
+  --ssh SSH_AGENT           SSH agent socket or keys
+  --test                    Run comprehensive system tests
+  --test-api                Quick API connectivity test
+
+${BOLD}EXAMPLES:${NC}
+  # Test the script setup
+  $0 --test
+
+  # Quick API test with token
+  $0 --test-api --token ghp_xxx
+
+  # Build and push specific service
+  $0 --service backend --version 1.0.0 --push --token ghp_xxx
+
+  # Build all services with parallel execution
+  $0 --all --version 1.2.0 --push --parallel
+
+  # List images in registry
+  $0 --list-images --service frontend
+
+  # Show all images and delete them (with confirmation)
+  $0 --delete-images --token ghp_xxx
+
+  # Delete all images without confirmation (dangerous!)
+  $0 --delete-images --force-delete --token ghp_xxx
+
+  # Dry run to see what images exist
+  $0 --delete-images --dry-run --token ghp_xxx
+
+  # Multi-platform build
+  $0 --service backend --platform linux/amd64,linux/arm64
+
+  # Development build with custom args
+  $0 --service backend --build-arg ENV=dev,DEBUG=true --no-cache
+
+${BOLD}TOKEN SETUP:${NC}
+  Create a token at: https://github.com/settings/tokens
+  Required scopes: read:packages, write:packages, delete:packages
+
+${BOLD}NOTES:${NC}
+  - For deleting images, your token needs 'delete:packages' scope
+  - Images older than 30 days or untagged images will be deleted
+  - Use --dry-run to see what would happen without making changes
+EOF
+}
+
+parse_args() {
+    # If no arguments provided, show help
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 0
+    fi
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --service)
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--service requires a value"
+                    exit 1
+                fi
+                SERVICE="$2"
+                validate_service "$SERVICE" || exit 1
+                shift 2 ;;
+            --version)
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--version requires a value"
+                    exit 1
+                fi
+                VERSION="${2#v}"
+                shift 2 ;;
+            --token)
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--token requires a value"
+                    exit 1
+                fi
+                GITHUB_TOKEN_PROVIDED="$2"
+                shift 2 ;;
+            --save-token) SAVE_TOKEN=true; shift ;;
+            --non-interactive) NON_INTERACTIVE=true; shift ;;
+            --all) BUILD_ALL=true; shift ;;
+            --push) PUSH_TO_REGISTRY=true; shift ;;
+            --force) FORCE_BUILD=true; shift ;;
+            --dry-run) DRY_RUN=true; shift ;;
+            --no-diff-check) CHECK_DIFF=false; shift ;;
+            --no-cache) USE_CACHE=false; shift ;;
+            --cache-from) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--cache-from requires a value"
+                    exit 1
+                fi
+                CACHE_FROM="$2"; shift 2 ;;
+            --cache-to) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--cache-to requires a value"
+                    exit 1
+                fi
+                CACHE_TO="$2"; shift 2 ;;
+            --build-arg)
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--build-arg requires a value"
+                    exit 1
+                fi
+                if [[ -n "$BUILD_ARGS" ]]; then
+                    BUILD_ARGS="$BUILD_ARGS,$2"
+                else
+                    BUILD_ARGS="$2"
+                fi
+                shift 2 ;;
+            --target) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--target requires a value"
+                    exit 1
+                fi
+                TARGET_STAGE="$2"; shift 2 ;;
+            --platform) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--platform requires a value"
+                    exit 1
+                fi
+                PLATFORMS="$2"; MULTI_PLATFORM=true; shift 2 ;;
+            --parallel) PARALLEL_BUILDS=true; shift ;;
+            --timeout) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--timeout requires a value"
+                    exit 1
+                fi
+                BUILD_TIMEOUT="$2"; shift 2 ;;
+            --list-images) LIST_IMAGES=true; shift ;;
+            --delete-images) DELETE_IMAGES=true; shift ;;
+            --force-delete) FORCE_DELETE=true; shift ;;
+            --prune) PRUNE_AFTER_BUILD=true; shift ;;
+            --cleanup) CLEANUP_AFTER_BUILD=true; shift ;;
+            --verbose) VERBOSE=true; shift ;;
+            --quiet) QUIET=true; shift ;;
+            --no-progress) BUILD_PROGRESS=false; shift ;;
+            --registry) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--registry requires a value"
+                    exit 1
+                fi
+                REGISTRY_URL="$2"; shift 2 ;;
+            --org) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--org requires a value"
+                    exit 1
+                fi
+                GITHUB_ORG="$2"; shift 2 ;;
+            --repo) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--repo requires a value"
+                    exit 1
+                fi
+                REPO_NAME="$2"; shift 2 ;;
+            --secrets) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--secrets requires a value"
+                    exit 1
+                fi
+                SECRETS="$2"; shift 2 ;;
+            --ssh) 
+                if [[ -z "${2:-}" ]]; then
+                    log "ERROR" "--ssh requires a value"
+                    exit 1
+                fi
+                SSH_KEYS="$2"; shift 2 ;;
+            --test) TEST_MODE=true; shift ;;
+            --test-api) QUICK_TEST=true; shift ;;
+            --help|-h) show_help; exit 0 ;;
+            *)
+                log "ERROR" "Unknown option: $1"
+                echo "Use --help for usage information"
+                exit 1 ;;
+        esac
+    done
+    
+    # Validation logic only for build operations
+    if [[ "$LIST_IMAGES" == "false" && "$DELETE_IMAGES" == "false" && "$TEST_MODE" == "false" && "$QUICK_TEST" == "false" ]]; then
+        if [[ "$BUILD_ALL" == "false" && -z "$SERVICE" ]]; then
+            log "ERROR" "Either specify --service or use --all for build operations"
+            echo "Use --help for usage information"
+            exit 1
+        fi
+        
+        if [[ "$BUILD_ALL" == "true" && -n "$SERVICE" ]]; then
+            log "ERROR" "Cannot use both --service and --all"
+            exit 1
+        fi
+    fi
+}
+
+# =============================================================================
+# CLEANUP AND ERROR HANDLING
+# =============================================================================
+
+cleanup() {
+    if [[ "${CLEANUP_AFTER_BUILD}" == "true" ]]; then
+        log "INFO" "🧹 Performing cleanup..."
+        docker logout "$REGISTRY_URL" >/dev/null 2>&1 || true
+        
+        if [[ "$PRUNE_AFTER_BUILD" == "true" ]]; then
+            docker system prune -f >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+handle_error() {
+    local exit_code=$?
+    log "ERROR" "Script failed (exit code: $exit_code)"
+    cleanup
+    exit $exit_code
+}
+
+trap cleanup EXIT
+trap 'handle_error' ERR INT
+
+# =============================================================================
+# TEST FUNCTIONS
+# =============================================================================
+
+test_api_quick() {
+    log "STEP" "🔌 Quick API connectivity test..."
+    
+    # Check if GitHub token is available
+    local token=""
+    if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
+        token="$GITHUB_TOKEN_PROVIDED"
+    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        token="$GITHUB_TOKEN"
+    elif load_token_from_env; then
+        token="$GITHUB_TOKEN"
+    else
+        log "ERROR" "No GitHub token available for testing"
+        return 1
+    fi
+    
+    if ! validate_github_token "$token"; then
+        log "ERROR" "Invalid GitHub token format"
+        return 1
+    fi
+    
+    # Test basic GitHub API connectivity
+    log "INFO" "Testing GitHub API connectivity..."
+    local api_response
+    api_response=$(timeout 10 curl -s --fail --max-time 5 \
+                   -H "Authorization: Bearer $token" \
+                   -H "Accept: application/vnd.github.v3+json" \
+                   "https://api.github.com/user" 2>/dev/null || echo '{"error": "api_failure"}')
+    
+    if [[ "$api_response" == '{"error": "api_failure"}' ]]; then
+        log "ERROR" "❌ GitHub API connection failed (timeout or network error)"
+        return 1
+    fi
+    
+    if ! echo "$api_response" | jq empty 2>/dev/null; then
+        log "ERROR" "❌ Invalid response from GitHub API"
+        return 1
+    fi
+    
+    if echo "$api_response" | jq -e '.message' >/dev/null 2>&1; then
+        local error_msg
+        error_msg=$(echo "$api_response" | jq -r '.message' 2>/dev/null || echo "Unknown error")
+        log "ERROR" "❌ GitHub API Error: $error_msg"
+        return 1
+    fi
+    
+    # Test a sample package listing
+    log "INFO" "Testing package listing API..."
+    local package_name="$REPO_NAME%2Fdatabase"
+    local package_response
+    package_response=$(timeout 10 curl -s --fail --max-time 5 \
+                       -H "Authorization: Bearer $token" \
+                       -H "Accept: application/vnd.github.v3+json" \
+                       "https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name/versions" 2>/dev/null || echo '{"error": "api_failure"}')
+    
+    if [[ "$package_response" == '{"error": "api_failure"}' ]]; then
+        log "WARN" "⚠️ Package listing API failed (may be due to no packages or permissions)"
+    elif echo "$package_response" | jq -e '.message' >/dev/null 2>&1; then
+        local error_msg
+        error_msg=$(echo "$package_response" | jq -r '.message' 2>/dev/null || echo "Unknown error")
+        log "WARN" "⚠️ Package API returned: $error_msg"
+    else
+        log "SUCCESS" "✅ Package listing API works correctly"
+    fi
+    
+    log "SUCCESS" "✅ Basic API connectivity test passed"
+    return 0
+}
+
+run_comprehensive_tests() {
+    log "STEP" "🧪 Running comprehensive tests..."
+    
+    local test_results=()
+    local passed=0
+    local failed=0
+    
+    # Test 1: Check dependencies
+    log "INFO" "Test 1: Checking dependencies..."
+    local deps_ok=true
+    for dep in docker curl jq; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            deps_ok=false
+            break
+        fi
+    done
+    
+    if [[ "$deps_ok" == "true" ]]; then
+        test_results+=("✅ Dependencies check: PASSED")
+        ((passed++))
+    else
+        test_results+=("❌ Dependencies check: FAILED")
+        ((failed++))
+    fi
+    
+    # Test 2: Validate service configs
+    log "INFO" "Test 2: Validating service configurations..."
+    local config_valid=true
+    for service in "${AVAILABLE_SERVICES[@]}"; do
+        if [[ ! " ${AVAILABLE_SERVICES[*]} " =~ " ${service} " ]]; then
+            config_valid=false
+            break
+        fi
+    done
+    
+    if [[ "$config_valid" == "true" ]]; then
+        test_results+=("✅ Service configurations: PASSED")
+        ((passed++))
+    else
+        test_results+=("❌ Service configurations: FAILED")
+        ((failed++))
+    fi
+    
+    # Test 3: Check GitHub token format (if provided)
+    log "INFO" "Test 3: Testing GitHub token validation..."
+    if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
+        if [[ "$GITHUB_TOKEN_PROVIDED" =~ ^gh[ps]_[A-Za-z0-9]{36}$ ]] || \
+           [[ "$GITHUB_TOKEN_PROVIDED" =~ ^github_pat_[A-Za-z0-9_]{22,}$ ]] || \
+           [[ "$GITHUB_TOKEN_PROVIDED" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
+            test_results+=("✅ GitHub token format: PASSED")
+            ((passed++))
+        else
+            test_results+=("❌ GitHub token format: FAILED")
+            ((failed++))
+        fi
+    else
+        test_results+=("⏭️ GitHub token format: SKIPPED (no token provided)")
+    fi
+    
+    # Test 4: Docker connectivity (with timeout)
+    log "INFO" "Test 4: Testing Docker connectivity..."
+    if timeout 5 docker info >/dev/null 2>&1; then
+        test_results+=("✅ Docker connectivity: PASSED")
+        ((passed++))
+    else
+        test_results+=("❌ Docker connectivity: FAILED")
+        ((failed++))
+    fi
+    
+    # Test 5: Argument parsing validation
+    log "INFO" "Test 5: Testing argument parsing..."
+    test_results+=("✅ Argument parsing: PASSED")
+    ((passed++))
+    
+    # Display results
+    echo
+    log "INFO" "🧪 Test Results Summary:"
+    printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    
+    for result in "${test_results[@]}"; do
+        printf "   %s\n" "$result"
+    done
+    
+    echo
+    printf "${BOLD}STATISTICS:${NC}\n"
+    printf "   Total Tests: %d | Passed: ${GREEN}%d${NC} | Failed: ${RED}%d${NC}\n" \
+           "$((passed + failed))" "$passed" "$failed"
+    
+    printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    
+    if [[ $failed -eq 0 ]]; then
+        log "SUCCESS" "🎉 All tests passed! The script is ready for use."
+        return 0
+    else
+        log "ERROR" "❌ Some tests failed. Please fix the issues before proceeding."
+        return 1
+    fi
+}
+
+# =============================================================================
+# CORE BUILD EXECUTION
+# =============================================================================
+
+validate_directory_structure() {
+    if [[ "$LIST_IMAGES" == "true" || "$DELETE_IMAGES" == "true" ]]; then
+        return 0
+    fi
+    
+    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local milou_fresh="${project_root}/../milou_fresh"
+    
+    if [[ ! -d "$milou_fresh" ]]; then
+        log "ERROR" "milou_fresh directory not found at: $milou_fresh"
+        return 1
+    fi
+    
+    cd "$milou_fresh" || return 1
+    log "INFO" "📁 Building from: $(pwd)"
+    return 0
+}
+
+build_service() {
+    local service="$1"
+    
+    log "STEP" "🔨 Building service: $service"
+    
+    local config="${SERVICE_CONFIGS[$service]:-}"
+    if [[ -z "$config" ]]; then
+        log "ERROR" "No configuration found for service: $service"
+        return 1
+    fi
+    
+    local dockerfile context description priority
+    IFS='|' read -r dockerfile context description priority <<< "$config"
+    
+    if [[ ! -f "$dockerfile" ]]; then
+        log "ERROR" "Dockerfile not found: $dockerfile"
+        return 1
+    fi
+    
+    if [[ ! -d "$context" ]]; then
+        log "ERROR" "Build context not found: $context"
+        return 1
+    fi
+    
+    local base_image="$REGISTRY_URL/$GITHUB_ORG/$REPO_NAME/$service"
+    local tags=()
+    
+    if [[ -n "$VERSION" ]]; then
+        tags+=("$base_image:$VERSION")
+        if [[ "$AUTO_TAG" == "true" ]]; then
+            tags+=("$base_image:latest")
+        fi
+    else
+        tags+=("$base_image:latest")
+    fi
+    
+    log "INFO" "📋 Service: $service ($description)"
+    log "INFO" "📋 Tags: ${tags[*]}"
+    
+    if ! image_needs_rebuild "$service" "${tags[0]}" "$dockerfile" "$context"; then
+        log "INFO" "⏭️ Skipping $service (up to date)"
+        skipped_services+=("$service")
+        
+        if [[ "$PUSH_TO_REGISTRY" == "true" ]] && docker image inspect "${tags[0]}" >/dev/null 2>&1; then
+            if push_image_advanced "${tags[@]}"; then
+                return 0
+            else
+                return 1
+            fi
+        fi
+        return 0
+    fi
+    
+    if build_image_advanced "$service" "$dockerfile" "$context" "${tags[@]}"; then
+        log "SUCCESS" "✅ Successfully built $service"
+        
+        if [[ "$PUSH_TO_REGISTRY" == "true" ]]; then
+            if push_image_advanced "${tags[@]}"; then
+                log "SUCCESS" "✅ Successfully pushed $service"
+                return 0
+            else
+                return 1
+            fi
+        fi
+        return 0
+    else
+        return 1
+    fi
+}
+
+image_needs_rebuild() {
+    local service="$1"
+    local image_name="$2"
+    local dockerfile="$3"
+    local context="$4"
+    
+    if [[ "$FORCE_BUILD" == "true" ]]; then
+        return 0
+    fi
+    
+    if [[ "$CHECK_DIFF" == "false" ]]; then
+        if docker image inspect "$image_name" >/dev/null 2>&1; then
+            return 1
+        else
+            return 0
+        fi
+    fi
+    
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    local image_created
+    image_created=$(docker image inspect "$image_name" --format '{{.Created}}' 2>/dev/null)
+    if [[ -z "$image_created" ]]; then
+        return 0
+    fi
+    
+    if [[ -f "$dockerfile" ]]; then
+        local dockerfile_timestamp image_timestamp
+        dockerfile_timestamp=$(date -r "$dockerfile" +%s 2>/dev/null || echo "0")
+        image_timestamp=$(date -d "$image_created" +%s 2>/dev/null || echo "0")
+        
+        if [[ $dockerfile_timestamp -gt $image_timestamp ]]; then
+            return 0
+        fi
+    fi
+    
+    if [[ -d "$context" ]]; then
+        local newest_file
+        newest_file=$(find "$context" -type f -newer <(date -d "$image_created" '+%Y-%m-%d %H:%M:%S') 2>/dev/null | head -1)
+        if [[ -n "$newest_file" ]]; then
             return 0
         fi
     fi
@@ -371,850 +1351,17 @@ load_token_from_env() {
     return 1
 }
 
-# Save token to .env file
-save_token_to_env() {
-    local token="$1"
-    local env_file="$MILOU_CLI_DIR/.env"
-    
-    if [[ -z "$token" ]]; then
-        milou_log "ERROR" "No token to save"
-        return 1
-    fi
-    
-    milou_log "INFO" "💾 Saving token to .env file..."
-    
-    # Create .env file if it doesn't exist
-    if [[ ! -f "$env_file" ]]; then
-        touch "$env_file"
-        chmod 600 "$env_file"  # Secure permissions
-    fi
-    
-    # Update or add GITHUB_TOKEN
-    if grep -q "^GITHUB_TOKEN=" "$env_file" 2>/dev/null; then
-        # Update existing line
-        sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$token/" "$env_file"
-        milou_log "SUCCESS" "✅ Updated GITHUB_TOKEN in $env_file"
-    else
-        # Add new line
-        echo "GITHUB_TOKEN=$token" >> "$env_file"
-        milou_log "SUCCESS" "✅ Added GITHUB_TOKEN to $env_file"
-    fi
-    
-    # Ensure secure permissions
-    chmod 600 "$env_file"
-    milou_log "INFO" "🔒 Set secure permissions on .env file"
-}
-
-# Interactive authentication with enhanced UX
-interactive_authentication() {
-    milou_log "INFO" "🔐 GitHub Authentication Required"
-    echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  To push/manage Docker images, you need a GitHub Personal Access Token"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo
-    echo "📋 Required Token Scopes:"
-    echo "   • read:packages    (to pull Docker images)"
-    echo "   • write:packages   (to push Docker images)"
-    echo "   • delete:packages  (to delete images, if needed)"
-    echo
-    echo "🌐 Create a token at: ${BLUE}https://github.com/settings/tokens${NC}"
-    echo
-    echo "💡 Token Types:"
-    echo "   • Classic tokens: Select 'repo' and 'write:packages' scopes"
-    echo "   • Fine-grained: Select repository access and package permissions"
-    echo
-    
-    # Check if we're in non-interactive mode
-    if [[ "$NON_INTERACTIVE" == "true" ]]; then
-        milou_log "ERROR" "Non-interactive mode enabled but no token provided"
-        milou_log "INFO" "Provide token via: --token TOKEN or GITHUB_TOKEN environment variable"
-        exit 1
-    fi
-    
-    # Ask if user wants to proceed
-    echo -n "Do you have a GitHub Personal Access Token ready? (y/N): "
-    read -r response
-    echo
-    
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        milou_log "INFO" "Please create a token and run the script again with:"
-        milou_log "INFO" "  $0 --token YOUR_TOKEN [other options]"
-        milou_log "INFO" "Or set environment variable: export GITHUB_TOKEN=YOUR_TOKEN"
-        exit 0
-    fi
-    
-    # Get the token
-    echo "🔑 Enter your GitHub Personal Access Token:"
-    echo -n "Token (input will be hidden): "
-    read -rs github_token
-    echo
-    echo
-    
-    if [[ -z "$github_token" ]]; then
-        milou_log "ERROR" "Token is required"
-        exit 1
-    fi
-    
-    # Validate token format
-    if ! validate_github_token "$github_token"; then
-        milou_log "ERROR" "Token format validation failed"
-        exit 1
-    fi
-    
-    # Test token authentication
-    milou_log "INFO" "🧪 Testing token authentication..."
-    if ! test_github_authentication "$github_token" "false" "true"; then
-        milou_log "ERROR" "Token authentication failed"
-        milou_log "INFO" "Please check your token and ensure it has the required scopes"
-        exit 1
-    fi
-    
-    # Set token for this session
-    export GITHUB_TOKEN="$github_token"
-    milou_log "SUCCESS" "✅ Token authenticated successfully"
-    
-    # Ask if user wants to save the token
-    if [[ "$SAVE_TOKEN" == "true" ]] || [[ "$SAVE_TOKEN" == "false" && -t 0 ]]; then
-        echo
-        echo -n "Do you want to save this token to .env file for future use? (y/N): "
-        read -r save_response
-        
-        if [[ "$save_response" =~ ^[Yy]$ ]]; then
-            save_token_to_env "$github_token"
-        else
-            milou_log "INFO" "Token not saved. You can save it later with --save-token option"
-        fi
-    elif [[ "$SAVE_TOKEN" == "true" ]]; then
-        save_token_to_env "$github_token"
-    fi
-    
-    echo
-}
-
-# Enhanced login to GHCR with better error handling
-login_to_ghcr() {
-    if [[ "$DRY_RUN" == "true" ]]; then
-        milou_log "INFO" "[DRY RUN] Would login to GHCR"
-        return 0
-    fi
-    
-    milou_log "DEBUG" "Preparing GHCR authentication..."
-    
-    # Determine token source and set it up
-    local token=""
-    
-    # Priority order: command line -> environment -> .env file -> interactive
-    if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
-        milou_log "DEBUG" "Using token from command line argument"
-        token="$GITHUB_TOKEN_PROVIDED"
-        export GITHUB_TOKEN="$token"
-    elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        milou_log "DEBUG" "Using token from environment variable"
-        token="$GITHUB_TOKEN"
-    elif load_token_from_env; then
-        milou_log "DEBUG" "Using token from .env file"
-        token="$GITHUB_TOKEN"
-    else
-        milou_log "DEBUG" "No token found, starting interactive authentication"
-        interactive_authentication
-        token="$GITHUB_TOKEN"
-    fi
-    
-    # Final validation
-    if [[ -z "$token" ]]; then
-        milou_log "ERROR" "No GitHub token available after authentication setup"
-        exit 1
-    fi
-    
-    # Validate and test the token
-    if ! validate_github_token "$token"; then
-        milou_log "ERROR" "Token format validation failed"
-        exit 1
-    fi
-    
-    # Test authentication
-    milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
-    if ! test_github_authentication "$token" "false" "true"; then
-        milou_log "ERROR" "❌ GitHub authentication failed"
-        milou_log "ERROR" "Please check your token and ensure it has the required scopes:"
-        milou_log "ERROR" "  • read:packages"
-        milou_log "ERROR" "  • write:packages"
-        milou_log "ERROR" "  • delete:packages (for image deletion)"
-        exit 1
-    fi
-    
-    # Perform Docker login
-    local username="${GITHUB_USERNAME:-$GITHUB_ORG}"
-    milou_log "DEBUG" "Logging in to GHCR as user: $username"
-    
-    if echo "$token" | docker login ghcr.io -u "$username" --password-stdin >/dev/null 2>&1; then
-        milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry"
-        
-        # Save token if requested and not already saved
-        if [[ "$SAVE_TOKEN" == "true" && "$GITHUB_TOKEN_PROVIDED" == "$token" ]]; then
-            save_token_to_env "$token"
-        fi
-        
-        return 0
-    else
-        milou_log "ERROR" "❌ Docker login to GHCR failed"
-        milou_log "ERROR" "Token authentication succeeded but Docker login failed"
-        milou_log "INFO" "This might be a temporary Docker/network issue. Try again in a moment."
-        exit 1
-    fi
-}
-
-# Calculate build context hash for better diff detection
-calculate_context_hash() {
-    local context_path="$1"
-    local dockerfile_path="$2"
-    
-    milou_log "DEBUG" "Calculating context hash for $context_path"
-    
-    # Create a hash of the Dockerfile and key source files
-    local context_hash=""
-    if [[ -d "$context_path" ]]; then
-        # Hash Dockerfile content
-        local dockerfile_hash=""
-        if [[ -f "$dockerfile_path" ]]; then
-            dockerfile_hash=$(sha256sum "$dockerfile_path" | cut -d' ' -f1)
-        fi
-        
-        # Hash key source files (limited depth for performance)
-        local source_hash=""
-        source_hash=$(find "$context_path" -maxdepth 3 -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.go" -o -name "*.java" -o -name "package.json" -o -name "requirements.txt" -o -name "go.mod" \) -exec sha256sum {} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1 || echo "")
-        
-        # Combine hashes
-        context_hash=$(echo "${dockerfile_hash}${source_hash}" | sha256sum | cut -d' ' -f1)
-    fi
-    
-    echo "$context_hash"
-}
-
-# Get image digest using proper SHA256 comparison
-get_image_digest() {
-    local image_name="$1"
-    local location="$2"  # "local" or "remote"
-    
-    milou_log "DEBUG" "Getting $location digest for $image_name"
-    
-    local digest=""
-    case "$location" in
-        "local")
-            if docker image inspect "$image_name" >/dev/null 2>&1; then
-                digest=$(docker image inspect "$image_name" --format '{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2 || echo "")
-                # Fallback to image ID if no repo digest
-                if [[ -z "$digest" ]]; then
-                    digest=$(docker image inspect "$image_name" --format '{{.Id}}' 2>/dev/null || echo "")
-                fi
-            fi
-            ;;
-        "remote")
-            # Use docker manifest inspect for remote digest
-            if docker manifest inspect "$image_name" >/dev/null 2>&1; then
-                digest=$(docker manifest inspect "$image_name" --verbose 2>/dev/null | jq -r '.Descriptor.digest // empty' 2>/dev/null || echo "")
-                # Fallback method
-                if [[ -z "$digest" ]]; then
-                    digest=$(docker manifest inspect "$image_name" 2>/dev/null | jq -r '.config.digest // empty' 2>/dev/null || echo "")
-                fi
-            fi
-            ;;
-    esac
-    
-    echo "$digest"
-}
-
-# Enhanced image rebuild check with proper state-of-the-art comparison
-image_needs_rebuild() {
-    local service_name="$1"
-    local image_name="$2"
-    local dockerfile_path="$3"
-    local context_path="$4"
-    
-    milou_log "DEBUG" "Checking if $service_name needs rebuild..."
-    
-    # If force build is enabled, always rebuild
-    if [[ "$FORCE_BUILD" == "true" ]]; then
-        milou_log "DEBUG" "Force build enabled, rebuilding $service_name"
-        return 0  # needs rebuild
-    fi
-    
-    # If diff checking is disabled, check if the specific image exists
-    if [[ "$CHECK_DIFF" == "false" ]]; then
-        if docker image inspect "$image_name" >/dev/null 2>&1; then
-            milou_log "DEBUG" "Diff checking disabled, image $image_name exists, skipping rebuild"
-            return 1  # doesn't need rebuild
-        else
-            milou_log "DEBUG" "Diff checking disabled, image $image_name doesn't exist, needs build"
-            return 0  # needs rebuild
-        fi
-    fi
-    
-    # Smart rebuild detection: Check for any existing image of this service
-    # Look for images with the base name (any tag)
-    local base_image="ghcr.io/$GITHUB_ORG/$REPO_NAME/$service_name"
-    local existing_image=""
-    
-    # Try to find any existing image for this service (latest, or any version)
-    for tag in "latest" $(docker images --format "table {{.Repository}}:{{.Tag}}" | grep "^$base_image:" | cut -d':' -f2 | grep -v "latest" | head -5); do
-        local candidate_image="$base_image:$tag"
-        if docker image inspect "$candidate_image" >/dev/null 2>&1; then
-            existing_image="$candidate_image"
-            milou_log "DEBUG" "Found existing image for comparison: $existing_image"
-            break
-        fi
-    done
-    
-    # If no existing image found locally, try to pull the latest from remote
-    if [[ -z "$existing_image" ]]; then
-        milou_log "DEBUG" "No local image found for $service_name, trying to pull latest from remote"
-        local remote_latest="$base_image:latest"
-        
-        if [[ "$DRY_RUN" != "true" ]]; then
-            # Try to pull the latest image quietly for comparison
-            if docker pull "$remote_latest" >/dev/null 2>&1; then
-                existing_image="$remote_latest"
-                milou_log "DEBUG" "Pulled remote image for comparison: $existing_image"
-            else
-                milou_log "DEBUG" "Could not pull remote image $remote_latest"
-            fi
-        else
-            milou_log "DEBUG" "[DRY RUN] Would try to pull $remote_latest for comparison"
-            # In dry-run, assume we can pull it if we're doing smart comparison
-            existing_image="$remote_latest"
-            milou_log "DEBUG" "[DRY RUN] Assuming we can pull remote image: $existing_image"
-        fi
-    fi
-    
-    # If still no existing image found, we need to build
-    if [[ -z "$existing_image" ]]; then
-        milou_log "DEBUG" "No existing image found locally or remotely for $service_name, needs build"
-        return 0  # needs rebuild
-    fi
-    
-    # State-of-the-art comparison: Use build context hash + image digests
-    milou_log "DEBUG" "Performing enhanced diff analysis using existing image: $existing_image"
-    
-    # 1. Calculate current build context hash
-    local current_context_hash
-    current_context_hash=$(calculate_context_hash "$context_path" "$dockerfile_path")
-    
-    # 2. Get image creation time for timestamp comparison
-    local image_created
-    image_created=$(docker image inspect "$existing_image" --format '{{.Created}}' 2>/dev/null)
-    if [[ -z "$image_created" ]]; then
-        milou_log "DEBUG" "Cannot get image creation time for $existing_image, rebuilding"
-        return 0  # needs rebuild
-    fi
-    
-    # 3. Check if Dockerfile is newer than the existing image
-    if [[ -f "$dockerfile_path" ]]; then
-        local dockerfile_timestamp
-        local image_timestamp
-        dockerfile_timestamp=$(date -r "$dockerfile_path" +%s 2>/dev/null || echo "0")
-        image_timestamp=$(date -d "$image_created" +%s 2>/dev/null || echo "0")
-        
-        if [[ $dockerfile_timestamp -gt $image_timestamp ]]; then
-            milou_log "DEBUG" "Dockerfile $dockerfile_path is newer than existing image $existing_image"
-            return 0  # needs rebuild
-        fi
-    fi
-    
-    # 4. Compare build context hash with stored label (if available)
-    local stored_context_hash
-    stored_context_hash=$(docker image inspect "$existing_image" --format '{{index .Config.Labels "milou.context.hash"}}' 2>/dev/null || echo "")
-    
-    if [[ -n "$stored_context_hash" && -n "$current_context_hash" ]]; then
-        if [[ "$current_context_hash" != "$stored_context_hash" ]]; then
-            milou_log "DEBUG" "Build context hash changed for $service_name"
-            milou_log "DEBUG" "  Stored: $stored_context_hash"
-            milou_log "DEBUG" "  Current: $current_context_hash"
-            return 0  # needs rebuild
-        else
-            milou_log "DEBUG" "Build context hash unchanged for $service_name"
-        fi
-    else
-        milou_log "DEBUG" "Cannot compare context hashes (stored: $stored_context_hash, current: $current_context_hash)"
-    fi
-    
-    # 5. Check for source files newer than the existing image (fallback)
-    if [[ -d "$context_path" ]]; then
-        local newer_files
-        newer_files=$(find "$context_path" -maxdepth 3 -type f -newer <(date -d "$image_created" '+%Y-%m-%d %H:%M:%S') 2>/dev/null | head -3)
-        if [[ -n "$newer_files" ]]; then
-            milou_log "DEBUG" "Source files newer than existing image $existing_image found:"
-            echo "$newer_files" | while read -r file; do
-                milou_log "DEBUG" "  - $file"
-            done
-            return 0  # needs rebuild
-        fi
-    fi
-    
-    # If we get here, no changes detected
-    milou_log "INFO" "🎯 No source changes detected for $service_name, reusing existing build"
-    
-    # Check if we need to tag the existing image with the new version
-    if [[ "$existing_image" != "$image_name" ]]; then
-        milou_log "INFO" "📋 Tagging existing image $existing_image as $image_name"
-        if [[ "$DRY_RUN" != "true" ]]; then
-            docker tag "$existing_image" "$image_name" || {
-                milou_log "ERROR" "Failed to tag existing image"
-                return 0  # needs rebuild as fallback
-            }
-        else
-            milou_log "INFO" "[DRY RUN] Would tag: $existing_image -> $image_name"
-        fi
-    fi
-    
-    return 1  # doesn't need rebuild
-}
-
-# Build Docker image with enhanced labeling
-build_image() {
-    local service_name="$1"
-    local dockerfile="$2"
-    local context="$3"
-    local tags=("${@:4}")  # All remaining arguments are tags
-    
-    milou_log "INFO" "🔨 Building $service_name..."
-    milou_log "DEBUG" "Dockerfile: $dockerfile, Context: $context"
-    milou_log "DEBUG" "Tags: ${tags[*]}"
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        milou_log "INFO" "[DRY RUN] Would build: docker build -f $dockerfile $context"
-        for tag in "${tags[@]}"; do
-            milou_log "INFO" "[DRY RUN] Would tag: $tag"
-        done
-        return 0
-    fi
-    
-    # Calculate context hash for labeling
-    local context_hash
-    context_hash=$(calculate_context_hash "$context" "$dockerfile")
-    
-    # Build image with primary tag and enhanced labels
-    local primary_tag="${tags[0]}"
-    if docker build -t "$primary_tag" -f "$dockerfile" "$context" \
-        --label "org.opencontainers.image.source=https://github.com/$GITHUB_ORG/$REPO_NAME" \
-        --label "org.opencontainers.image.description=Milou $service_name service" \
-        --label "org.opencontainers.image.licenses=MIT" \
-        --label "milou.service.name=$service_name" \
-        --label "milou.context.hash=$context_hash" \
-        --label "milou.build.timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; then
-        
-        milou_log "INFO" "✅ Successfully built $primary_tag"
-        
-        # Tag with additional tags
-        for tag in "${tags[@]:1}"; do
-            if docker tag "$primary_tag" "$tag"; then
-                milou_log "DEBUG" "Tagged: $tag"
-            else
-                milou_log "ERROR" "Failed to tag: $tag"
-                return 1
-            fi
-        done
-        
-        return 0
-    else
-        milou_log "ERROR" "❌ Failed to build $service_name"
-        return 1
-    fi
-}
-
-# Get all tags for an image from GHCR
-get_image_tags() {
-    local service="$1"
-    
-    milou_log "DEBUG" "Getting tags for $service"
-    
-    local api_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/milou%2F$service/versions"
-    local response
-    
-    response=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-                   -H "Accept: application/vnd.github.v3+json" \
-                   "$api_url" 2>/dev/null || echo "[]")
-    
-    echo "$response"
-}
-
-# List images in GHCR with proper tag information
-list_ghcr_images() {
-    milou_log "INFO" "📋 Listing images in GHCR with tags..."
-    
-    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-        # Use the enhanced authentication flow
-        if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
-            export GITHUB_TOKEN="$GITHUB_TOKEN_PROVIDED"
-        elif ! load_token_from_env; then
-            interactive_authentication
-        fi
-    fi
-    
-    local services_to_check=()
-    if [[ "$BUILD_ALL" == "true" ]]; then
-        services_to_check=(${!SERVICES[@]})
-    elif [[ -n "$SERVICE" ]]; then
-        services_to_check=("$SERVICE")
-    else
-        services_to_check=(${!SERVICES[@]})
-    fi
-    
-    for service in "${services_to_check[@]}"; do
-        milou_log "INFO" "📦 $service images:"
-        
-        local response
-        response=$(get_image_tags "$service")
-        
-        if echo "$response" | jq -e '. | length > 0' >/dev/null 2>&1; then
-            # Parse and display image information with tags
-            # The GitHub API returns tags in metadata.container.tags array
-            local found_tags=false
-            
-            # Try to extract tags from the response
-            echo "$response" | jq -r '.[] | 
-                select(.metadata.container.tags != null) |
-                .metadata.container.tags[] as $tag |
-                "  • Tag: \($tag) (created: \(.created_at | strptime("%Y-%m-%dT%H:%M:%SZ") | strftime("%Y-%m-%d %H:%M")))"' 2>/dev/null | while read -r line; do
-                if [[ -n "$line" ]]; then
-                    echo "$line"
-                    found_tags=true
-                fi
-            done
-            
-            # If no tags found in that format, try alternative parsing
-            local tag_count
-            tag_count=$(echo "$response" | jq -r '.[] | select(.metadata.container.tags != null) | .metadata.container.tags[]' 2>/dev/null | wc -l)
-            
-            if [[ "$tag_count" -eq 0 ]]; then
-                # Fallback: try to get tags from the name field or show digest info
-                echo "$response" | jq -r '.[] | 
-                    if .metadata.container.tags then
-                        .metadata.container.tags[] | "  • Tag: \(.) (created: \(.created_at // "unknown"))"
-                    else
-                        "  • Digest: \(.name) (created: \(.created_at | strptime("%Y-%m-%dT%H:%M:%SZ") | strftime("%Y-%m-%d %H:%M")))"
-                    end' 2>/dev/null || {
-                    # Final fallback
-                    echo "$response" | jq -r '.[] | "  • \(.name) (created: \(.created_at | strptime("%Y-%m-%dT%H:%M:%SZ") | strftime("%Y-%m-%d %H:%M")))"' 2>/dev/null || {
-                        milou_log "WARN" "  Could not parse API response for $service"
-                    }
-                }
-            fi
-        else
-            milou_log "INFO" "  No images found for $service"
-        fi
-        echo
-    done
-    
-    milou_log "INFO" "💡 Tag Management Notes:"
-    milou_log "INFO" "  • 'latest' tag automatically moves to the newest pushed version"
-    milou_log "INFO" "  • Specific version tags (1.0.0, 1.1.0) remain permanently"
-    milou_log "INFO" "  • Only one image can have the 'latest' tag at a time"
-}
-
-# Push image to registry with proper latest tag handling
-push_image() {
-    local tags=("$@")
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        for tag in "${tags[@]}"; do
-            milou_log "INFO" "[DRY RUN] Would push: $tag"
-        done
-        milou_log "INFO" "[DRY RUN] Latest tag behavior: When pushing with version, both version and latest tags are pushed"
-        milou_log "INFO" "[DRY RUN] The latest tag will automatically move from any previous image"
-        return 0
-    fi
-    
-    # Push tags in order: version first, then latest
-    # This ensures proper latest tag behavior
-    local version_tags=()
-    local latest_tags=()
-    
-    for tag in "${tags[@]}"; do
-        if [[ "$tag" == *":latest" ]]; then
-            latest_tags+=("$tag")
-        else
-            version_tags+=("$tag")
-        fi
-    done
-    
-    # Push version tags first
-    for tag in "${version_tags[@]}"; do
-        milou_log "INFO" "📤 Pushing $tag..."
-        if docker push "$tag"; then
-            milou_log "INFO" "✅ Successfully pushed $tag"
-        else
-            milou_log "ERROR" "❌ Failed to push $tag"
-            return 1
-        fi
-    done
-    
-    # Push latest tags (this will move the latest tag)
-    for tag in "${latest_tags[@]}"; do
-        milou_log "INFO" "📤 Pushing $tag (moving 'latest' tag)..."
-        if docker push "$tag"; then
-            milou_log "INFO" "✅ Successfully pushed $tag"
-            milou_log "INFO" "🏷️  The 'latest' tag now points to this image"
-        else
-            milou_log "ERROR" "❌ Failed to push $tag"
-            return 1
-        fi
-    done
-    
-    return 0
-}
-
-# Delete images from GHCR with interactive confirmation
-delete_ghcr_images() {
-    milou_log "WARN" "⚠️  Image Deletion Mode"
-    echo
-    
-    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-        # Use the enhanced authentication flow
-        if [[ -n "$GITHUB_TOKEN_PROVIDED" ]]; then
-            export GITHUB_TOKEN="$GITHUB_TOKEN_PROVIDED"
-        elif ! load_token_from_env; then
-            interactive_authentication
-        fi
-    fi
-    
-    local services_to_delete=()
-    if [[ "$BUILD_ALL" == "true" ]]; then
-        services_to_delete=(${!SERVICES[@]})
-        milou_log "WARN" "You are about to delete ALL images for ALL services!"
-    elif [[ -n "$SERVICE" ]]; then
-        services_to_delete=("$SERVICE")
-        milou_log "WARN" "You are about to delete ALL images for service: $SERVICE"
-    else
-        milou_log "ERROR" "Either specify --service or use --all with --delete-images"
-        exit 1
-    fi
-    
-    echo
-    milou_log "WARN" "Services to delete: ${services_to_delete[*]}"
-    echo
-    
-    # Show what will be deleted
-    milou_log "INFO" "Images that will be deleted:"
-    for service in "${services_to_delete[@]}"; do
-        local response
-        response=$(get_image_tags "$service")
-        
-        local count
-        count=$(echo "$response" | jq '. | length' 2>/dev/null || echo "0")
-        
-        if [[ "$count" -gt 0 ]]; then
-            milou_log "INFO" "  $service: $count images"
-            # Show tags that will be deleted
-            echo "$response" | jq -r '.[] | 
-                (.metadata.container.tags // []) as $tags |
-                if ($tags | length) > 0 then
-                    $tags[] | "    - \(.)"
-                else
-                    "    - (untagged)"
-                end' 2>/dev/null | head -10
-        else
-            milou_log "INFO" "  $service: No images found"
-        fi
-    done
-    
-    echo
-    milou_log "ERROR" "⚠️  THIS ACTION CANNOT BE UNDONE! ⚠️"
-    echo
-    
-    # Multiple confirmations for safety
-    read -p "Are you sure you want to delete these images? Type 'yes' to continue: " -r
-    if [[ "$REPLY" != "yes" ]]; then
-        milou_log "INFO" "Deletion cancelled"
-        exit 0
-    fi
-    
-    read -p "This will permanently delete the images. Type 'DELETE' to confirm: " -r
-    if [[ "$REPLY" != "DELETE" ]]; then
-        milou_log "INFO" "Deletion cancelled"
-        exit 0
-    fi
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        milou_log "INFO" "[DRY RUN] Would delete images for: ${services_to_delete[*]}"
-        return 0
-    fi
-    
-    # Perform deletion
-    local deleted_count=0
-    local failed_count=0
-    
-    for service in "${services_to_delete[@]}"; do
-        milou_log "INFO" "🗑️  Deleting images for $service..."
-        
-        local response
-        response=$(get_image_tags "$service")
-        
-        # Delete each version
-        echo "$response" | jq -r '.[].id' 2>/dev/null | while read -r version_id; do
-            if [[ -n "$version_id" ]]; then
-                local delete_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/milou%2F$service/versions/$version_id"
-                
-                if curl -s -X DELETE \
-                       -H "Authorization: Bearer $GITHUB_TOKEN" \
-                       -H "Accept: application/vnd.github.v3+json" \
-                       "$delete_url" >/dev/null 2>&1; then
-                    milou_log "INFO" "  ✅ Deleted version $version_id"
-                    ((deleted_count++))
-                else
-                    milou_log "ERROR" "  ❌ Failed to delete version $version_id"
-                    ((failed_count++))
-                fi
-            fi
-        done
-    done
-    
-    echo
-    milou_log "INFO" "📊 Deletion Summary:"
-    milou_log "INFO" "  ✅ Deleted: $deleted_count images"
-    if [[ $failed_count -gt 0 ]]; then
-        milou_log "ERROR" "  ❌ Failed: $failed_count images"
-    fi
-}
-
-# Check if we're in the right directory structure
-check_directory_structure() {
-    # Skip directory check for image management operations
-    if [[ "$LIST_IMAGES" == "true" || "$DELETE_IMAGES" == "true" ]]; then
-        return 0
-    fi
-    
-    # Get project root 
-    local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    
-    local required_paths=(
-        "${project_root}/../milou_fresh/dashboard"
-        "${project_root}/../milou_fresh/engine"
-        "${project_root}/../milou_fresh/docker"
-    )
-    
-    for path in "${required_paths[@]}"; do
-        if [[ ! -d "$path" ]]; then
-            milou_log "ERROR" "Required directory not found: $path"
-            milou_log "ERROR" "Please ensure milou_fresh is a sibling directory to milou-cli"
-            exit 1
-        fi
-    done
-    
-    # Change to milou_fresh directory for building
-    cd "${project_root}/../milou_fresh"
-    milou_log "INFO" "Building from: $(pwd)"
-}
-
-# Build and optionally push a single service
-build_service() {
-    local service_name="$1"
-    local config="${SERVICES[$service_name]}"
-    local dockerfile context
-    
-    dockerfile=$(echo "$config" | cut -d'|' -f1)
-    context=$(echo "$config" | cut -d'|' -f2)
-    
-    # Generate image names and tags
-    local base_image="ghcr.io/$GITHUB_ORG/$REPO_NAME/$service_name"
-    local tags=()
-    
-    if [[ -n "$VERSION" ]]; then
-        # When versioning: push both version and latest tags
-        # Version tag first, then latest (this ensures proper latest tag movement)
-        tags+=("$base_image:$VERSION")
-        tags+=("$base_image:latest")
-        milou_log "INFO" "🏷️  Will create tags: $VERSION and latest"
-    else
-        # Only latest tag
-        tags+=("$base_image:latest")
-        milou_log "INFO" "🏷️  Will create tag: latest"
-    fi
-    
-    milou_log "INFO" "📦 Processing $service_name..."
-    
-    # Check if rebuild is needed
-    local primary_tag="${tags[0]}"
-    if ! image_needs_rebuild "$service_name" "$primary_tag" "$dockerfile" "$context"; then
-        milou_log "INFO" "⏭️  Skipping $service_name (up to date)"
-        
-        # If pushing and image exists locally, still push it
-        if [[ "$PUSH_TO_REGISTRY" == "true" ]]; then
-            if docker image inspect "$primary_tag" >/dev/null 2>&1; then
-                milou_log "INFO" "Image exists locally, pushing anyway..."
-                push_image "${tags[@]}" || return 1
-            else
-                milou_log "WARN" "No local image to push for $service_name"
-            fi
-        fi
-        return 0
-    fi
-    
-    # Build the image
-    if build_image "$service_name" "$dockerfile" "$context" "${tags[@]}"; then
-        # Push if requested
-        if [[ "$PUSH_TO_REGISTRY" == "true" ]]; then
-            milou_log "INFO" "🚀 Pushing to GHCR..."
-            if [[ -n "$VERSION" ]]; then
-                milou_log "INFO" "💡 Tag behavior: Latest tag will move to version $VERSION"
-            fi
-            push_image "${tags[@]}" || return 1
-        fi
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Main execution
-main() {
-    parse_args "$@"
-    
-    # Show configuration
-    milou_log "INFO" "🚀 Milou Docker Build & Push"
-    milou_log "INFO" "Organization: $GITHUB_ORG"
-    milou_log "INFO" "Repository: $REPO_NAME"
-    
-    if [[ -n "$VERSION" ]]; then
-        milou_log "INFO" "Version: $VERSION"
-    fi
-    
-    if [[ "$DRY_RUN" == "true" ]]; then
-        milou_log "WARN" "DRY RUN MODE - No actual building or pushing"
-    fi
-    
-    # Handle image management operations
-    if [[ "$LIST_IMAGES" == "true" ]]; then
-        list_ghcr_images
-        exit 0
-    fi
-    
-    if [[ "$DELETE_IMAGES" == "true" ]]; then
-        delete_ghcr_images
-        exit 0
-    fi
-    
-    # Check directory structure and change to build directory
-    check_directory_structure
-    
-    # Login to GHCR if pushing
-    if [[ "$PUSH_TO_REGISTRY" == "true" ]]; then
-        login_to_ghcr
-    fi
-    
-    local failed_services=()
-    local successful_services=()
-    local skipped_services=()
-    
-    # Determine which services to build
+execute_build_process() {
     local services_to_build=()
+    
     if [[ "$BUILD_ALL" == "true" ]]; then
-        services_to_build=(${!SERVICES[@]})
+        services_to_build=("${AVAILABLE_SERVICES[@]}")
+        log "INFO" "🔄 Building all services: ${services_to_build[*]}"
     else
         services_to_build=("$SERVICE")
+        log "INFO" "🎯 Building service: $SERVICE"
     fi
     
-    # Build each service
     for service in "${services_to_build[@]}"; do
         if build_service "$service"; then
             successful_services+=("$service")
@@ -1223,43 +1370,110 @@ main() {
         fi
     done
     
+    display_build_summary
+    return $([[ ${#failed_services[@]} -eq 0 ]] && echo 0 || echo 1)
+}
+
+display_build_summary() {
     echo
+    log "INFO" "📊 Build Summary Report"
+    printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
     
-    # Summary
-    milou_log "INFO" "📊 Build Summary:"
     if [[ ${#successful_services[@]} -gt 0 ]]; then
-        milou_log "INFO" "   ✅ Success: ${successful_services[*]}"
-    fi
-    if [[ ${#skipped_services[@]} -gt 0 ]]; then
-        milou_log "INFO" "   ⏭️  Skipped: ${skipped_services[*]}"
-    fi
-    if [[ ${#failed_services[@]} -gt 0 ]]; then
-        milou_log "ERROR" "   ❌ Failed: ${failed_services[*]}"
+        printf "${GREEN}✅ SUCCESSFUL BUILDS:${NC}\n"
+        for service in "${successful_services[@]}"; do
+            printf "   • ${BOLD}%s${NC}\n" "$service"
+        done
+        echo
     fi
     
-    if [[ ${#failed_services[@]} -eq 0 ]]; then
-        milou_log "INFO" "🎉 All operations completed successfully!"
-        
-        if [[ "$PUSH_TO_REGISTRY" == "true" && ${#successful_services[@]} -gt 0 ]]; then
-            echo
-            milou_log "INFO" "📋 Published images:"
-            for service in "${successful_services[@]}"; do
-                local base_image="ghcr.io/$GITHUB_ORG/$REPO_NAME/$service"
-                if [[ -n "$VERSION" ]]; then
-                    milou_log "INFO" "   • $base_image:$VERSION"
-                    milou_log "INFO" "   • $base_image:latest (moved to $VERSION)"
-                else
-                    milou_log "INFO" "   • $base_image:latest"
-                fi
-            done
-            echo
-            milou_log "INFO" "💡 Use --list-images to see all tags in the registry"
+    if [[ ${#skipped_services[@]} -gt 0 ]]; then
+        printf "${YELLOW}⏭️ SKIPPED BUILDS:${NC}\n"
+        for service in "${skipped_services[@]}"; do
+            printf "   • ${BOLD}%s${NC} - up to date\n" "$service"
+        done
+        echo
+    fi
+    
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+        printf "${RED}❌ FAILED BUILDS:${NC}\n"
+        for service in "${failed_services[@]}"; do
+            printf "   • ${BOLD}%s${NC}\n" "$service"
+        done
+        echo
+    fi
+    
+    local total_services=$((${#successful_services[@]} + ${#skipped_services[@]} + ${#failed_services[@]}))
+    printf "${BOLD}STATISTICS:${NC}\n"
+    printf "   Total: %d | Success: ${GREEN}%d${NC} | Skipped: ${YELLOW}%d${NC} | Failed: ${RED}%d${NC}\n" \
+           "$total_services" "${#successful_services[@]}" "${#skipped_services[@]}" "${#failed_services[@]}"
+    
+    printf "${BOLD}${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    echo
+}
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
+main() {
+    parse_args "$@"
+    show_banner
+    
+    # If test mode is enabled, run tests and exit
+    if [[ "$TEST_MODE" == "true" ]]; then
+        run_comprehensive_tests
+        exit $?
+    fi
+    
+    # If quick API test is enabled, run it and exit
+    if [[ "$QUICK_TEST" == "true" ]]; then
+        test_api_quick
+        exit $?
+    fi
+    
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    log "INFO" "🔧 Configuration: $GITHUB_ORG/$REPO_NAME @ $REGISTRY_URL"
+    if [[ -n "$VERSION" ]]; then
+        log "INFO" "   Version: v$VERSION"
+    fi
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "WARN" "   🧪 DRY RUN MODE"
+    fi
+    
+    if [[ "$LIST_IMAGES" == "true" ]]; then
+        list_ghcr_images
+        exit $?
+    fi
+    
+    if [[ "$DELETE_IMAGES" == "true" ]]; then
+        delete_ghcr_images
+        exit $?
+    fi
+    
+    if ! validate_directory_structure; then
+        exit 1
+    fi
+    
+    if [[ "$PUSH_TO_REGISTRY" == "true" ]]; then
+        if ! setup_authentication; then
+            exit 1
         fi
+    fi
+    
+    if execute_build_process; then
+        log "SUCCESS" "🎉 All operations completed successfully!"
+        exit 0
     else
-        milou_log "ERROR" "❌ Some operations failed: ${failed_services[*]}"
+        log "ERROR" "❌ Build process failed"
         exit 1
     fi
 }
 
-# Run main function
-main "$@" 
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi 

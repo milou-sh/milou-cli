@@ -49,6 +49,108 @@ declare -g GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
 declare -g REGISTRY_TIMEOUT="${REGISTRY_TIMEOUT:-30}"
 
 # =============================================================================
+# DOCKER ERROR HANDLING
+# =============================================================================
+
+# Handle Docker startup errors with specific guidance
+docker_handle_startup_error() {
+    local error_output="$1"
+    local service="${2:-}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" == "true" ]] && return 0
+    
+    # Check for manifest unknown errors (most common issue)
+    if echo "$error_output" | grep -q "manifest unknown\|manifest not found"; then
+        echo
+        milou_log "ERROR" "❌ Docker Image Not Found"
+        echo -e "${DIM}The requested Docker image could not be found.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ Most Common Causes:${NC}"
+        echo -e "   ${BLUE}1.${NC} Empty or invalid version tags in .env file"
+        echo -e "   ${BLUE}2.${NC} Missing GitHub authentication for private images"
+        echo -e "   ${BLUE}3.${NC} Network connectivity issues"
+        echo -e "   ${BLUE}4.${NC} Invalid version tag specified"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} Check your .env file for empty MILOU_*_TAG variables"
+        echo -e "   ${GREEN}✓${NC} Ensure GITHUB_TOKEN is set with 'read:packages' scope"
+        echo -e "   ${GREEN}✓${NC} Verify network connectivity to ghcr.io"
+        echo -e "   ${GREEN}✓${NC} Try running setup again: ${CYAN}./milou.sh setup${NC}"
+        echo
+    # Check for authentication errors
+    elif echo "$error_output" | grep -q "unauthorized\|authentication\|login"; then
+        echo
+        milou_log "ERROR" "❌ Authentication Failed"
+        echo -e "${DIM}Cannot authenticate with GitHub Container Registry.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} Get a GitHub token: ${CYAN}https://github.com/settings/tokens${NC}"
+        echo -e "   ${GREEN}✓${NC} Required scope: ${BOLD}read:packages${NC}"
+        echo -e "   ${GREEN}✓${NC} Add to .env file: ${CYAN}GITHUB_TOKEN=ghp_your_token_here${NC}"
+        echo -e "   ${GREEN}✓${NC} Restart setup: ${CYAN}./milou.sh setup${NC}"
+        echo
+    # Check for network errors
+    elif echo "$error_output" | grep -q "network\|connection\|timeout\|dns"; then
+        echo
+        milou_log "ERROR" "❌ Network Error"
+        echo -e "${DIM}Network connection issues detected.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} Check internet connectivity"
+        echo -e "   ${GREEN}✓${NC} Verify DNS resolution: ${CYAN}nslookup ghcr.io${NC}"
+        echo -e "   ${GREEN}✓${NC} Check firewall settings"
+        echo -e "   ${GREEN}✓${NC} Try again in a few minutes"
+        echo
+    # Check for port conflicts
+    elif echo "$error_output" | grep -q "port.*already.*use\|address already in use"; then
+        echo
+        milou_log "ERROR" "❌ Port Conflict Detected"
+        echo -e "${DIM}Required ports are already in use by other services.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} Stop conflicting services"
+        echo -e "   ${GREEN}✓${NC} Check what's using ports: ${CYAN}netstat -tlnp${NC}"
+        echo -e "   ${GREEN}✓${NC} Run setup again: ${CYAN}./milou.sh setup${NC}"
+        echo
+    # Check for disk space issues
+    elif echo "$error_output" | grep -q "no space\|disk.*full\|insufficient storage"; then
+        echo
+        milou_log "ERROR" "❌ Insufficient Disk Space"
+        echo -e "${DIM}Not enough disk space to download and run Docker images.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} Free up disk space: ${CYAN}df -h${NC}"
+        echo -e "   ${GREEN}✓${NC} Clean Docker: ${CYAN}docker system prune -f${NC}"
+        echo -e "   ${GREEN}✓${NC} Remove old images: ${CYAN}docker image prune -a${NC}"
+        echo
+    else
+        # Generic error handling
+        echo
+        milou_log "ERROR" "❌ Service Startup Failed"
+        if [[ -n "$service" ]]; then
+            echo -e "${DIM}Service '$service' could not be started.${NC}"
+        else
+            echo -e "${DIM}One or more services could not be started.${NC}"
+        fi
+        echo
+        echo -e "${YELLOW}${BOLD}✓ Troubleshooting Steps:${NC}"
+        echo -e "   ${GREEN}✓${NC} Check logs: ${CYAN}./milou.sh logs${NC}"
+        echo -e "   ${GREEN}✓${NC} Verify configuration: ${CYAN}docker compose config${NC}"
+        echo -e "   ${GREEN}✓${NC} Check Docker status: ${CYAN}docker info${NC}"
+        echo -e "   ${GREEN}✓${NC} Restart setup: ${CYAN}./milou.sh setup${NC}"
+        echo
+    fi
+    
+    # Show a snippet of the actual error for debugging
+    if [[ ${#error_output} -gt 0 ]]; then
+        echo -e "${DIM}${BOLD}Error Details:${NC}"
+        echo -e "${DIM}$(echo "$error_output" | tail -5)${NC}"
+        echo
+    fi
+}
+
+# =============================================================================
 # DOCKER INITIALIZATION AND SETUP
 # =============================================================================
 
@@ -176,10 +278,26 @@ docker_execute() {
         "up"|"start")
             if [[ -n "$service" ]]; then
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting service: $service"
-                docker_compose up -d "${additional_args[@]}" "$service"
+                local result_output
+                result_output=$(docker_compose up -d "${additional_args[@]}" "$service" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to start service: $service"
+                    docker_handle_startup_error "$result_output" "$service" "$quiet"
+                    return $exit_code
+                fi
             else
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting all services"
-                docker_compose up -d --remove-orphans "${additional_args[@]}"
+                local result_output
+                result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to start services"
+                    docker_handle_startup_error "$result_output" "" "$quiet"
+                    return $exit_code
+                fi
             fi
             ;;
         "down"|"stop")

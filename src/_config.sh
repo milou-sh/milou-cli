@@ -412,7 +412,15 @@ config_create_env_file() {
     # Determine Docker image tags
     local image_tag="latest"
     if [[ "$use_latest_images" != "true" ]]; then
-        image_tag=$(config_detect_latest_stable_version "$MILOU_GITHUB_TOKEN" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
+        # Use selected version if available, otherwise detect latest stable
+        if [[ -n "${MILOU_SELECTED_VERSION:-}" ]]; then
+            image_tag="$MILOU_SELECTED_VERSION"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using selected version: $image_tag"
+        else
+            # Use the provided GitHub token or fall back to environment variable
+            local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+            image_tag=$(config_detect_latest_stable_version "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
+        fi
     fi
     
     # Create comprehensive configuration file

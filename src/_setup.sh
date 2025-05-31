@@ -1041,6 +1041,78 @@ setup_generate_configuration_interactive() {
     done
     echo
     
+    # Version Selection with enhanced UX
+    log_section "✓ Version Selection" "Choose your Milou version"
+    echo -e "${DIM}Select which version of Milou you'd like to install.${NC}"
+    echo
+    
+    echo -e "${BOLD}${CYAN}Available options:${NC}"
+    echo
+    echo -e "${GREEN}   1) ${BOLD}Latest Stable${NC} ${DIM}(Recommended)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Most recent stable release"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Thoroughly tested and reliable"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Best for production use"
+    echo
+    echo -e "${YELLOW}   2) ${BOLD}Latest Development${NC} ${DIM}(Beta features)${NC}"
+    echo -e "      ${YELLOW}✓${NC} Cutting-edge features"
+    echo -e "      ${YELLOW}✓${NC} May contain bugs"
+    echo -e "      ${BLUE}✓${NC}  Best for testing and development"
+    echo
+    echo -e "${BLUE}   3) ${BOLD}Specific Version${NC} ${DIM}(Advanced users)${NC}"
+    echo -e "      ${BLUE}✓${NC}  Choose exact version tag"
+    echo -e "      ${BLUE}✓${NC}  Full control over deployment"
+    echo -e "      ${YELLOW}✓${NC}  Requires knowledge of available versions"
+    echo
+    
+    local version_choice version_tag="v1.0.0"
+    while true; do
+        echo -ne "${BOLD}${GREEN}Choose version option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+        read -r version_choice
+        if [[ -z "$version_choice" ]]; then
+            version_choice="1"
+        fi
+        
+        case "$version_choice" in
+            1) 
+                # Use latest stable - try to detect or fall back to default
+                local github_token="${GITHUB_TOKEN:-}"
+                if [[ -n "$github_token" ]]; then
+                    version_tag=$(config_detect_latest_stable_version "$github_token" "true" "milou-sh" "milou" 2>/dev/null) || version_tag="v1.0.0"
+                else
+                    version_tag="v1.0.0"
+                fi
+                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable ($version_tag)${NC}"
+                echo -e "   ${DIM}This is the most reliable option for production use.${NC}"
+                break
+                ;;
+            2) 
+                version_tag="latest"
+                echo -e "   ${YELLOW}${CHECKMARK} Development version selected!${NC} Using: ${BOLD}Latest Development${NC}"
+                echo -e "   ${YELLOW}✓  Note:${NC} This may include beta features and should be used for testing"
+                break
+                ;;
+            3) 
+                echo -e "   ${BLUE}${CHECKMARK} Custom version selected!${NC}"
+                echo -e "   ${DIM}Enter the exact version tag (e.g., v1.0.0, v2.1.3):${NC}"
+                echo -ne "   ${BOLD}Version tag:${NC} "
+                read -r custom_version
+                if [[ -n "$custom_version" ]]; then
+                    version_tag="$custom_version"
+                    echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom version: ${BOLD}$version_tag${NC}"
+                else
+                    echo -e "   ${RED}${CROSSMARK} No version entered, using default${NC}"
+                    version_tag="v1.0.0"
+                fi
+                break
+                ;;
+            *) 
+                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                echo
+                ;;
+        esac
+    done
+    echo
+    
     # Enhanced configuration summary with visual appeal
     echo -e "${BOLD}${PURPLE}✓${NC}"
     echo -e "${BOLD}${PURPLE}                ✓ Your Configuration Summary${NC}"
@@ -1049,12 +1121,22 @@ setup_generate_configuration_interactive() {
     echo -e "   ${BOLD}Domain:${NC}        ${CYAN}$domain${NC}"
     echo -e "   ${BOLD}Admin Email:${NC}   ${CYAN}$email${NC}"
     echo -e "   ${BOLD}SSL Security:${NC}  ${CYAN}$ssl_mode${NC}"
+    echo -e "   ${BOLD}Milou Version:${NC} ${CYAN}$version_tag${NC}"
     echo
     echo -e "${GREEN}${CHECKMARK} Everything looks perfect! Generating your configuration...${NC}"
     echo
     
     # Generate configuration using consolidated config module with credential preservation
-    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+    # Pass version_tag information for proper image tag configuration
+    local use_latest_images="false"
+    if [[ "$version_tag" == "latest" ]]; then
+        use_latest_images="true"
+    fi
+    
+    # Set version tag environment variable for config generation
+    export MILOU_SELECTED_VERSION="$version_tag"
+    
+    if config_generate "$domain" "$email" "$ssl_mode" "$use_latest_images" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "Configuration created successfully"
         
         # Only force container recreation if credentials are NEW (not preserved)

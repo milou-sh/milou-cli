@@ -882,29 +882,72 @@ _milou_update_selective_services_safe() {
     for service in "${ordered_services[@]}"; do
         milou_log "INFO" "🔄 Safely updating $service with zero-downtime strategy..."
         
-        # Pull new image first
+        # Load environment to get the correct image tag
+        if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+            source "${SCRIPT_DIR:-$(pwd)}/.env"
+        fi
+        
+        # Get the expected image tag from environment
+        local expected_tag=""
+        case "$service" in
+            "database") expected_tag="${MILOU_DATABASE_TAG:-${target_version}}" ;;
+            "backend") expected_tag="${MILOU_BACKEND_TAG:-${target_version}}" ;;
+            "frontend") expected_tag="${MILOU_FRONTEND_TAG:-${target_version}}" ;;
+            "engine") expected_tag="${MILOU_ENGINE_TAG:-${target_version}}" ;;
+            "nginx") expected_tag="${MILOU_NGINX_TAG:-${target_version}}" ;;
+            *) expected_tag="${target_version}" ;;
+        esac
+        
         local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
-        # Ensure target_version doesn't have 'v' prefix for Docker image tags
-        local docker_tag="${target_version#v}"
-        local image_name="${registry}/${service}:${docker_tag}"
+        local image_name="${registry}/${service}:${expected_tag}"
         
         milou_log "INFO" "📥 Pulling new image: $image_name"
+        
+        # Validate image exists before pulling
+        if ! docker manifest inspect "$image_name" >/dev/null 2>&1; then
+            milou_log "ERROR" "❌ Image does not exist: $image_name"
+            
+            # Try to find an alternative version
+            local alternative_found=false
+            
+            # Try without 'v' prefix
+            if [[ "$expected_tag" =~ ^v ]]; then
+                local no_v_tag="${expected_tag#v}"
+                local no_v_image="${registry}/${service}:${no_v_tag}"
+                if docker manifest inspect "$no_v_image" >/dev/null 2>&1; then
+                    milou_log "INFO" "🔄 Found alternative: $no_v_image"
+                    image_name="$no_v_image"
+                    expected_tag="$no_v_tag"
+                    alternative_found=true
+                    # Update environment with correct tag
+                    _update_service_tag_in_env "$service" "$no_v_tag"
+                fi
+            else
+                # Try with 'v' prefix
+                local v_tag="v${expected_tag}"
+                local v_image="${registry}/${service}:${v_tag}"
+                if docker manifest inspect "$v_image" >/dev/null 2>&1; then
+                    milou_log "INFO" "🔄 Found alternative: $v_image"
+                    image_name="$v_image"
+                    expected_tag="$v_tag"
+                    alternative_found=true
+                    # Update environment with correct tag
+                    _update_service_tag_in_env "$service" "$v_tag"
+                fi
+            fi
+            
+            if [[ "$alternative_found" == "false" ]]; then
+                milou_log "ERROR" "❌ No valid image found for $service with version $expected_tag"
+                return 1
+            fi
+        fi
+        
+        # Pull the validated image
         if docker pull "$image_name" 2>/dev/null; then
             milou_log "SUCCESS" "✅ Image pulled successfully"
         else
-            milou_log "ERROR" "❌ Failed to pull image for $service"
-            # Try latest as fallback
-            if [[ "$docker_tag" != "latest" ]]; then
-                milou_log "INFO" "🔄 Trying latest version for $service..."
-                if docker pull "${registry}/${service}:latest" 2>/dev/null; then
-                    milou_log "WARN" "⚠️ Using latest version for $service instead of $docker_tag"
-                else
-                    milou_log "ERROR" "❌ Failed to pull any version for $service"
-                    return 1
-                fi
-            else
-                return 1
-            fi
+            milou_log "ERROR" "❌ Failed to pull image: $image_name"
+            return 1
         fi
         
         # Create backup of current container if it's critical
@@ -915,6 +958,10 @@ _milou_update_selective_services_safe() {
                 db_snapshot_path=$(_create_database_safety_backup)
             fi
         fi
+        
+        # Get current container ID for comparison
+        local old_container_id
+        old_container_id=$(docker ps --filter "name=milou-$service" --format "{{.ID}}" | head -1)
         
         # Update service with rolling deployment
         milou_log "INFO" "🔄 Performing rolling update for $service..."
@@ -928,9 +975,28 @@ _milou_update_selective_services_safe() {
             }
         fi
         
-        # Start new container with updated image (--no-deps ensures dependencies aren't restarted)
-        if docker_execute "up" "$service" "false" "--no-deps" "-d"; then
-            milou_log "SUCCESS" "✅ Updated container started for $service"
+        # CRITICAL FIX: Use --force-recreate to ensure new image is used
+        if docker_execute "up" "$service" "false" "--no-deps" "--force-recreate" "-d"; then
+            # Verify that a new container was actually created
+            local new_container_id
+            new_container_id=$(docker ps --filter "name=milou-$service" --format "{{.ID}}" | head -1)
+            
+            if [[ "$new_container_id" != "$old_container_id" ]]; then
+                milou_log "SUCCESS" "✅ New container created for $service"
+                
+                # Verify the new container is using the correct image
+                local actual_image
+                actual_image=$(docker inspect "$new_container_id" --format '{{.Config.Image}}' 2>/dev/null)
+                if [[ "$actual_image" == "$image_name" ]]; then
+                    milou_log "SUCCESS" "✅ Container is using correct image: $actual_image"
+                else
+                    milou_log "ERROR" "❌ Container using wrong image. Expected: $image_name, Actual: $actual_image"
+                    return 1
+                fi
+            else
+                milou_log "ERROR" "❌ Container was not recreated - same container ID"
+                return 1
+            fi
         else
             milou_log "ERROR" "❌ Failed to start updated container for $service"
             return 1
@@ -1002,7 +1068,7 @@ _milou_update_all_services() {
     _milou_update_verify_services
 }
 
-# Update Docker images with enhanced error handling
+# Enhanced Docker image update with proper validation
 _milou_update_docker_images() {
     local target_version="${1:-latest}"
     shift
@@ -1047,28 +1113,130 @@ _milou_update_docker_images() {
         milou_log "DEBUG" "No GitHub token available - public images only"
     fi
     
-    # Pull updated images
+    # Normalize version tags consistently
+    local normalized_version
+    if [[ "$target_version" == "latest" ]]; then
+        normalized_version="latest"
+    else
+        # Remove 'v' prefix if present, then add it back consistently
+        normalized_version="${target_version#v}"
+        # For this project, always use 'v' prefix for version tags
+        normalized_version="v${normalized_version}"
+    fi
+    
+    milou_log "INFO" "🔍 Using normalized version tag: $normalized_version"
+    
+    # Track which images successfully pulled
+    local pulled_services=()
+    local failed_services=()
+    
+    # Pull updated images with validation
     for service in "${services[@]}"; do
-        # Ensure target_version doesn't have 'v' prefix for Docker image tags
-        local docker_tag="${target_version#v}"
-        local image_name="${registry}/${service}:${docker_tag}"
-        milou_log "INFO" "📥 Pulling image: $image_name"
+        local image_name="${registry}/${service}:${normalized_version}"
+        milou_log "INFO" "📥 Validating and pulling image: $image_name"
         
-        if docker pull "$image_name" 2>/dev/null; then
-            milou_log "SUCCESS" "✅ Updated image for $service"
+        # First, check if image exists by attempting to inspect it
+        if docker manifest inspect "$image_name" >/dev/null 2>&1; then
+            milou_log "SUCCESS" "✅ Image exists: $image_name"
+            
+            # Now pull the image
+            if docker pull "$image_name" 2>/dev/null; then
+                milou_log "SUCCESS" "✅ Successfully pulled image for $service"
+                pulled_services+=("$service")
+            else
+                milou_log "ERROR" "❌ Failed to pull image for $service (network/auth issue)"
+                failed_services+=("$service")
+            fi
         else
-            milou_log "ERROR" "❌ Failed to pull image for $service"
-            # Try latest as fallback
-            if [[ "$docker_tag" != "latest" ]]; then
-                milou_log "INFO" "🔄 Trying latest version for $service..."
-                if docker pull "${registry}/${service}:latest" 2>/dev/null; then
-                    milou_log "WARN" "⚠️ Using latest version for $service instead of $docker_tag"
-                else
-                    milou_log "ERROR" "❌ Failed to pull any version for $service"
+            milou_log "ERROR" "❌ Image does not exist: $image_name"
+            
+            # Try without 'v' prefix as fallback
+            local fallback_version="${normalized_version#v}"
+            if [[ "$fallback_version" != "$normalized_version" ]]; then
+                local fallback_image="${registry}/${service}:${fallback_version}"
+                milou_log "INFO" "🔄 Trying fallback version: $fallback_image"
+                
+                if docker manifest inspect "$fallback_image" >/dev/null 2>&1; then
+                    milou_log "SUCCESS" "✅ Fallback image exists: $fallback_image"
+                    if docker pull "$fallback_image" 2>/dev/null; then
+                        milou_log "SUCCESS" "✅ Successfully pulled fallback image for $service"
+                        pulled_services+=("$service")
+                        # Update the environment to use the correct tag format
+                        _update_service_tag_in_env "$service" "$fallback_version"
+                        continue
+                    fi
                 fi
             fi
+            
+            # Try latest as final fallback only for non-critical services
+            if [[ "$normalized_version" != "latest" && "$service" != "database" ]]; then
+                milou_log "INFO" "🔄 Trying latest version for $service as final fallback..."
+                local latest_image="${registry}/${service}:latest"
+                if docker manifest inspect "$latest_image" >/dev/null 2>&1; then
+                    if docker pull "$latest_image" 2>/dev/null; then
+                        milou_log "WARN" "⚠️ Using latest version for $service instead of $normalized_version"
+                        pulled_services+=("$service")
+                        # Update the environment to use latest tag
+                        _update_service_tag_in_env "$service" "latest"
+                        continue
+                    fi
+                fi
+            fi
+            
+            failed_services+=("$service")
+            milou_log "ERROR" "❌ No valid image found for $service"
         fi
     done
+    
+    # Report results
+    if [[ ${#failed_services[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "✅ All images pulled successfully"
+        return 0
+    else
+        milou_log "ERROR" "❌ Failed to pull images for: ${failed_services[*]}"
+        milou_log "INFO" "Successfully pulled: ${pulled_services[*]}"
+        return 1
+    fi
+}
+
+# Helper function to update specific service tag in environment
+_update_service_tag_in_env() {
+    local service="$1"
+    local tag="$2"
+    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
+    
+    if [[ ! -f "$env_file" ]]; then
+        milou_log "ERROR" "Environment file not found: $env_file"
+        return 1
+    fi
+    
+    local tag_var=""
+    case "$service" in
+        "database") tag_var="MILOU_DATABASE_TAG" ;;
+        "backend") tag_var="MILOU_BACKEND_TAG" ;;
+        "frontend") tag_var="MILOU_FRONTEND_TAG" ;;
+        "engine") tag_var="MILOU_ENGINE_TAG" ;;
+        "nginx") tag_var="MILOU_NGINX_TAG" ;;
+        *) 
+            milou_log "WARN" "Unknown service for tag update: $service"
+            return 1
+            ;;
+    esac
+    
+    if [[ -n "$tag_var" ]]; then
+        if grep -q "^${tag_var}=" "$env_file"; then
+            # Update existing tag
+            sed -i "s/^${tag_var}=.*/${tag_var}=${tag}/" "$env_file"
+            milou_log "DEBUG" "Updated ${tag_var}=${tag} in environment"
+        else
+            # Add new tag
+            echo "${tag_var}=${tag}" >> "$env_file"
+            milou_log "DEBUG" "Added ${tag_var}=${tag} to environment"
+        fi
+        return 0
+    fi
+    
+    return 1
 }
 
 # Verify services are healthy after update
@@ -2865,4 +3033,205 @@ _wait_for_service_health() {
     fi
     
     return 1
-} 
+}
+
+# Update configuration with new version tags - ENHANCED VERSION
+_milou_update_config_versions() {
+    local target_version="${1:-latest}"
+    local -a services_to_update=("${@:2}")
+    
+    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        milou_log "ERROR" "Environment file not found: $env_file"
+        return 1
+    fi
+    
+    # Create backup of environment file before modification
+    cp "$env_file" "${env_file}.pre_version_update.$(date +%s)" || {
+        milou_log "WARN" "Could not create backup of environment file"
+    }
+    
+    # Normalize target version for consistency
+    local clean_version="$target_version"
+    if [[ "$target_version" != "latest" ]]; then
+        # Ensure consistent version format based on what actually works
+        clean_version="${target_version#v}"  # Remove 'v' prefix first
+        
+        # Check if we should use 'v' prefix by testing what exists in registry
+        local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
+        local test_service="frontend"  # Use frontend as test service
+        
+        # Test which format works
+        if docker manifest inspect "${registry}/${test_service}:v${clean_version}" >/dev/null 2>&1; then
+            clean_version="v${clean_version}"
+            milou_log "DEBUG" "Using version format with 'v' prefix: $clean_version"
+        elif docker manifest inspect "${registry}/${test_service}:${clean_version}" >/dev/null 2>&1; then
+            # Keep without 'v' prefix
+            milou_log "DEBUG" "Using version format without 'v' prefix: $clean_version"
+        else
+            milou_log "WARN" "Cannot validate version format for $target_version, using as-is"
+            clean_version="$target_version"
+        fi
+    fi
+    
+    milou_log "INFO" "📝 Updating configuration with version: $clean_version"
+    
+    # Update service-specific version tags
+    for service in "${services_to_update[@]}"; do
+        local tag_var=""
+        case "$service" in
+            "database") tag_var="MILOU_DATABASE_TAG" ;;
+            "backend") tag_var="MILOU_BACKEND_TAG" ;;
+            "frontend") tag_var="MILOU_FRONTEND_TAG" ;;
+            "engine") tag_var="MILOU_ENGINE_TAG" ;;
+            "nginx") tag_var="MILOU_NGINX_TAG" ;;
+            *) continue ;;  # Skip unknown services
+        esac
+        
+        if [[ -n "$tag_var" ]]; then
+            # Validate that the image exists before updating config
+            local image_to_validate="${registry}/${service}:${clean_version}"
+            if docker manifest inspect "$image_to_validate" >/dev/null 2>&1; then
+                milou_log "DEBUG" "✅ Validated image exists: $image_to_validate"
+                
+                if grep -q "^${tag_var}=" "$env_file"; then
+                    # Update existing tag
+                    sed -i "s/^${tag_var}=.*/${tag_var}=${clean_version}/" "$env_file"
+                    milou_log "DEBUG" "Updated ${tag_var}=${clean_version}"
+                else
+                    # Add new tag
+                    echo "${tag_var}=${clean_version}" >> "$env_file"
+                    milou_log "DEBUG" "Added ${tag_var}=${clean_version}"
+                fi
+            else
+                milou_log "ERROR" "❌ Cannot update config: image does not exist: $image_to_validate"
+                # Don't update the config if image doesn't exist
+                continue
+            fi
+        fi
+    done
+    
+    # Also update the system version
+    if grep -q "^MILOU_VERSION=" "$env_file"; then
+        sed -i "s/^MILOU_VERSION=.*/MILOU_VERSION=${clean_version}/" "$env_file"
+    else
+        echo "MILOU_VERSION=${clean_version}" >> "$env_file"
+    fi
+    
+    # Validate the updated configuration
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
+        milou_log "INFO" "🔍 Validating updated configuration..."
+        if docker compose -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" --env-file "$env_file" config --quiet 2>/dev/null; then
+            milou_log "SUCCESS" "✅ Configuration validation passed"
+        else
+            milou_log "ERROR" "❌ Configuration validation failed"
+            # Restore backup
+            if [[ -f "${env_file}.pre_version_update.$(ls -t ${env_file}.pre_version_update.* | head -1 | sed 's/.*\.//')" ]]; then
+                local latest_backup="${env_file}.pre_version_update.$(ls -t ${env_file}.pre_version_update.* | head -1 | sed 's/.*\.//')"
+                cp "$latest_backup" "$env_file"
+                milou_log "WARN" "⚠️ Restored configuration from backup due to validation failure"
+            fi
+            return 1
+        fi
+    fi
+    
+    milou_log "SUCCESS" "✅ Version tags updated in configuration"
+    return 0
+}
+
+# Comprehensive verification that update was actually successful
+_verify_update_success() {
+    local target_version="${1:-latest}"
+    local -a services_to_verify=("${@:2}")
+    
+    milou_log "INFO" "🔍 Verifying update success for version: $target_version"
+    
+    # Load current environment
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        source "${SCRIPT_DIR:-$(pwd)}/.env"
+    fi
+    
+    local verification_failed=false
+    local failed_services=()
+    
+    for service in "${services_to_verify[@]}"; do
+        milou_log "DEBUG" "Verifying $service..."
+        
+        # Get expected image tag from environment
+        local expected_tag=""
+        case "$service" in
+            "database") expected_tag="${MILOU_DATABASE_TAG:-${target_version}}" ;;
+            "backend") expected_tag="${MILOU_BACKEND_TAG:-${target_version}}" ;;
+            "frontend") expected_tag="${MILOU_FRONTEND_TAG:-${target_version}}" ;;
+            "engine") expected_tag="${MILOU_ENGINE_TAG:-${target_version}}" ;;
+            "nginx") expected_tag="${MILOU_NGINX_TAG:-${target_version}}" ;;
+            *) expected_tag="${target_version}" ;;
+        esac
+        
+        # Get current running container info
+        local container_id
+        container_id=$(docker ps --filter "name=milou-$service" --format "{{.ID}}" | head -1)
+        
+        if [[ -z "$container_id" ]]; then
+            milou_log "ERROR" "❌ Container not running for service: $service"
+            verification_failed=true
+            failed_services+=("$service (not running)")
+            continue
+        fi
+        
+        # Get actual image being used
+        local actual_image
+        actual_image=$(docker inspect "$container_id" --format '{{.Config.Image}}' 2>/dev/null)
+        
+        if [[ -z "$actual_image" ]]; then
+            milou_log "ERROR" "❌ Could not determine image for service: $service"
+            verification_failed=true
+            failed_services+=("$service (image unknown)")
+            continue
+        fi
+        
+        # Expected image format
+        local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
+        local expected_image="${registry}/${service}:${expected_tag}"
+        
+        # Compare images
+        if [[ "$actual_image" == "$expected_image" ]]; then
+            milou_log "SUCCESS" "✅ $service is running correct version: $expected_tag"
+        else
+            milou_log "ERROR" "❌ $service version mismatch!"
+            milou_log "ERROR" "   Expected: $expected_image"
+            milou_log "ERROR" "   Actual:   $actual_image"
+            verification_failed=true
+            failed_services+=("$service (version mismatch)")
+        fi
+        
+        # Verify container health
+        local health_status
+        health_status=$(docker inspect "$container_id" --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+        
+        if [[ "$health_status" == "healthy" ]] || [[ "$health_status" == "unknown" ]]; then
+            milou_log "DEBUG" "✅ $service container is healthy"
+        else
+            milou_log "WARN" "⚠️ $service container health status: $health_status"
+        fi
+    done
+    
+    # Summary report
+    if [[ "$verification_failed" == "false" ]]; then
+        milou_log "SUCCESS" "🎉 Update verification passed! All services are running the correct versions."
+        return 0
+    else
+        milou_log "ERROR" "❌ Update verification failed for the following services:"
+        for failed_service in "${failed_services[@]}"; do
+            milou_log "ERROR" "   - $failed_service"
+        done
+        
+        milou_log "INFO" "💡 Troubleshooting tips:"
+        milou_log "INFO" "   1. Check if the target version exists in the registry"
+        milou_log "INFO" "   2. Verify Docker Compose is using the updated environment"
+        milou_log "INFO" "   3. Try manual recreation: docker compose up -d --force-recreate <service>"
+        milou_log "INFO" "   4. Check logs: ./milou.sh logs <service>"
+        
+        return 1
+    fi
+}

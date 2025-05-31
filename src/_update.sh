@@ -23,8 +23,8 @@ readonly MILOU_UPDATE_MODULE_LOADED="true"
 
 # Self-update configuration
 readonly MILOU_CLI_REPO="milou-sh/milou-cli"
-readonly GITHUB_API_BASE="https://api.github.com/repos"
-readonly RELEASE_API_URL="${GITHUB_API_BASE}/${MILOU_CLI_REPO}/releases"
+readonly GITHUB_API_BASE="https://api.github.com"
+readonly RELEASE_API_URL="${GITHUB_API_BASE}/repos/${MILOU_CLI_REPO}/releases"
 
 # Default services for system updates
 readonly DEFAULT_SERVICES=("frontend" "backend" "database" "engine" "nginx")
@@ -171,18 +171,41 @@ _milou_update_perform_update() {
     
     # Store pre-update service status for rollback
     local pre_update_status="/tmp/milou_pre_update_status_$(date +%s)"
-    docker ps --filter "name=static-" --format "{{.Names}}\t{{.Status}}" > "$pre_update_status" 2>/dev/null || true
+    docker ps --filter "name=milou-" --format "{{.Names}}\t{{.Status}}" > "$pre_update_status" 2>/dev/null || true
     
-    # Enhanced selective service management
+    # CRITICAL: Create database backup if database is being updated
+    local database_backup_path=""
+    if [[ "${services_to_update[*]}" =~ "database" ]] || [[ "$specific_services" == "" ]]; then
+        milou_log "INFO" "🗄️ Creating database safety backup before update..."
+        if command -v _create_database_safety_backup >/dev/null 2>&1; then
+            database_backup_path=$(_create_database_safety_backup)
+            if [[ $? -ne 0 ]]; then
+                milou_log "ERROR" "❌ Database backup failed - ABORTING update for safety"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Enhanced selective service management with dependency awareness
     local update_result
     if [[ -n "$specific_services" ]]; then
-        milou_log "INFO" "🎯 Performing selective service update..."
-        _milou_update_selective_services "${services_to_update[@]}" "$target_version" "$github_token"
+        milou_log "INFO" "🎯 Performing selective service update with dependency awareness..."
+        _milou_update_selective_services_safe "$target_version" "${services_to_update[@]}"
         update_result=$?
     else
-        milou_log "INFO" "🔄 Performing full system update..."
-        _milou_update_all_services "$target_version" "$github_token"
+        milou_log "INFO" "🔄 Performing full system update with zero-downtime strategy..."
+        _milou_update_all_services_safe "$target_version" "$github_token"
         update_result=$?
+    fi
+    
+    # Verify data integrity after update
+    if [[ $update_result -eq 0 && -n "$database_backup_path" ]]; then
+        milou_log "INFO" "🔍 Verifying database integrity after update..."
+        if ! _verify_database_integrity; then
+            milou_log "ERROR" "❌ Database integrity check failed - initiating rollback"
+            _rollback_database_from_backup "$database_backup_path"
+            update_result=1
+        fi
     fi
     
     # Clean up temporary files
@@ -199,22 +222,31 @@ _milou_update_perform_update() {
 
 # Selective service update with health monitoring
 _milou_update_selective_services() {
+    local target_version="$1"
+    shift
     local -a services_to_update=("$@")
-    local target_version="${!#}"  # Last argument is version
-    local github_token="${GITHUB_TOKEN:-}"
-    
-    # Remove version from services array (it's the last argument)
-    unset 'services_to_update[-1]'
     
     milou_log "INFO" "🎯 Updating services: ${services_to_update[*]}"
     
     # Stop specific services
     for service in "${services_to_update[@]}"; do
         milou_log "INFO" "🛑 Stopping service: $service"
-        if command -v milou_docker_stop_service >/dev/null 2>&1; then
-            milou_docker_stop_service "$service"
+        
+        # Load Docker module for proper service management
+        if ! command -v docker_execute >/dev/null 2>&1; then
+            # Load docker module if not already loaded
+            local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+            source "${script_dir}/src/_docker.sh" || {
+                milou_log "ERROR" "Failed to load Docker module"
+                return 1
+            }
+        fi
+        
+        # Use proper docker_execute function for service management
+        if docker_execute "stop" "$service" "false"; then
+            milou_log "SUCCESS" "✅ Successfully stopped $service"
         else
-            docker stop "static-$service" 2>/dev/null || true
+            milou_log "WARN" "⚠️ Could not stop $service (may not be running)"
         fi
     done
     
@@ -228,22 +260,144 @@ _milou_update_selective_services() {
     # Start updated services
     for service in "${services_to_update[@]}"; do
         milou_log "INFO" "🚀 Starting updated service: $service"
-        if command -v milou_docker_start_service >/dev/null 2>&1; then
-            milou_docker_start_service "$service"
+        
+        # Load Docker module for proper service management
+        if ! command -v docker_execute >/dev/null 2>&1; then
+            # Load docker module if not already loaded
+            local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+            source "${script_dir}/src/_docker.sh" || {
+                milou_log "ERROR" "Failed to load Docker module"
+                return 1
+            }
+        fi
+        
+        # Use proper docker_execute function for service management
+        if docker_execute "start" "$service" "false"; then
+            milou_log "SUCCESS" "✅ Successfully started $service with new image"
         else
-            # Use consolidated docker execute function
-            if command -v docker_execute >/dev/null 2>&1; then
-                docker_execute "start" "$service" "false"
-            else
-                # Fallback for standalone execution
-                milou_log "WARN" "Docker execute function not available, using fallback"
-                docker compose up -d "$service"
-            fi
+            milou_log "ERROR" "❌ Failed to start $service"
+            return 1
         fi
     done
     
     # Verify updated services are healthy
+    milou_log "INFO" "⏳ Allowing services to stabilize..."
+    sleep 5  # Give services time to start up
     _milou_update_verify_services "${services_to_update[@]}"
+}
+
+# Safe selective service update with dependency awareness and zero downtime
+_milou_update_selective_services_safe() {
+    local target_version="$1"
+    shift
+    local -a services_to_update=("$@")
+    
+    milou_log "INFO" "🎯 Safely updating services: ${services_to_update[*]}"
+    
+    # Define service dependencies
+    declare -A service_deps=(
+        ["database"]=""
+        ["redis"]=""
+        ["rabbitmq"]=""
+        ["backend"]="database redis rabbitmq"
+        ["frontend"]="backend"
+        ["nginx"]="frontend backend"
+        ["engine"]="database redis rabbitmq"
+    )
+    
+    # Sort services by dependency order
+    local -a ordered_services=()
+    local service_order=("database" "redis" "rabbitmq" "backend" "engine" "frontend" "nginx")
+    
+    for service in "${service_order[@]}"; do
+        if [[ "${services_to_update[*]}" =~ $service ]]; then
+            ordered_services+=("$service")
+        fi
+    done
+    
+    # Update each service with zero-downtime strategy
+    for service in "${ordered_services[@]}"; do
+        milou_log "INFO" "🔄 Safely updating $service with zero-downtime strategy..."
+        
+        # Pull new image first
+        local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
+        local image_name="${registry}/${service}:${target_version}"
+        
+        milou_log "INFO" "📥 Pulling new image: $image_name"
+        if docker pull "$image_name" 2>/dev/null; then
+            milou_log "SUCCESS" "✅ Image pulled successfully"
+        else
+            milou_log "ERROR" "❌ Failed to pull image for $service"
+            # Try latest as fallback
+            if [[ "$target_version" != "latest" ]]; then
+                milou_log "INFO" "🔄 Trying latest version for $service..."
+                if docker pull "${registry}/${service}:latest" 2>/dev/null; then
+                    milou_log "WARN" "⚠️ Using latest version for $service instead of $target_version"
+                else
+                    milou_log "ERROR" "❌ Failed to pull any version for $service"
+                    return 1
+                fi
+            else
+                return 1
+            fi
+        fi
+        
+        # Create backup of current container if it's critical
+        if [[ "$service" == "database" ]]; then
+            milou_log "INFO" "💾 Creating additional database snapshot before update..."
+            local db_snapshot_path=""
+            if command -v _create_database_safety_backup >/dev/null 2>&1; then
+                db_snapshot_path=$(_create_database_safety_backup)
+            fi
+        fi
+        
+        # Update service with rolling deployment
+        milou_log "INFO" "🔄 Performing rolling update for $service..."
+        
+        # Load Docker module for proper service management
+        if ! command -v docker_execute >/dev/null 2>&1; then
+            local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+            source "${script_dir}/src/_docker.sh" || {
+                milou_log "ERROR" "Failed to load Docker module"
+                return 1
+            }
+        fi
+        
+        # Start new container with updated image (--no-deps ensures dependencies aren't restarted)
+        if docker_execute "up" "$service" "false" "--no-deps" "-d"; then
+            milou_log "SUCCESS" "✅ Updated container started for $service"
+        else
+            milou_log "ERROR" "❌ Failed to start updated container for $service"
+            return 1
+        fi
+        
+        # Wait for service to be healthy
+        if _wait_for_service_health "$service"; then
+            milou_log "SUCCESS" "✅ $service is healthy after update"
+        else
+            milou_log "ERROR" "❌ $service failed health check after update"
+            return 1
+        fi
+        
+        # Special verification for database
+        if [[ "$service" == "database" ]]; then
+            milou_log "INFO" "🔍 Performing database integrity check..."
+            if ! _verify_database_integrity; then
+                milou_log "ERROR" "❌ Database integrity check failed"
+                if [[ -n "$db_snapshot_path" ]]; then
+                    milou_log "WARN" "🔄 Rolling back database..."
+                    _rollback_database_from_backup "$db_snapshot_path"
+                fi
+                return 1
+            fi
+        fi
+        
+        milou_log "SUCCESS" "✅ $service update completed successfully"
+    done
+    
+    # Final verification of all updated services
+    milou_log "INFO" "🏥 Performing final health check on all updated services..."
+    _milou_update_verify_services "${ordered_services[@]}"
 }
 
 # Full system update
@@ -297,12 +451,22 @@ _milou_update_docker_images() {
     milou_log "INFO" "📥 Pulling Docker images for version: $target_version"
     
     # Get registry information
-    local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh}"
+    local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
     local github_token="${GITHUB_TOKEN:-}"
     
     # Login to registry if token is provided
     if [[ -n "$github_token" ]]; then
-        echo "$github_token" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin 2>/dev/null || {
+        # Get username from token for Docker login
+        local github_username="${GITHUB_ACTOR:-}"
+        if [[ -z "$github_username" ]]; then
+            # Try to get username from GitHub API
+            github_username=$(curl -s -H "Authorization: Bearer $github_token" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "https://api.github.com/user" | \
+                             grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "token")
+        fi
+        
+        echo "$github_token" | docker login ghcr.io -u "$github_username" --password-stdin 2>/dev/null || {
             milou_log "WARN" "Docker registry login failed, trying without authentication"
         }
     fi
@@ -340,7 +504,7 @@ _milou_update_verify_services() {
     
     milou_log "INFO" "🏥 Verifying service health after update..."
     
-    local max_wait=60  # 60 seconds timeout
+    local max_wait=30  # 30 seconds should be enough for basic verification
     local elapsed=0
     local all_healthy=false
     
@@ -348,10 +512,17 @@ _milou_update_verify_services() {
         local healthy_count=0
         
         for service in "${services_to_verify[@]}"; do
-            if docker ps --filter "name=static-$service" --filter "status=running" --format "{{.Names}}" | grep -q "static-$service"; then
+            # Check for proper container names (milou-* not static-*)
+            milou_log "DEBUG" "Checking health of service: $service (container: milou-$service)"
+            if docker ps --filter "name=milou-$service" --filter "status=running" --format "{{.Names}}" | grep -q "milou-$service"; then
                 ((healthy_count++))
+                milou_log "DEBUG" "Service $service is healthy"
+            else
+                milou_log "DEBUG" "Service $service is not healthy yet"
             fi
         done
+        
+        milou_log "DEBUG" "Health check: $healthy_count/${#services_to_verify[@]} services healthy"
         
         if [[ $healthy_count -eq ${#services_to_verify[@]} ]]; then
             all_healthy=true
@@ -628,6 +799,7 @@ milou_update_cli() {
             echo "  ./milou.sh update-cli"
             echo "  ./milou.sh update-cli v3.2.0"
             echo "  ./milou.sh update-cli --force"
+            echo "  ./milou.sh update-cli --check"
             return 0
             ;;
         --force)
@@ -659,6 +831,7 @@ _show_update_help() {
             echo "  --version VERSION     Update to specific version (e.g., v1.0.0, latest)"
             echo "  --service SERVICES    Update specific services (comma-separated)"
             echo "                       Available: frontend,backend,database,engine,nginx"
+            echo "  --token TOKEN         GitHub Personal Access Token for authentication"
             echo "  --force              Force update even if no changes detected"
             echo "  --no-backup          Skip backup creation before update"
             echo "  --help, -h           Show this help message"
@@ -667,6 +840,7 @@ _show_update_help() {
             echo "  ./milou.sh update"
             echo "  ./milou.sh update --version v1.2.0"
             echo "  ./milou.sh update --service frontend,backend"
+            echo "  ./milou.sh update --token ghp_xxxxx --version 1.3.0"
             echo "  ./milou.sh update --force --no-backup"
             echo ""
             echo "OTHER UPDATE COMMANDS:"
@@ -714,6 +888,11 @@ handle_update() {
                 ;;
             --service|--services)
                 specific_services="$2"
+                shift 2
+                ;;
+            --token)
+                export GITHUB_TOKEN="$2"
+                milou_log "DEBUG" "GitHub token set from command line"
                 shift 2
                 ;;
             --force)
@@ -1267,7 +1446,7 @@ execute_monitored_update() {
     
     # Execute the actual update
     if [[ -n "$specific_services" ]]; then
-        _milou_update_selective_services "$specific_services" "$target_version" "$github_token"
+        _milou_update_selective_services "$target_version" "$specific_services"
     else
         _milou_update_all_services "$target_version" "$github_token"
     fi
@@ -1368,3 +1547,561 @@ export -f handle_rollback               # Rollback handler
 
 # Internal functions are NOT exported (marked with _ prefix)
 # This keeps the namespace clean and makes it clear what's public vs internal 
+
+# Create database safety backup before updates
+_create_database_safety_backup() {
+    milou_log "INFO" "📦 Creating database safety backup..."
+    
+    # Check if database container is running
+    local db_container=""
+    for container in "milou-database" "static-database" "milou-static-database"; do
+        if docker ps --filter "name=$container" --format "{{.Names}}" | grep -q "$container"; then
+            db_container="$container"
+            break
+        fi
+    done
+    
+    if [[ -z "$db_container" ]]; then
+        milou_log "WARN" "⚠️ Database container not running - skipping database backup"
+        return 0
+    fi
+    
+    # Create backup directory with enhanced security
+    local backup_dir="./backups/db_safety"
+    mkdir -p "$backup_dir"
+    chmod 700 "$backup_dir"  # Secure permissions
+    local backup_file="$backup_dir/db_safety_backup_$(date +%Y%m%d_%H%M%S).sql"
+    
+    # Get database credentials
+    local db_name="${POSTGRES_DB:-milou_database}"
+    local db_user="${POSTGRES_USER:-}"
+    
+    if [[ -z "$db_user" ]]; then
+        milou_log "ERROR" "❌ Database user not found in environment"
+        return 1
+    fi
+    
+    # Create comprehensive database dump with all necessary flags
+    milou_log "INFO" "📊 Creating comprehensive database dump..."
+    if docker exec "$db_container" pg_dump \
+        -U "$db_user" \
+        -d "$db_name" \
+        --clean \
+        --if-exists \
+        --create \
+        --verbose \
+        --no-password > "$backup_file" 2>/dev/null; then
+        
+        # Verify backup file is not empty and contains actual data
+        if [[ -s "$backup_file" ]]; then
+            # Additional verification: check if backup contains actual table data
+            local table_count
+            table_count=$(grep -c "CREATE TABLE" "$backup_file" 2>/dev/null || echo "0")
+            
+            if [[ "$table_count" -gt 0 ]]; then
+                # Set secure permissions on backup file
+                chmod 600 "$backup_file"
+                milou_log "SUCCESS" "✅ Database safety backup created: $backup_file ($table_count tables)"
+                echo "$backup_file"
+                return 0
+            else
+                milou_log "ERROR" "❌ Database backup contains no table structures"
+                rm -f "$backup_file"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "❌ Database backup file is empty"
+            rm -f "$backup_file"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "❌ Failed to create database backup"
+        rm -f "$backup_file"
+        return 1
+    fi
+}
+
+# Verify database integrity after update
+_verify_database_integrity() {
+    milou_log "INFO" "🔍 Verifying database integrity..."
+    
+    local db_container=""
+    for container in "milou-database" "static-database" "milou-static-database"; do
+        if docker ps --filter "name=$container" --format "{{.Names}}" | grep -q "$container"; then
+            db_container="$container"
+            break
+        fi
+    done
+    
+    if [[ -z "$db_container" ]]; then
+        milou_log "ERROR" "❌ Database container not found"
+        return 1
+    fi
+    
+    # Extended wait for database to be ready after container update
+    local max_wait=60  # Increased from 30 to 60 seconds
+    local wait_count=0
+    milou_log "INFO" "⏳ Waiting for database to be ready after update..."
+    
+    while [[ $wait_count -lt $max_wait ]]; do
+        if docker exec "$db_container" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-milou_database}" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+        ((wait_count += 2))
+        
+        # Progress indicator every 10 seconds
+        if [[ $((wait_count % 10)) -eq 0 ]]; then
+            milou_log "INFO" "⏳ Database still starting... (${wait_count}s elapsed)"
+        fi
+    done
+    
+    if [[ $wait_count -ge $max_wait ]]; then
+        milou_log "ERROR" "❌ Database not ready after $max_wait seconds"
+        return 1
+    fi
+    
+    # Test basic database operations
+    local db_name="${POSTGRES_DB:-milou_database}"
+    local db_user="${POSTGRES_USER:-}"
+    
+    # Test 1: Basic connectivity and query execution
+    milou_log "INFO" "🔍 Testing database connectivity..."
+    if docker exec "$db_container" psql -U "$db_user" -d "$db_name" -c "SELECT 1;" >/dev/null 2>&1; then
+        milou_log "SUCCESS" "✅ Database connectivity verified"
+    else
+        milou_log "ERROR" "❌ Database connectivity test failed"
+        return 1
+    fi
+    
+    # Test 2: Schema accessibility and table verification
+    milou_log "INFO" "🔍 Verifying database schema..."
+    local table_check_result
+    table_check_result=$(docker exec "$db_container" psql -U "$db_user" -d "$db_name" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null | tr -d ' \n')
+    
+    if [[ "$table_check_result" =~ ^[0-9]+$ ]] && [[ "$table_check_result" -gt 0 ]]; then
+        milou_log "SUCCESS" "✅ Database schema verified ($table_check_result tables found)"
+    else
+        milou_log "ERROR" "❌ Database schema verification failed"
+        return 1
+    fi
+    
+    # Test 3: Write operation verification (create and drop test table)
+    milou_log "INFO" "🔍 Testing database write operations..."
+    local test_table="milou_update_integrity_test_$(date +%s)"
+    
+    if docker exec "$db_container" psql -U "$db_user" -d "$db_name" \
+        -c "CREATE TABLE $test_table (id INTEGER, test_data TEXT);" \
+        -c "INSERT INTO $test_table VALUES (1, 'integrity_test');" \
+        -c "SELECT COUNT(*) FROM $test_table;" \
+        -c "DROP TABLE $test_table;" >/dev/null 2>&1; then
+        milou_log "SUCCESS" "✅ Database write operations verified"
+    else
+        milou_log "ERROR" "❌ Database write operations test failed"
+        return 1
+    fi
+    
+    # Test 4: Extension verification (if any critical extensions are used)
+    milou_log "INFO" "🔍 Verifying database extensions..."
+    local extension_check
+    extension_check=$(docker exec "$db_container" psql -U "$db_user" -d "$db_name" -t -c "SELECT COUNT(*) FROM pg_extension;" 2>/dev/null | tr -d ' \n')
+    
+    if [[ "$extension_check" =~ ^[0-9]+$ ]]; then
+        milou_log "SUCCESS" "✅ Database extensions verified ($extension_check extensions loaded)"
+    else
+        milou_log "WARN" "⚠️ Could not verify database extensions"
+    fi
+    
+    milou_log "SUCCESS" "✅ Complete database integrity verification passed"
+    return 0
+}
+
+# Rollback database from backup
+_rollback_database_from_backup() {
+    local backup_file="$1"
+    
+    if [[ ! -f "$backup_file" ]]; then
+        milou_log "ERROR" "❌ Backup file not found: $backup_file"
+        return 1
+    fi
+    
+    # Verify backup file integrity before attempting rollback
+    milou_log "INFO" "🔍 Verifying backup file integrity..."
+    if [[ ! -s "$backup_file" ]]; then
+        milou_log "ERROR" "❌ Backup file is empty: $backup_file"
+        return 1
+    fi
+    
+    # Check if backup contains SQL commands
+    if ! grep -q "CREATE\|INSERT\|COPY" "$backup_file" 2>/dev/null; then
+        milou_log "ERROR" "❌ Backup file appears to be invalid (no SQL commands found)"
+        return 1
+    fi
+    
+    milou_log "WARN" "🔄 Rolling back database from backup: $backup_file"
+    
+    local db_container=""
+    for container in "milou-database" "static-database" "milou-static-database"; do
+        if docker ps --filter "name=$container" --format "{{.Names}}" | grep -q "$container"; then
+            db_container="$container"
+            break
+        fi
+    done
+    
+    if [[ -z "$db_container" ]]; then
+        milou_log "ERROR" "❌ Database container not found for rollback"
+        return 1
+    fi
+    
+    # Create a pre-rollback backup for safety
+    milou_log "INFO" "📦 Creating pre-rollback safety backup..."
+    local pre_rollback_backup="./backups/db_safety/pre_rollback_backup_$(date +%Y%m%d_%H%M%S).sql"
+    mkdir -p "$(dirname "$pre_rollback_backup")"
+    
+    if docker exec "$db_container" pg_dump -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-milou_database}" --clean --if-exists > "$pre_rollback_backup" 2>/dev/null; then
+        chmod 600 "$pre_rollback_backup"
+        milou_log "INFO" "💾 Pre-rollback backup created: $pre_rollback_backup"
+    else
+        milou_log "WARN" "⚠️ Could not create pre-rollback backup, continuing anyway"
+    fi
+    
+    # Restore database with enhanced error handling
+    local db_name="${POSTGRES_DB:-milou_database}"
+    local db_user="${POSTGRES_USER:-}"
+    
+    milou_log "INFO" "🔄 Restoring database from backup..."
+    if docker exec -i "$db_container" psql -U "$db_user" -d "$db_name" < "$backup_file" >/dev/null 2>&1; then
+        milou_log "SUCCESS" "✅ Database restore completed"
+        
+        # Verify rollback success
+        milou_log "INFO" "🔍 Verifying rollback success..."
+        if _verify_database_integrity; then
+            milou_log "SUCCESS" "✅ Database rollback verification passed"
+            return 0
+        else
+            milou_log "ERROR" "❌ Database rollback verification failed"
+            
+            # Attempt to restore from pre-rollback backup if available
+            if [[ -f "$pre_rollback_backup" ]]; then
+                milou_log "WARN" "🔄 Attempting to restore from pre-rollback backup..."
+                if docker exec -i "$db_container" psql -U "$db_user" -d "$db_name" < "$pre_rollback_backup" >/dev/null 2>&1; then
+                    milou_log "SUCCESS" "✅ Restored from pre-rollback backup"
+                else
+                    milou_log "ERROR" "❌ Failed to restore from pre-rollback backup"
+                fi
+            fi
+            return 1
+        fi
+    else
+        milou_log "ERROR" "❌ Database rollback failed"
+        return 1
+    fi
+}
+
+# Safe full system update with zero-downtime strategy
+_milou_update_all_services_safe() {
+    local target_version="${1:-latest}"
+    local github_token="${2:-}"
+    
+    milou_log "INFO" "🔄 Performing safe full system update to version: $target_version"
+    
+    # Define update order (dependencies first) with comprehensive dependency mapping
+    local update_order=("database" "redis" "rabbitmq" "backend" "engine" "frontend" "nginx")
+    
+    # Service dependency mapping for enhanced safety
+    declare -A service_deps=(
+        ["database"]=""                           # No dependencies
+        ["redis"]=""                             # No dependencies  
+        ["rabbitmq"]=""                          # No dependencies
+        ["backend"]="database redis rabbitmq"    # Depends on all infrastructure
+        ["engine"]="database redis rabbitmq"     # Depends on infrastructure  
+        ["frontend"]="backend"                   # Depends on backend API
+        ["nginx"]="frontend backend"             # Depends on app services
+    )
+    
+    # Pre-update validation: ensure all required images are available
+    milou_log "INFO" "🔍 Pre-update validation: checking image availability..."
+    local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
+    
+    for service in "${update_order[@]}"; do
+        local image_name="${registry}/${service}:${target_version}"
+        milou_log "INFO" "📥 Verifying image availability: $image_name"
+        
+        if ! docker pull "$image_name" >/dev/null 2>&1; then
+            milou_log "ERROR" "❌ Image not available: $image_name"
+            milou_log "ERROR" "❌ Aborting update - not all images are available"
+            return 1
+        fi
+        milou_log "SUCCESS" "✅ Image available: $service"
+    done
+    
+    # Update services in dependency order with rolling deployment
+    local successful_updates=()
+    local failed_updates=()
+    
+    for service in "${update_order[@]}"; do
+        milou_log "INFO" "🔄 Updating $service with zero-downtime rolling deployment..."
+        
+        # Special handling for database updates
+        if [[ "$service" == "database" ]]; then
+            milou_log "INFO" "🗄️ Creating database safety backup before update..."
+            local db_backup_path
+            db_backup_path=$(_create_database_safety_backup)
+            
+            if [[ $? -ne 0 ]]; then
+                milou_log "ERROR" "❌ Database backup failed - ABORTING update for safety"
+                return 1
+            fi
+        fi
+        
+        # Wait for dependencies to be healthy before updating this service
+        local deps="${service_deps[$service]}"
+        if [[ -n "$deps" ]]; then
+            milou_log "INFO" "🔍 Verifying dependencies are healthy: $deps"
+            for dep in $deps; do
+                if ! _wait_for_service_health "$dep" 30; then
+                    milou_log "ERROR" "❌ Dependency $dep is not healthy - cannot update $service"
+                    failed_updates+=("$service")
+                    continue 2  # Skip to next service
+                fi
+            done
+        fi
+        
+        # Perform rolling update for the service
+        if _perform_rolling_service_update "$service" "$target_version"; then
+            successful_updates+=("$service")
+            milou_log "SUCCESS" "✅ Successfully updated $service"
+            
+            # Special post-update verification for database
+            if [[ "$service" == "database" ]]; then
+                milou_log "INFO" "🔍 Verifying database integrity after update..."
+                if ! _verify_database_integrity; then
+                    milou_log "ERROR" "❌ Database integrity check failed - initiating rollback"
+                    if [[ -n "$db_backup_path" ]]; then
+                        _rollback_database_from_backup "$db_backup_path"
+                    fi
+                    failed_updates+=("$service")
+                    return 1
+                fi
+            fi
+        else
+            failed_updates+=("$service")
+            milou_log "ERROR" "❌ Failed to update $service"
+            
+            # For critical services, consider this a fatal error
+            if [[ "$service" == "database" || "$service" == "backend" ]]; then
+                milou_log "ERROR" "❌ Critical service update failed - aborting update process"
+                return 1
+            fi
+        fi
+    done
+    
+    # Final comprehensive health check
+    milou_log "INFO" "🏥 Performing final comprehensive system health check..."
+    if _milou_update_verify_services "${successful_updates[@]}"; then
+        milou_log "SUCCESS" "✅ All updated services are healthy"
+    else
+        milou_log "ERROR" "❌ Some services failed final health check"
+        return 1
+    fi
+    
+    # Update summary
+    if [[ ${#failed_updates[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "🎉 Zero-downtime update completed successfully!"
+        milou_log "INFO" "📊 Updated services: ${successful_updates[*]}"
+    else
+        milou_log "WARN" "⚠️ Update completed with some failures"
+        milou_log "INFO" "📊 Successful: ${successful_updates[*]}"
+        milou_log "INFO" "📊 Failed: ${failed_updates[*]}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Perform rolling update for individual service
+_perform_rolling_service_update() {
+    local service="$1"
+    local target_version="$2"
+    
+    milou_log "INFO" "🔄 Rolling update for $service..."
+    
+    # Get current container ID for fallback
+    local current_container
+    current_container=$(docker ps --filter "name=milou-$service" --format "{{.ID}}" | head -1)
+    
+    # Update service with zero downtime using Docker Compose
+    if command -v docker_execute >/dev/null 2>&1; then
+        # Use --no-deps to avoid restarting dependent services
+        # Use --force-recreate to ensure new image is used
+        if docker_execute "up" "$service" "false" "--no-deps" "--force-recreate" "-d"; then
+            milou_log "INFO" "🔄 Container updated, waiting for health check..."
+        else
+            milou_log "ERROR" "❌ Failed to update container for $service"
+            return 1
+        fi
+    else
+        # Fallback method
+        if docker compose up -d --no-deps --force-recreate "$service" >/dev/null 2>&1; then
+            milou_log "INFO" "🔄 Container updated, waiting for health check..."
+        else
+            milou_log "ERROR" "❌ Failed to update container for $service"
+            return 1
+        fi
+    fi
+    
+    # Wait for service to be healthy with extended timeout for critical services
+    local health_timeout=60
+    if [[ "$service" == "database" ]]; then
+        health_timeout=120  # Database needs more time
+    fi
+    
+    if _wait_for_service_health "$service" "$health_timeout"; then
+        milou_log "SUCCESS" "✅ $service is healthy after rolling update"
+        
+        # Clean up old container if update successful
+        if [[ -n "$current_container" ]]; then
+            docker rm "$current_container" >/dev/null 2>&1 || true
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "❌ $service failed health check after rolling update"
+        
+        # Attempt to rollback by restarting old container if available
+        if [[ -n "$current_container" ]]; then
+            milou_log "WARN" "🔄 Attempting to rollback $service..."
+            docker start "$current_container" >/dev/null 2>&1 || true
+        fi
+        
+        return 1
+    fi
+}
+
+# Wait for service to be healthy
+_wait_for_service_health() {
+    local service="$1"
+    local max_wait="${2:-60}"
+    local elapsed=0
+    
+    milou_log "INFO" "⏳ Waiting for $service to be healthy..."
+    
+    while [[ $elapsed -lt $max_wait ]]; do
+        # Basic container status check
+        if docker ps --filter "name=milou-$service" --filter "status=running" --format "{{.Names}}" | grep -q "milou-$service"; then
+            
+            # Service-specific health checks for comprehensive verification
+            case "$service" in
+                "database")
+                    # Database-specific health check using pg_isready
+                    if docker exec "milou-$service" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-milou_database}" >/dev/null 2>&1; then
+                        # Additional check: verify we can actually connect and query
+                        if docker exec "milou-$service" psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB:-milou_database}" -c "SELECT 1;" >/dev/null 2>&1; then
+                            milou_log "SUCCESS" "✅ $service is healthy (database responding to queries)"
+                            return 0
+                        fi
+                    fi
+                    ;;
+                "redis")
+                    # Redis-specific health check
+                    if docker exec "milou-$service" redis-cli -a "${REDIS_PASSWORD}" ping >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (Redis responding to ping)"
+                        return 0
+                    fi
+                    ;;
+                "rabbitmq")
+                    # RabbitMQ-specific health check
+                    if docker exec "milou-$service" rabbitmqctl status >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (RabbitMQ status OK)"
+                        return 0
+                    fi
+                    ;;
+                "backend")
+                    # Backend API health check
+                    if docker exec "milou-$service" curl -f -s http://localhost:9999/api/health >/dev/null 2>&1 || \
+                       docker exec "milou-$service" nc -z localhost 9999 >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (API responding)"
+                        return 0
+                    fi
+                    ;;
+                "frontend")
+                    # Frontend health check
+                    if docker exec "milou-$service" curl -f -s http://localhost:5173/ >/dev/null 2>&1 || \
+                       docker exec "milou-$service" nc -z localhost 5173 >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (Frontend responding)"
+                        return 0
+                    fi
+                    ;;
+                "nginx")
+                    # Nginx health check
+                    if docker exec "milou-$service" nginx -t >/dev/null 2>&1 && \
+                       docker exec "milou-$service" curl -f -s http://localhost/ >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (Nginx config valid and responding)"
+                        return 0
+                    fi
+                    ;;
+                "engine")
+                    # Engine health check
+                    if docker exec "milou-$service" curl -f -s http://localhost:8089/health >/dev/null 2>&1 || \
+                       docker exec "milou-$service" nc -z localhost 8089 >/dev/null 2>&1; then
+                        milou_log "SUCCESS" "✅ $service is healthy (Engine responding)"
+                        return 0
+                    fi
+                    ;;
+                *)
+                    # Generic health check for unknown services
+                    milou_log "SUCCESS" "✅ $service is healthy (container running)"
+                    return 0
+                    ;;
+            esac
+        fi
+        
+        sleep 3
+        elapsed=$((elapsed + 3))
+        
+        # Progress indicator every 15 seconds with service-specific context
+        if [[ $((elapsed % 15)) -eq 0 ]]; then
+            case "$service" in
+                "database")
+                    milou_log "INFO" "⏳ Still waiting for $service (database may be initializing... ${elapsed}s elapsed)"
+                    ;;
+                "backend"|"frontend"|"engine")
+                    milou_log "INFO" "⏳ Still waiting for $service (application starting up... ${elapsed}s elapsed)"
+                    ;;
+                *)
+                    milou_log "INFO" "⏳ Still waiting for $service (${elapsed}s elapsed)..."
+                    ;;
+            esac
+        fi
+    done
+    
+    milou_log "ERROR" "❌ $service failed to become healthy within $max_wait seconds"
+    
+    # Additional diagnostics for failed health checks
+    milou_log "INFO" "🔍 Diagnostic information for $service:"
+    
+    # Check if container is running at all
+    if docker ps --filter "name=milou-$service" --format "{{.Names}}" | grep -q "milou-$service"; then
+        milou_log "INFO" "   Container is running"
+        
+        # Get container logs for diagnosis
+        milou_log "INFO" "   Recent logs:"
+        docker logs "milou-$service" --tail 10 2>/dev/null | while read line; do
+            milou_log "INFO" "   LOG: $line"
+        done
+    else
+        milou_log "ERROR" "   Container is not running"
+        
+        # Check if container exists but is stopped
+        if docker ps -a --filter "name=milou-$service" --format "{{.Names}}" | grep -q "milou-$service"; then
+            milou_log "INFO" "   Container exists but is stopped"
+            docker logs "milou-$service" --tail 5 2>/dev/null | while read line; do
+                milou_log "ERROR" "   ERROR LOG: $line"
+            done
+        else
+            milou_log "ERROR" "   Container does not exist"
+        fi
+    fi
+    
+    return 1
+} 

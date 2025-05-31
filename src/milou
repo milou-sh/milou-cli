@@ -810,8 +810,13 @@ function main() {
                 fi
                 ;;
             --version)
-                show_version
-                exit 0
+                if [[ "$has_command" == "false" ]]; then
+                    show_version
+                    exit 0
+                else
+                    args+=("$1")
+                    shift
+                fi
                 ;;
             -v|--verbose)
                 VERBOSE=true

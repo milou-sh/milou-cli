@@ -48,6 +48,9 @@ fi
 if [[ -z "${DIM:-}" ]]; then
     readonly DIM='\033[2m'
 fi
+if [[ -z "${UNDERLINE:-}" ]]; then
+    readonly UNDERLINE='\033[4m'
+fi
 if [[ -z "${NC:-}" ]]; then
     readonly NC='\033[0m' # No Color
 fi

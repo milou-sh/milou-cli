@@ -311,13 +311,16 @@ docker_init() {
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
     
-    # Try to authenticate with GitHub Container Registry if we have a token
-    if [[ -n "$github_token" ]]; then
+    # Try to authenticate with GitHub Container Registry if we have a token and not already authenticated
+    if [[ -n "$github_token" && "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
         if docker_login_github "$github_token" "$quiet"; then
             [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
+            export GITHUB_AUTHENTICATED="true"
         else
             [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
         fi
+    elif [[ "${GITHUB_AUTHENTICATED:-}" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
     else
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token found - public images only"
     fi

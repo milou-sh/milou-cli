@@ -479,6 +479,102 @@ function handle_smart_status() {
             fi
             ;;
     esac
+    
+    # Add update check for running or stopped services
+    if [[ "$current_state" == "running" || "$current_state" == "installed_stopped" ]]; then
+        _check_status_updates
+    fi
+}
+
+# Simple update checker for status command
+_check_status_updates() {
+    echo
+    echo -e "${CYAN}📦 Update Status${NC}"
+    echo "==============="
+    
+    # Check if we have a GitHub token
+    local github_token="${GITHUB_TOKEN:-}"
+    if [[ -z "$github_token" && -f "${SCRIPT_DIR}/.env" ]]; then
+        github_token=$(grep "^GITHUB_TOKEN=" "${SCRIPT_DIR}/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '"'"'" || echo "")
+    fi
+    
+    if [[ -z "$github_token" ]]; then
+        echo "⚠️  No GitHub token available for update check"
+        echo "💡 Set GITHUB_TOKEN in .env file to enable update checks"
+        return 0
+    fi
+    
+    # Quick validation of token format
+    if [[ ! "$github_token" =~ ^gh[ps]_[A-Za-z0-9]{36}$ ]] && [[ ! "$github_token" =~ ^github_pat_[A-Za-z0-9_]{22,}$ ]]; then
+        echo "⚠️  Invalid GitHub token format"
+        echo "💡 Update GITHUB_TOKEN in .env file with a valid token"
+        return 0
+    fi
+    
+    # Try to load update module silently
+    if ! source "${SRC_DIR}/_update.sh" 2>/dev/null; then
+        echo "⚠️  Update checking not available"
+        return 0
+    fi
+    
+    # Check if we have any containers to check
+    local has_containers=false
+    if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q "milou-"; then
+        has_containers=true
+    fi
+    
+    if [[ "$has_containers" == "false" ]]; then
+        echo "ℹ️  No Milou containers found to check for updates"
+        echo "💡 Run 'milou setup' to install services first"
+        return 0
+    fi
+    
+    # Run a silent update check
+    echo "🔍 Checking for updates..."
+    
+    # Capture all output and only show clean results
+    local temp_file=$(mktemp)
+    local check_result=0
+    
+    # Run the check and capture exit code
+    if command -v check_updates_needed >/dev/null 2>&1; then
+        check_updates_needed "latest" "$github_token" "false" "true" >"$temp_file" 2>&1 || check_result=$?
+    else
+        echo "⚠️  Update checking function not available" > "$temp_file"
+        check_result=1
+    fi
+    
+    # Clean up temp file
+    rm -f "$temp_file" 2>/dev/null
+    
+    # Show results based on exit code and environment variables
+    if [[ $check_result -eq 0 ]]; then
+        # Updates are available
+        local services_to_update="${MILOU_SERVICES_TO_UPDATE:-}"
+        if [[ -n "$services_to_update" ]]; then
+            echo -e "${YELLOW}⬆️  Updates Available:${NC}"
+            IFS=' ' read -ra update_array <<< "$services_to_update"
+            for service in "${update_array[@]}"; do
+                local current_var="RUNNING_VERSION_${service^^}"
+                local target_var="MILOU_TARGET_VERSION_${service^^}"
+                local current_version="${!current_var:-unknown}"
+                local target_version="${!target_var:-latest}"
+                if [[ "$current_version" == "unknown" ]]; then
+                    echo "  📦 $service: Install v$target_version"
+                else
+                    echo "  📦 $service: v$current_version → v$target_version"
+                fi
+            done
+            echo
+            echo -e "${GREEN}💡 Run: milou update${NC}"
+        else
+            echo "✅ All services are up to date"
+        fi
+    else
+        # No updates needed or API failed
+        echo "✅ All services appear to be up to date"
+        echo "💡 Run 'milou update-status' for detailed information"
+    fi
 }
 
 # =============================================================================

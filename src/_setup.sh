@@ -1107,7 +1107,7 @@ setup_generate_configuration_interactive() {
     echo -e "      ${YELLOW}✓${NC}  Requires knowledge of available versions"
     echo
     
-    local version_choice version_tag="v1.0.0"
+    local version_choice version_tag="1.0.0"
     while true; do
         echo -ne "${BOLD}${GREEN}Choose version option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
         read -r version_choice
@@ -1120,9 +1120,9 @@ setup_generate_configuration_interactive() {
                 # Use latest stable - try to detect or fall back to default
                 local github_token="${GITHUB_TOKEN:-}"
                 if [[ -n "$github_token" ]]; then
-                    version_tag=$(config_detect_latest_stable_version "$github_token" "true" "milou-sh" "milou" 2>/dev/null) || version_tag="v1.0.0"
+                    version_tag=$(config_detect_latest_stable_version "$github_token" "true" "milou-sh" "milou" 2>/dev/null) || version_tag="1.0.0"
                 else
-                    version_tag="v1.0.0"
+                    version_tag="1.0.0"
                 fi
                 echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable ($version_tag)${NC}"
                 echo -e "   ${DIM}This is the most reliable option for production use.${NC}"
@@ -1136,7 +1136,7 @@ setup_generate_configuration_interactive() {
                 ;;
             3) 
                 echo -e "   ${BLUE}${CHECKMARK} Custom version selected!${NC}"
-                echo -e "   ${DIM}Enter the exact version tag (e.g., v1.0.0, v2.1.3):${NC}"
+                echo -e "   ${DIM}Enter the exact version tag (e.g., 1.0.0, 2.1.3):${NC}"
                 echo -ne "   ${BOLD}Version tag:${NC} "
                 read -r custom_version
                 if [[ -n "$custom_version" ]]; then
@@ -1144,7 +1144,7 @@ setup_generate_configuration_interactive() {
                     echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom version: ${BOLD}$version_tag${NC}"
                 else
                     echo -e "   ${RED}${CROSSMARK} No version entered, using default${NC}"
-                    version_tag="v1.0.0"
+                    version_tag="1.0.0"
                 fi
                 break
                 ;;

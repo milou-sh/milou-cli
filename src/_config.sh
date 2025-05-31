@@ -223,7 +223,7 @@ config_detect_latest_stable_version() {
     # If no GitHub token, fall back to default
     if [[ -z "$github_token" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token provided, using default version"
-        echo "v1.0.0"
+        echo "1.0.0"
         return 0
     fi
     
@@ -276,7 +276,7 @@ config_detect_latest_stable_version() {
     
     # Final fallback to default stable version
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not detect version from registry, using default stable version"
-    echo "v1.0.0"
+    echo "1.0.0"
     return 0
 }
 

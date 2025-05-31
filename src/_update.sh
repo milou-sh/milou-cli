@@ -857,7 +857,7 @@ _show_update_help() {
     echo ""
     echo "Examples:"
     echo "  ./milou.sh update                                    # Update all to latest"
-    echo "  ./milou.sh update --version 1.0.0 --token TOKEN     # Update ALL to v1.0.0"
+    echo "  ./milou.sh update --version 1.0.0 --token TOKEN     # Update ALL to 1.0.0"
     echo "  ./milou.sh update --service frontend,backend        # Update specific services"
 }
 

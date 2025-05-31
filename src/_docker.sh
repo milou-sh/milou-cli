@@ -279,8 +279,9 @@ docker_init() {
     local env_file="${1:-${SCRIPT_DIR}/.env}"
     local compose_file="${2:-${SCRIPT_DIR}/static/docker-compose.yml}"
     local quiet="${3:-false}"
+    local skip_auth="${4:-false}"  # Add parameter to skip authentication
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Initializing Docker environment..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Initializing Docker environment (skip_auth=$skip_auth)..."
     
     # Check Docker access first
     if ! validate_docker_access "true" "false" "true" "$quiet"; then
@@ -311,18 +312,23 @@ docker_init() {
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
     
-    # Try to authenticate with GitHub Container Registry if we have a token and not already authenticated
-    if [[ -n "$github_token" && "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
-        if docker_login_github "$github_token" "$quiet"; then
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
-            export GITHUB_AUTHENTICATED="true"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
-        fi
-    elif [[ "${GITHUB_AUTHENTICATED:-}" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
+    # Skip authentication if requested (e.g., for stop operations)
+    if [[ "$skip_auth" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Skipping GitHub authentication as requested"
     else
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token found - public images only"
+        # Try to authenticate with GitHub Container Registry if we have a token and not already authenticated
+        if [[ -n "$github_token" && "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
+            if docker_login_github "$github_token" "$quiet"; then
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
+                export GITHUB_AUTHENTICATED="true"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
+            fi
+        elif [[ "${GITHUB_AUTHENTICATED:-}" == "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token found - public images only"
+        fi
     fi
     
     # Test Docker Compose configuration
@@ -360,13 +366,34 @@ docker_execute() {
     shift 3 2>/dev/null || true
     local additional_args=("$@")
     
+    # Determine if authentication should be skipped based on operation
+    local skip_auth="false"
+    case "$operation" in
+        "down"|"stop")
+            # Stop operations don't need authentication
+            skip_auth="true"
+            ;;
+        "logs"|"ps"|"exec"|"config"|"validate")
+            # Read-only operations don't need authentication
+            skip_auth="true"
+            ;;
+        "up"|"start"|"pull"|"restart")
+            # Operations that might pull images need authentication
+            skip_auth="false"
+            ;;
+        *)
+            # Default to requiring authentication for unknown operations
+            skip_auth="false"
+            ;;
+    esac
+    
     # Ensure Docker context is initialized
-    if ! docker_init "" "" "$quiet"; then
+    if ! docker_init "" "" "$quiet" "$skip_auth"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker context initialization failed"
         return 1
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🐳 Docker Execute: $operation ${service:+$service }${additional_args[*]:+${additional_args[*]}}"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🐳 Docker Execute: $operation ${service:+$service }${additional_args[*]:+${additional_args[*]}} (skip_auth=$skip_auth)"
     
     case "$operation" in
         "up"|"start")
@@ -550,25 +577,44 @@ service_start_with_validation() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
     
-    # Ensure Docker environment is initialized (which includes authentication)
-    if ! docker_init "" "" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker initialization failed"
-        return 1
-    fi
-    
-    # Validate that we can access private images if needed
+    # Load environment to check for GitHub token
     local github_token="${GITHUB_TOKEN:-}"
-    if [[ -f "$DOCKER_ENV_FILE" ]]; then
-        source "$DOCKER_ENV_FILE"
+    if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
     
-    # If we have a token, ensure authentication is working
+    # Validate token permissions before attempting to start services
     if [[ -n "$github_token" ]]; then
-        if ! docker_login_github "$github_token" "$quiet"; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "GitHub authentication failed - cannot access private images"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token permissions..."
+        
+        # Use the validation function to check token format first
+        if ! validate_github_token "$github_token" "false"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token format appears invalid, but attempting authentication anyway"
+        fi
+        
+        # Test authentication and token permissions
+        if ! test_github_authentication "$github_token" "$quiet" "true"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ GitHub token validation failed"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Ensure your token has 'read:packages' scope"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Verify you have access to the milou-sh/milou repository"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check if the token has expired"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Create a new token: https://github.com/settings/tokens"
+            [[ "$quiet" != "true" ]] && echo ""
             return 1
         fi
+        
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ GitHub token validation successful"
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token found - only public images will be accessible"
+    fi
+    
+    # Ensure Docker environment is initialized (authentication will be handled based on operation)
+    if ! docker_init "" "" "$quiet" "false"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker initialization failed"
+        return 1
     fi
     
     # Start the service(s)
@@ -758,6 +804,65 @@ service_update_zero_downtime() {
 }
 
 # =============================================================================
+# BUILD AND PUSH OPERATIONS WITH TOKEN VALIDATION
+# =============================================================================
+
+# Validate GitHub token permissions before build/push operations
+validate_token_for_build_push() {
+    local github_token="${1:-}"
+    local quiet="${2:-false}"
+    
+    # Use provided token or environment variable
+    if [[ -z "$github_token" ]]; then
+        github_token="${GITHUB_TOKEN:-}"
+        if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+            source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
+            github_token="${GITHUB_TOKEN:-$github_token}"
+        fi
+    fi
+    
+    if [[ -z "$github_token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "GitHub token is required for build and push operations"
+        [[ "$quiet" != "true" ]] && echo ""
+        [[ "$quiet" != "true" ]] && echo "🔧 HOW TO FIX:"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Get a GitHub token: https://github.com/settings/tokens"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Required scopes: 'read:packages' and 'write:packages'"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Or pass via command: --token ghp_your_token_here"
+        [[ "$quiet" != "true" ]] && echo ""
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token for build/push operations..."
+    
+    # Validate token format
+    if ! validate_github_token "$github_token" "false"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Invalid GitHub token format"
+        return 1
+    fi
+    
+    # Test authentication and registry access
+    if ! test_github_authentication "$github_token" "$quiet" "true"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ GitHub token validation failed"
+        [[ "$quiet" != "true" ]] && echo ""
+        [[ "$quiet" != "true" ]] && echo "🔧 COMMON ISSUES:"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Token missing 'read:packages' and 'write:packages' scopes"
+        [[ "$quiet" != "true" ]] && echo "   ✓ No access to milou-sh/milou repository"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Token has expired"
+        [[ "$quiet" != "true" ]] && echo "   ✓ Network connectivity issues"
+        [[ "$quiet" != "true" ]] && echo ""
+        [[ "$quiet" != "true" ]] && echo "💡 Create a new token with proper scopes:"
+        [[ "$quiet" != "true" ]] && echo "   https://github.com/settings/tokens"
+        [[ "$quiet" != "true" ]] && echo ""
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ GitHub token validated - ready for build/push operations"
+    export GITHUB_TOKEN="$github_token"
+    return 0
+}
+
+# =============================================================================
 # EXPORT CONSOLIDATED FUNCTIONS
 # =============================================================================
 
@@ -774,5 +879,8 @@ export -f service_start_with_validation
 export -f service_stop_gracefully
 export -f service_restart_safely
 export -f service_update_zero_downtime
+
+# Export new build and push operations functions
+export -f validate_token_for_build_push
 
 milou_log "DEBUG" "Docker module loaded successfully" 

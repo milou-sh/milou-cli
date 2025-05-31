@@ -158,6 +158,7 @@ docker_handle_startup_error() {
 docker_login_github() {
     local github_token="${1:-}"
     local quiet="${2:-false}"
+    local validate_token="${3:-true}"
     
     # Use provided token or environment variable
     if [[ -z "$github_token" ]]; then
@@ -171,16 +172,106 @@ docker_login_github() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Authenticating with GitHub Container Registry..."
     
-    # Login to GitHub Container Registry
-    if echo "$github_token" | docker login ghcr.io -u oauth2 --password-stdin >/dev/null 2>&1; then
+    # Validate token format first if requested
+    if [[ "$validate_token" == "true" ]]; then
+        if ! validate_github_token "$github_token" "false"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token format appears invalid, but attempting authentication anyway"
+        fi
+    fi
+    
+    # Attempt login with multiple username strategies
+    local login_successful=false
+    local login_error=""
+    
+    # Strategy 1: Use oauth2 as username (recommended for PATs)
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting login with oauth2 username..."
+    login_error=$(echo "$github_token" | docker login ghcr.io -u oauth2 --password-stdin 2>&1)
+    local login_exit_code=$?
+    
+    if [[ $login_exit_code -eq 0 ]]; then
+        login_successful=true
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry"
-        return 0
     else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "oauth2 login failed, trying token as username..."
+        
+        # Strategy 2: Use token as username (fallback)
+        login_error=$(echo "$github_token" | docker login ghcr.io -u "$github_token" --password-stdin 2>&1)
+        login_exit_code=$?
+        
+        if [[ $login_exit_code -eq 0 ]]; then
+            login_successful=true
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry (fallback method)"
+        fi
+    fi
+    
+    if [[ "$login_successful" != "true" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to authenticate with GitHub Container Registry"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your GitHub token has 'read:packages' scope"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Token should be from: https://github.com/settings/tokens"
+        
+        # Provide specific guidance based on error type
+        if echo "$login_error" | grep -qi "unauthorized\|invalid.*credentials"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "🔑 Authentication failed - token is invalid or expired"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check if your token has 'read:packages' scope"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Verify token hasn't expired"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Ensure you have access to milou-sh/milou repository"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Create new token: https://github.com/settings/tokens"
+            [[ "$quiet" != "true" ]] && echo ""
+        elif echo "$login_error" | grep -qi "network\|timeout\|connection"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "🌐 Network error connecting to GitHub Container Registry"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check internet connectivity"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Verify DNS resolution: nslookup ghcr.io"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check firewall/proxy settings"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Try again in a few minutes"
+            [[ "$quiet" != "true" ]] && echo ""
+        elif echo "$login_error" | grep -qi "rate.*limit"; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "🚫 Rate limit exceeded for GitHub Container Registry"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Wait a few minutes before retrying"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Use a different GitHub token if available"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check GitHub status: https://status.github.com"
+            [[ "$quiet" != "true" ]] && echo ""
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "🔧 Unexpected authentication error"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Try running: docker logout ghcr.io && docker login ghcr.io"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Restart Docker daemon if issues persist"
+            [[ "$quiet" != "true" ]] && echo "   ✓ Check Docker logs for more details"
+            [[ "$quiet" != "true" ]] && echo ""
+        fi
+        
+        # Show error details in debug mode
+        if [[ "${VERBOSE:-false}" == "true" && -n "$login_error" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Login error details: $login_error"
+        fi
+        
         return 1
     fi
+    
+    # Test access to a specific repository if authentication succeeded
+    if [[ "$validate_token" == "true" && "$login_successful" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing repository access..."
+        
+        # Try to inspect a known image to verify we can access the registry
+        local test_result
+        test_result=$(docker manifest inspect "ghcr.io/milou-sh/milou/nginx:latest" 2>&1 || echo "")
+        
+        if echo "$test_result" | grep -q "manifest unknown\|not found"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Authentication successful but cannot access milou-sh/milou repository"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 You may need repository access permissions"
+        elif echo "$test_result" | grep -q "unauthorized"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token authenticated but lacks repository permissions"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Ensure token has 'read:packages' scope and repository access"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 Full GitHub Container Registry access verified"
+        fi
+    fi
+    
+    return 0
 }
 
 # Initialize Docker environment - SINGLE AUTHORITATIVE IMPLEMENTATION

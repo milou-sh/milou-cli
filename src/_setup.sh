@@ -1400,6 +1400,16 @@ setup_start_services() {
     
     # Check if GitHub token is available for private images
     local github_token="${GITHUB_TOKEN:-}"
+    local token_source=""
+    
+    # Determine token source for better user messaging
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        if [[ -n "$github_token" ]] && [[ "$github_token" != "${GITHUB_TOKEN:-}" ]]; then
+            token_source="command-line"
+        else
+            token_source="environment"
+        fi
+    fi
     
     # If no token and we're in interactive mode, prompt for it
     if [[ -z "$github_token" && "$SETUP_CURRENT_MODE" == "$SETUP_MODE_INTERACTIVE" ]]; then
@@ -1421,26 +1431,83 @@ setup_start_services() {
             echo "(You can create one at: https://github.com/settings/tokens)"
             echo "Required scopes: read:packages"
             echo ""
+            
+            # Ask if user wants to see the token while typing (security vs usability)
+            local show_token="false"
+            if confirm "Do you want to see the token as you type? (less secure but easier)" "N"; then
+                show_token="true"
+            fi
+            
             echo -ne "GitHub Token: "
-            read -rs github_token
-            echo
+            if [[ "$show_token" == "true" ]]; then
+                read -r github_token
+            else
+                read -rs github_token
+                echo  # New line after hidden input
+            fi
             echo ""
             
             if [[ -n "$github_token" ]]; then
-                # Validate the token
+                # Validate the token with enhanced feedback
+                milou_log "INFO" "🔍 Validating GitHub token..."
+                
+                # First check format
                 if validate_github_token "$github_token" "false"; then
-                    milou_log "SUCCESS" "✓ GitHub token validated"
-                    # Update the .env file with the token
-                    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-                        if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
-                            sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "${SCRIPT_DIR:-$(pwd)}/.env"
-                        else
-                            echo "GITHUB_TOKEN=$github_token" >> "${SCRIPT_DIR:-$(pwd)}/.env"
+                    milou_log "SUCCESS" "✓ Token format is valid"
+                    
+                    # Test authentication with GitHub API and registry
+                    milou_log "INFO" "🔐 Testing GitHub authentication..."
+                    if test_github_authentication "$github_token" "false" "true"; then
+                        milou_log "SUCCESS" "✓ GitHub token validated and authenticated"
+                        
+                        # Update the .env file with the token
+                        if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+                            if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
+                                sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "${SCRIPT_DIR:-$(pwd)}/.env"
+                            else
+                                echo "GITHUB_TOKEN=$github_token" >> "${SCRIPT_DIR:-$(pwd)}/.env"
+                            fi
+                            milou_log "INFO" "Token saved to .env file"
                         fi
-                        milou_log "INFO" "Token saved to .env file"
+                        
+                        # Export for immediate use
+                        export GITHUB_TOKEN="$github_token"
+                        token_source="user-input"
+                    else
+                        milou_log "ERROR" "❌ Token authentication failed"
+                        echo ""
+                        echo "🔧 TROUBLESHOOTING:"
+                        echo "   ✓ Ensure token has 'read:packages' scope"
+                        echo "   ✓ Check if token is expired"
+                        echo "   ✓ Verify you have access to milou-sh/milou repository"
+                        echo "   ✓ Try creating a new token at: https://github.com/settings/tokens"
+                        echo ""
+                        
+                        if confirm "Continue with potentially invalid token?" "N"; then
+                            milou_log "WARN" "⚠️ Continuing with unverified token"
+                            export GITHUB_TOKEN="$github_token"
+                            token_source="user-input-unverified"
+                        else
+                            milou_log "INFO" "Setup cancelled - please get a valid GitHub token first"
+                            return 1
+                        fi
                     fi
                 else
-                    milou_log "WARN" "✓  Token validation failed, but continuing with provided token"
+                    milou_log "ERROR" "❌ Invalid token format"
+                    echo ""
+                    echo "🔧 EXPECTED TOKEN FORMATS:"
+                    echo "   ✓ Classic PAT: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    echo "   ✓ Fine-grained: github_pat_xxxxxxxxxxxxxxxxxxxx"
+                    echo ""
+                    
+                    if confirm "Continue with token anyway? (not recommended)" "N"; then
+                        milou_log "WARN" "⚠️ Continuing with invalid token format"
+                        export GITHUB_TOKEN="$github_token"
+                        token_source="user-input-invalid"
+                    else
+                        milou_log "INFO" "Please get a valid GitHub token and try again"
+                        return 1
+                    fi
                 fi
             else
                 milou_log "INFO" "No token provided, continuing without authentication"
@@ -1453,6 +1520,27 @@ setup_start_services() {
             echo "  2. Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
             echo "  3. Restart services: ./milou.sh restart"
             echo ""
+        fi
+    elif [[ -n "$github_token" ]]; then
+        # Token was provided via command line or environment
+        milou_log "INFO" "🔑 Using GitHub token from $token_source"
+        
+        # Quick validation for command-line provided tokens
+        if [[ "$token_source" == "command-line" ]]; then
+            milou_log "INFO" "🔍 Validating provided token..."
+            if validate_github_token "$github_token" "false"; then
+                milou_log "SUCCESS" "✓ Token format is valid"
+                
+                # Test authentication silently for command-line tokens
+                if test_github_authentication "$github_token" "true" "false"; then
+                    milou_log "SUCCESS" "✓ Token authentication verified"
+                else
+                    milou_log "WARN" "⚠️ Token authentication failed, but continuing"
+                    milou_log "INFO" "💡 If image pulls fail, check token permissions"
+                fi
+            else
+                milou_log "WARN" "⚠️ Token format appears invalid, but continuing"
+            fi
         fi
     fi
     
@@ -1468,22 +1556,45 @@ setup_start_services() {
     else
         milou_log "ERROR" "Failed to start services"
         
-        # If authentication failed and we don't have a token, provide guidance
+        # Enhanced error guidance based on token status
+        echo ""
+        echo "🔧 TROUBLESHOOTING SERVICE STARTUP"
+        echo "=================================="
+        echo ""
+        
         if [[ -z "$github_token" ]]; then
+            echo "❌ NO GITHUB TOKEN PROVIDED"
+            echo "   The error may be due to missing authentication for private images."
             echo ""
-            echo "✓ AUTHENTICATION MAY BE REQUIRED"
-            echo "=================================="
+            echo "✓ SOLUTION:"
+            echo "   1. Get a GitHub token: https://github.com/settings/tokens"
+            echo "   2. Required scopes: read:packages"
+            echo "   3. Re-run: ./milou.sh setup --token ghp_your_token_here"
             echo ""
-            echo "If the error above mentions 'unauthorized' or authentication,"
-            echo "you need a GitHub Personal Access Token to access private images."
+        elif [[ "$token_source" == "user-input-invalid" || "$token_source" == "user-input-unverified" ]]; then
+            echo "❌ INVALID/UNVERIFIED TOKEN"
+            echo "   The token provided may not be working correctly."
             echo ""
-            echo "✓ GET A GITHUB TOKEN:"
-            echo "  1. Go to: https://github.com/settings/tokens"
-            echo "  2. Create a token with 'read:packages' scope"
-            echo "  3. Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
-            echo "  4. Run setup again: ./milou.sh setup"
+            echo "✓ SOLUTION:"
+            echo "   1. Check token permissions: read:packages scope required"
+            echo "   2. Verify token hasn't expired"
+            echo "   3. Test manually: echo 'TOKEN' | docker login ghcr.io -u USERNAME --password-stdin"
+            echo "   4. Get a new token if needed: https://github.com/settings/tokens"
+            echo ""
+        else
+            echo "❌ SERVICE STARTUP FAILED"
+            echo "   Authentication appears OK, but services failed to start."
+            echo ""
+            echo "✓ NEXT STEPS:"
+            echo "   1. Check service logs: ./milou.sh logs"
+            echo "   2. Verify system resources: docker system df"
+            echo "   3. Check port availability: ./milou.sh status"
+            echo "   4. Try manual start: ./milou.sh start"
             echo ""
         fi
+        
+        echo "💡 For detailed logs, run: ./milou.sh setup --verbose"
+        echo ""
         
         return 1
     fi

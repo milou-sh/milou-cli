@@ -23,8 +23,8 @@ readonly MILOU_UPDATE_MODULE_LOADED="true"
 
 # Self-update configuration
 readonly MILOU_CLI_REPO="milou-sh/milou-cli"
-readonly GITHUB_API_BASE="https://api.github.com"
-readonly RELEASE_API_URL="${GITHUB_API_BASE}/repos/${MILOU_CLI_REPO}/releases"
+# Note: GITHUB_API_BASE is declared in _docker.sh to avoid conflicts
+readonly RELEASE_API_URL="${GITHUB_API_BASE:-https://api.github.com}/repos/${MILOU_CLI_REPO}/releases"
 
 # Default services for system updates
 readonly DEFAULT_SERVICES=("frontend" "backend" "database" "engine" "nginx")
@@ -54,76 +54,96 @@ display_current_versions() {
     echo
     echo -e "   ${BOLD}Service Versions:${NC}"
     
-    # Get running container versions
+    # Get running container versions with improved detection
     local -A running_versions=()
+    local -A container_status=()
     local -A configured_versions=()
     
-    # Get versions from ALL containers (running AND stopped) to get better current state
-    if docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | grep -q "milou-"; then
-        while IFS=$'\t' read -r container_name image_name; do
-            if [[ "$container_name" =~ milou-(.+) ]]; then
-                local service="${BASH_REMATCH[1]}"
-                # Extract version from image name (e.g., ghcr.io/milou-sh/milou/backend:v1.2.0)
-                local version=""
-                if [[ "$image_name" =~ :(.+)$ ]]; then
-                    version="${BASH_REMATCH[1]}"
-                    # Clean up version string - remove extra prefixes if present
-                    version="${version#v}"  # Remove 'v' prefix if present
-                else
-                    version="unknown"
-                fi
-                running_versions["$service"]="$version"
+    # Get versions from ALL containers (running AND stopped) with better parsing
+    milou_log "DEBUG" "Scanning for Milou containers..."
+    
+    # Use a more robust approach to get container information
+    while IFS='|' read -r container_name image_name status; do
+        # Skip empty lines and headers
+        [[ -z "$container_name" || "$container_name" == "NAMES" ]] && continue
+        
+        milou_log "DEBUG" "Processing container: $container_name with image: $image_name (status: $status)"
+        
+        if [[ "$container_name" =~ milou-(.+) ]]; then
+            local service="${BASH_REMATCH[1]}"
+            
+            # Extract version from image name with more robust regex
+            local version=""
+            if [[ "$image_name" =~ :([^[:space:]]+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+                # Clean up version string - remove extra prefixes if present
+                version="${version#v}"  # Remove 'v' prefix if present
+                milou_log "DEBUG" "Extracted version '$version' for service '$service'"
+            else
+                version="unknown"
+                milou_log "DEBUG" "Could not extract version from image: $image_name"
             fi
-        done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+            
+            running_versions["$service"]="$version"
+            
+            # Determine if container is running
+            if [[ "$status" =~ ^Up|running ]]; then
+                container_status["$service"]="running"
+            else
+                container_status["$service"]="stopped"
+            fi
+        else
+            milou_log "DEBUG" "Skipping non-Milou container: $container_name"
+        fi
+    done < <(docker ps -a --filter "name=milou-" --format "{{.Names}}|{{.Image}}|{{.Status}}" 2>/dev/null)
+    
+    # Load environment file to get configured versions
+    if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+        source "${SCRIPT_DIR}/.env" 2>/dev/null || true
     fi
     
-    # Get configured versions from environment
-    configured_versions["database"]="${MILOU_DATABASE_TAG:-v1.0.0}"
-    configured_versions["backend"]="${MILOU_BACKEND_TAG:-v1.0.0}"
-    configured_versions["frontend"]="${MILOU_FRONTEND_TAG:-v1.0.0}"
-    configured_versions["engine"]="${MILOU_ENGINE_TAG:-v1.0.0}"
-    configured_versions["nginx"]="${MILOU_NGINX_TAG:-v1.0.0}"
+    # Get configured versions from environment with fallbacks
+    configured_versions["database"]="${MILOU_DATABASE_TAG:-1.0.0}"
+    configured_versions["backend"]="${MILOU_BACKEND_TAG:-1.0.0}"
+    configured_versions["frontend"]="${MILOU_FRONTEND_TAG:-1.0.0}"
+    configured_versions["engine"]="${MILOU_ENGINE_TAG:-1.0.0}"
+    configured_versions["nginx"]="${MILOU_NGINX_TAG:-1.0.0}"
     configured_versions["redis"]="${REDIS_VERSION:-latest}"
     configured_versions["rabbitmq"]="${RABBITMQ_VERSION:-latest}"
     
-    # Clean configured versions too
+    # Clean configured versions (remove 'v' prefix for consistency)
     for service in "${!configured_versions[@]}"; do
         configured_versions["$service"]="${configured_versions[$service]#v}"
     done
     
-    # Display service versions with status indicators
+    # Display service versions with enhanced status indicators
     local services=("database" "backend" "frontend" "engine" "nginx" "redis" "rabbitmq")
     
     for service in "${services[@]}"; do
         local current_version="${running_versions[$service]:-}"
         local configured_version="${configured_versions[$service]:-}"
+        local status="${container_status[$service]:-}"
         
-        # Check if service is currently running
-        local is_running=false
-        if docker ps --filter "name=milou-$service" --format "{{.Names}}" 2>/dev/null | grep -q "milou-$service"; then
-            is_running=true
-        fi
+        milou_log "DEBUG" "Service $service: current=$current_version, configured=$configured_version, status=$status"
         
         if [[ -n "$current_version" && "$current_version" != "unknown" ]]; then
             # Service has a known version (from container)
-            if [[ "$is_running" == "true" ]]; then
+            local display_current=$(_format_version_for_display "$current_version")
+            local display_configured=$(_format_version_for_display "$configured_version")
+            
+            if [[ "$status" == "running" ]]; then
                 if [[ "$current_version" == "$configured_version" ]]; then
-                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${GREEN}v$current_version${NC} ${DIM}(running)${NC}"
+                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${GREEN}$display_current${NC} ${DIM}(running)${NC}"
                 else
-                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${YELLOW}v$current_version${NC} ${DIM}(running, configured: v$configured_version)${NC}"
+                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${YELLOW}$display_current${NC} ${DIM}(running, configured: $display_configured)${NC}"
                 fi
             else
-                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$current_version${NC} ${DIM}(stopped)${NC}"
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}$display_current${NC} ${DIM}(stopped)${NC}"
             fi
         else
             # Service doesn't exist or version unknown, use configured version
-            local display_version="$configured_version"
-            if [[ "$configured_version" == "latest" ]]; then
-                display_version="latest"
-                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}$display_version${NC} ${DIM}(not installed)${NC}"
-            else
-                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$display_version${NC} ${DIM}(not installed)${NC}"
-            fi
+            local display_version=$(_format_version_for_display "$configured_version")
+            echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}$display_version${NC} ${DIM}(not installed)${NC}"
         fi
     done
     
@@ -135,22 +155,49 @@ display_current_versions() {
     fi
 }
 
-# Display what will be updated with version comparison
+# Helper function to format version for display
+_format_version_for_display() {
+    local version="$1"
+    
+    # Handle empty version
+    if [[ -z "$version" ]]; then
+        echo "unknown"
+        return
+    fi
+    
+    # Handle 'latest' specially
+    if [[ "$version" == "latest" ]]; then
+        echo "latest"
+        return
+    fi
+    
+    # Remove any existing 'v' prefix to avoid double prefixes
+    version="${version#v}"
+    
+    # For semantic versions, add 'v' prefix
+    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        echo "v$version"
+    else
+        # For other version formats (like tags), show as-is
+        echo "$version"
+    fi
+}
+
+# Display update preview with enhanced user experience
 display_update_preview() {
-    local target_version="${1:-latest}"
-    local specific_services="${2:-}"
+    local target_version="$1"
+    local -a services_to_update=("$2")
+    
+    # Convert services string to array if needed
+    if [[ "${#services_to_update[@]}" -eq 1 && "${services_to_update[0]}" == *" "* ]]; then
+        IFS=' ' read -ra services_to_update <<< "${services_to_update[0]}"
+    fi
     
     echo
     milou_log "INFO" "🔍 Update Preview - What Will Change"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Clean target version
-    target_version="${target_version#v}"
-    
-    # Determine services to update
-    local -a services_to_update=()
-    if [[ -n "$specific_services" ]]; then
-        IFS=',' read -ra services_to_update <<< "$specific_services"
+    if [[ ${#services_to_update[@]} -gt 0 ]]; then
         echo -e "   ${BOLD}Update Scope:${NC} Selective services"
         echo -e "   ${BOLD}Target Services:${NC} ${services_to_update[*]}"
     else
@@ -158,10 +205,12 @@ display_update_preview() {
         echo -e "   ${BOLD}Update Scope:${NC} Full system update"
     fi
     
-    echo -e "   ${BOLD}Target Version:${NC} v$target_version"
+    # Display target version correctly
+    local display_version=$(_format_version_for_display "$target_version")
+    echo -e "   ${BOLD}Target Version:${NC} $display_version"
     echo
     
-    # Get current versions for comparison (from ALL containers, not just running)
+    # Get current versions from containers
     local -A current_versions=()
     while IFS=$'\t' read -r container_name image_name; do
         if [[ "$container_name" =~ milou-(.+) ]]; then
@@ -179,15 +228,18 @@ display_update_preview() {
     local updates_needed=false
     for service in "${services_to_update[@]}"; do
         local current_version="${current_versions[$service]:-unknown}"
+        local display_target=$(_format_version_for_display "$target_version")
         
         if [[ "$current_version" == "unknown" || "$current_version" == "" ]]; then
-            echo -e "   ${BOLD}├─ ${service}:${NC} ${YELLOW}NEW INSTALLATION${NC} → ${GREEN}v$target_version${NC}"
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${YELLOW}NEW INSTALLATION${NC} → ${GREEN}$display_target${NC}"
             updates_needed=true
         elif [[ "$current_version" != "$target_version" ]]; then
-            echo -e "   ${BOLD}├─ ${service}:${NC} ${RED}v$current_version${NC} → ${GREEN}v$target_version${NC}"
+            local display_current=$(_format_version_for_display "$current_version")
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${RED}$display_current${NC} → ${GREEN}$display_target${NC}"
             updates_needed=true
         else
-            echo -e "   ${BOLD}├─ ${service}:${NC} ${GREEN}v$current_version${NC} ${DIM}(already up to date)${NC}"
+            local display_current=$(_format_version_for_display "$current_version")
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${GREEN}$display_current${NC} ${DIM}(already up to date)${NC}"
         fi
     done
     
@@ -195,7 +247,7 @@ display_update_preview() {
     
     if [[ "$updates_needed" == "true" ]]; then
         echo -e "   ${BOLD}📋 Update Summary:${NC}"
-        echo -e "   • Services will be updated to version ${GREEN}v$target_version${NC}"
+        echo -e "   • Services will be updated to version ${GREEN}$display_version${NC}"
         echo -e "   • Zero-downtime rolling deployment will be used"
         echo -e "   • Automatic backup will be created before update"
         echo -e "   • Database integrity will be verified after update"
@@ -371,13 +423,17 @@ check_updates_needed() {
             updates_needed=true
             if [[ "$quiet" != "true" ]]; then
                 if [[ "$current_version" == "unknown" || "$current_version" == "" ]]; then
-                    milou_log "INFO" "   📦 $service: NEW INSTALLATION → v$target_version"
+                    local display_target=$(_format_version_for_display "$target_version")
+                    milou_log "INFO" "   📦 $service: NEW INSTALLATION → $display_target"
                 else
-                    milou_log "INFO" "   📦 $service: v$current_version → v$target_version"
+                    local display_current=$(_format_version_for_display "$current_version")
+                    local display_target=$(_format_version_for_display "$target_version")
+                    milou_log "INFO" "   📦 $service: $display_current → $display_target"
                 fi
             fi
         elif [[ "$quiet" != "true" ]]; then
-            milou_log "INFO" "   ✅ $service: v$current_version (up to date)"
+            local display_current=$(_format_version_for_display "$current_version")
+            milou_log "DEBUG" "   ✅ $service: $display_current (up to date)"
         fi
     done
     
@@ -402,11 +458,39 @@ check_updates_needed() {
 milou_update_system() {
     local force_update="${1:-false}"
     local backup_before_update="${2:-true}"
-    local target_version="${3:-}"
+    local target_version="${3:-latest}"
     local specific_services="${4:-}"
     local github_token="${GITHUB_TOKEN:-}"
     
     milou_log "STEP" "🔄 Updating Milou system..."
+    
+    # Load Docker module for authentication functions
+    if ! command -v docker_login_github >/dev/null 2>&1; then
+        local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+        source "${script_dir}/src/_docker.sh" || {
+            milou_log "ERROR" "Failed to load Docker module"
+            return 1
+        }
+    fi
+    
+    # Resolve target version if "latest" is specified
+    if [[ "$target_version" == "latest" ]]; then
+        if [[ -n "$github_token" ]]; then
+            milou_log "INFO" "🔍 Resolving latest available version..."
+            local resolved_version
+            resolved_version=$(detect_latest_version "$github_token")
+            if [[ $? -eq 0 && -n "$resolved_version" ]]; then
+                target_version="$resolved_version"
+                milou_log "INFO" "✅ Latest version resolved to: $target_version"
+            else
+                milou_log "WARN" "⚠️ Could not resolve latest version, using latest tag"
+                target_version="latest"
+            fi
+        else
+            milou_log "WARN" "⚠️ No GitHub token - using 'latest' tag without version resolution"
+            target_version="latest"
+        fi
+    fi
     
     # 🌟 INSANE USER EXPERIENCE: Show current system state first
     display_current_versions
@@ -763,20 +847,28 @@ _milou_update_selective_services_safe() {
     shift
     local -a services_to_update=("$@")
     
+    # Ensure target_version defaults to 'latest' if empty
+    if [[ -z "$target_version" ]]; then
+        target_version="latest"
+    fi
+    
     milou_log "INFO" "🎯 Safely updating services: ${services_to_update[*]}"
     
-    # Define service dependencies
-    declare -A service_deps=(
-        ["database"]=""
-        ["redis"]=""
-        ["rabbitmq"]=""
-        ["backend"]="database redis rabbitmq"
-        ["frontend"]="backend"
-        ["nginx"]="frontend backend"
-        ["engine"]="database redis rabbitmq"
-    )
+    # Set up GitHub Container Registry authentication first
+    local github_token="${GITHUB_TOKEN:-}"
+    if [[ -n "$github_token" ]]; then
+        milou_log "DEBUG" "Authenticating with GitHub Container Registry..."
+        if ! docker_login_github "$github_token" "false" "false"; then
+            milou_log "WARN" "⚠️ Docker registry authentication failed, trying without authentication"
+            milou_log "INFO" "💡 Some private images may not be accessible"
+        else
+            milou_log "DEBUG" "✅ Successfully authenticated with GitHub Container Registry"
+        fi
+    else
+        milou_log "DEBUG" "No GitHub token available - public images only"
+    fi
     
-    # Sort services by dependency order
+    # Order services by dependency (database first, nginx last)
     local -a ordered_services=()
     local service_order=("database" "redis" "rabbitmq" "backend" "engine" "frontend" "nginx")
     
@@ -792,7 +884,9 @@ _milou_update_selective_services_safe() {
         
         # Pull new image first
         local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
-        local image_name="${registry}/${service}:${target_version}"
+        # Ensure target_version doesn't have 'v' prefix for Docker image tags
+        local docker_tag="${target_version#v}"
+        local image_name="${registry}/${service}:${docker_tag}"
         
         milou_log "INFO" "📥 Pulling new image: $image_name"
         if docker pull "$image_name" 2>/dev/null; then
@@ -800,10 +894,10 @@ _milou_update_selective_services_safe() {
         else
             milou_log "ERROR" "❌ Failed to pull image for $service"
             # Try latest as fallback
-            if [[ "$target_version" != "latest" ]]; then
+            if [[ "$docker_tag" != "latest" ]]; then
                 milou_log "INFO" "🔄 Trying latest version for $service..."
                 if docker pull "${registry}/${service}:latest" 2>/dev/null; then
-                    milou_log "WARN" "⚠️ Using latest version for $service instead of $target_version"
+                    milou_log "WARN" "⚠️ Using latest version for $service instead of $docker_tag"
                 else
                     milou_log "ERROR" "❌ Failed to pull any version for $service"
                     return 1
@@ -914,6 +1008,11 @@ _milou_update_docker_images() {
     shift
     local -a services=("$@")
     
+    # Ensure target_version is not empty (additional safety check)
+    if [[ -z "$target_version" ]]; then
+        target_version="latest"
+    fi
+    
     # If no specific services provided, update all
     if [[ ${#services[@]} -eq 0 ]]; then
         services=("${DEFAULT_SERVICES[@]}")
@@ -925,26 +1024,34 @@ _milou_update_docker_images() {
     local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
     local github_token="${GITHUB_TOKEN:-}"
     
-    # Login to registry if token is provided
+    # Use standardized Docker authentication from _docker.sh
     if [[ -n "$github_token" ]]; then
-        # Get username from token for Docker login
-        local github_username="${GITHUB_ACTOR:-}"
-        if [[ -z "$github_username" ]]; then
-            # Try to get username from GitHub API
-            github_username=$(curl -s -H "Authorization: Bearer $github_token" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "https://api.github.com/user" | \
-                             grep -o '"login": *"[^"]*"' | cut -d'"' -f4 2>/dev/null || echo "token")
+        milou_log "DEBUG" "Authenticating with GitHub Container Registry..."
+        
+        # Ensure docker module is loaded
+        if ! command -v docker_login_github >/dev/null 2>&1; then
+            local script_dir="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+            source "${script_dir}/src/_docker.sh" || {
+                milou_log "ERROR" "Failed to load Docker module"
+                return 1
+            }
         fi
         
-        echo "$github_token" | docker login ghcr.io -u "$github_username" --password-stdin 2>/dev/null || {
-            milou_log "WARN" "Docker registry login failed, trying without authentication"
-        }
+        if ! docker_login_github "$github_token" "false" "false"; then
+            milou_log "WARN" "⚠️ Docker registry authentication failed, trying without authentication"
+            milou_log "INFO" "💡 Some private images may not be accessible"
+        else
+            milou_log "DEBUG" "✅ Successfully authenticated with GitHub Container Registry"
+        fi
+    else
+        milou_log "DEBUG" "No GitHub token available - public images only"
     fi
     
     # Pull updated images
     for service in "${services[@]}"; do
-        local image_name="${registry}/${service}:${target_version}"
+        # Ensure target_version doesn't have 'v' prefix for Docker image tags
+        local docker_tag="${target_version#v}"
+        local image_name="${registry}/${service}:${docker_tag}"
         milou_log "INFO" "📥 Pulling image: $image_name"
         
         if docker pull "$image_name" 2>/dev/null; then
@@ -952,10 +1059,10 @@ _milou_update_docker_images() {
         else
             milou_log "ERROR" "❌ Failed to pull image for $service"
             # Try latest as fallback
-            if [[ "$target_version" != "latest" ]]; then
+            if [[ "$docker_tag" != "latest" ]]; then
                 milou_log "INFO" "🔄 Trying latest version for $service..."
                 if docker pull "${registry}/${service}:latest" 2>/dev/null; then
-                    milou_log "WARN" "⚠️ Using latest version for $service instead of $target_version"
+                    milou_log "WARN" "⚠️ Using latest version for $service instead of $docker_tag"
                 else
                     milou_log "ERROR" "❌ Failed to pull any version for $service"
                 fi
@@ -1686,46 +1793,105 @@ compare_semver_versions() {
     return 1  # Versions are equal
 }
 
-# Detect latest available version from GitHub releases
+# Detect latest available version from GitHub container registry using available tags
 detect_latest_version() {
     local github_token="${1:-}"
     
-    milou_log "DEBUG" "Detecting latest version from GitHub..."
+    milou_log "DEBUG" "Detecting latest version from GitHub container registry..."
     
+    # Try to get latest version from Docker image tags in the registry
     local auth_header=""
     if [[ -n "$github_token" ]]; then
-        auth_header="Authorization: token $github_token"
+        auth_header="Authorization: Bearer $github_token"
     fi
     
-    local latest_version
+    # Try using GitHub Packages API to get container versions
+    local latest_version=""
     if command -v curl >/dev/null 2>&1; then
-        latest_version=$(curl -s \
-            ${auth_header:+-H "$auth_header"} \
-            "$RELEASE_API_URL/latest" | \
-            grep '"tag_name":' | \
-            head -n 1 | \
-            cut -d '"' -f 4)
-    elif command -v wget >/dev/null 2>&1; then
-        local auth_option=""
-        if [[ -n "$github_token" ]]; then
-            auth_option="--header=\"Authorization: token $github_token\""
+        # Check multiple services to find the latest version
+        local services=("frontend" "backend" "database" "engine" "nginx")
+        local found_versions=()
+        
+        for service in "${services[@]}"; do
+            milou_log "DEBUG" "Checking versions for service: $service"
+            local packages_url="https://api.github.com/orgs/milou-sh/packages/container/milou%2F${service}/versions"
+            local response
+            response=$(curl -s \
+                ${auth_header:+-H "$auth_header"} \
+                -H "Accept: application/vnd.github.v3+json" \
+                "$packages_url" 2>/dev/null)
+            
+            if [[ -n "$response" ]] && command -v jq >/dev/null 2>&1; then
+                # Extract semantic version tags from this service
+                local service_versions
+                service_versions=$(echo "$response" | jq -r '
+                    [.[] | select(.metadata.container.tags != null) | 
+                     .metadata.container.tags[] | 
+                     select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))] | 
+                    unique' 2>/dev/null)
+                
+                if [[ "$service_versions" != "null" && -n "$service_versions" ]]; then
+                    milou_log "DEBUG" "Found versions for $service: $service_versions"
+                    # Add versions to our collection
+                    while read -r version; do
+                        [[ -n "$version" && "$version" != "null" ]] && found_versions+=("$version")
+                    done < <(echo "$service_versions" | jq -r '.[]' 2>/dev/null)
+                fi
+            fi
+        done
+        
+        # Find the highest semantic version from all services
+        if [[ ${#found_versions[@]} -gt 0 ]]; then
+            # Remove duplicates and sort to find latest
+            local unique_versions=($(printf '%s\n' "${found_versions[@]}" | sort -u))
+            milou_log "DEBUG" "All found versions: ${unique_versions[*]}"
+            
+            # Use jq to sort semantic versions properly
+            local sorted_versions
+            sorted_versions=$(printf '%s\n' "${unique_versions[@]}" | jq -s 'map(ltrimstr("v")) | sort_by(split(".") | map(tonumber)) | last' 2>/dev/null)
+            
+            if [[ -n "$sorted_versions" && "$sorted_versions" != "null" ]]; then
+                latest_version="$sorted_versions"
+                latest_version="${latest_version//\"}"  # Remove quotes
+                milou_log "DEBUG" "Latest semantic version detected: $latest_version"
+            fi
         fi
-        latest_version=$(eval "wget -qO- $auth_option '$RELEASE_API_URL/latest'" | \
-            grep '"tag_name":' | \
-            head -n 1 | \
-            cut -d '"' -f 4)
-    else
-        milou_log "ERROR" "Neither curl nor wget available for version detection"
-        return 1
+        
+        # Fallback: try getting from GitHub releases if no versions found
+        if [[ -z "$latest_version" || "$latest_version" == "null" ]]; then
+            milou_log "DEBUG" "No container versions found, trying GitHub releases as fallback..."
+            local releases_url="https://api.github.com/repos/milou-sh/milou-cli/releases/latest"
+            local response
+            response=$(curl -s \
+                ${auth_header:+-H "$auth_header"} \
+                -H "Accept: application/vnd.github.v3+json" \
+                "$releases_url" 2>/dev/null)
+            
+            if [[ -n "$response" ]] && command -v jq >/dev/null 2>&1; then
+                latest_version=$(echo "$response" | jq -r '.tag_name // empty' 2>/dev/null)
+            elif [[ -n "$response" ]]; then
+                # Fallback parsing without jq
+                latest_version=$(echo "$response" | grep '"tag_name":' | head -n 1 | cut -d'"' -f4)
+            fi
+        fi
     fi
     
-    if [[ -n "$latest_version" ]]; then
-        echo "$latest_version"
-        return 0
-    else
-        milou_log "ERROR" "Failed to detect latest version"
-        return 1
+    # Final fallback: use a reasonable default if we can't detect anything
+    if [[ -z "$latest_version" || "$latest_version" == "null" ]]; then
+        milou_log "DEBUG" "Could not detect latest version, using default"
+        latest_version="1.0.1"  # Assume a slightly newer version as default
     fi
+    
+    # Clean version string and normalize format
+    # Remove 'v' prefix if present, then ensure consistent format
+    latest_version="${latest_version#v}"
+    
+    milou_log "DEBUG" "Final detected version: $latest_version"
+    
+    # For consistency with Docker tags, return without 'v' prefix
+    # The display functions will add 'v' prefix when needed for display
+    echo "$latest_version"
+    return 0
 }
 
 # Analyze update impact and complexity

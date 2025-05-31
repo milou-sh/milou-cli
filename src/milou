@@ -363,7 +363,32 @@ function handle_smart_setup() {
             "resume")
                 echo -e "${YELLOW}▶️  Resuming Services${NC}"
                 echo "Starting your existing Milou installation."
-                handle_docker_command "start" "$@"
+                # Filter out setup-specific arguments before passing to Docker
+                local docker_args=()
+                local skip_next=false
+                for arg in "$@"; do
+                    if [[ "$skip_next" == "true" ]]; then
+                        skip_next=false
+                        continue
+                    fi
+                    
+                    case "$arg" in
+                        --token)
+                            # Skip this argument and the next one (the token value)
+                            skip_next=true
+                            ;;
+                        --token=*)
+                            # Skip this argument (token with value)
+                            ;;
+                        --preserve-creds|--new-creds|--force-new-creds|--clean|--automated|--interactive|--smart|--skip-validation|--dev|--development)
+                            # Skip setup-specific arguments
+                            ;;
+                        *)
+                            docker_args+=("$arg")
+                            ;;
+                    esac
+                done
+                handle_docker_command "start" "${docker_args[@]}"
                 ;;
             "reconfigure")
                 echo -e "${BLUE}🔧 Reconfiguring System${NC}"
@@ -878,6 +903,17 @@ function main() {
     # Dispatch commands with state awareness
     case "$command" in
         setup)
+            # Check for help flag first, before state detection
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_setup.sh" || { echo "Setup module not available"; exit 1; }
+                if command -v show_setup_help >/dev/null 2>&1; then
+                    show_setup_help
+                    exit 0
+                else
+                    echo "Setup help not available"
+                    exit 1
+                fi
+            fi
             handle_smart_setup "$@"
             ;;
         status)

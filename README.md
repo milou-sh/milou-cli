@@ -8,11 +8,6 @@
 # 1. Install
 curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 
-# 2. Setup (3 questions max)
-milou setup
-
-# 3. Done! Open your browser
-open https://localhost
 ```
 
 That's it! 🎉
@@ -21,8 +16,8 @@ That's it! 🎉
 
 - **Web application** running on HTTPS
 - **Database** with automatic backups
-- **SSL certificates** (self-signed for development)
-- **Simple management** with 6 core commands
+- **SSL certificates** 
+- **Simple management** 
 
 ## 🔧 Commands
 

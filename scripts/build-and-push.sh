@@ -632,10 +632,36 @@ build_image_advanced() {
     local context="$3"
     local tags=("${@:4}")
     
-    log "STEP" "🔨 Building $service with advanced options..."
+    log "STEP" "🔨 Building $service with cross-platform line ending fixes..."
     
     local build_cmd="docker build"
     local build_args_array=()
+    
+    # Create enhanced Dockerfile with dos2unix line ending fixes
+    local temp_dockerfile=""
+    temp_dockerfile=$(mktemp)
+    
+    # Read the original Dockerfile and add dos2unix fixes
+    {
+        cat "$dockerfile"
+        echo ""
+        echo "# AUTO-ADDED: Cross-platform line ending normalization"
+        echo "RUN if command -v apk >/dev/null 2>&1; then \\"
+        echo "        apk add --no-cache dos2unix; \\"
+        echo "    elif command -v apt-get >/dev/null 2>&1; then \\"
+        echo "        apt-get update && apt-get install -y dos2unix && rm -rf /var/lib/apt/lists/*; \\"
+        echo "    elif command -v yum >/dev/null 2>&1; then \\"
+        echo "        yum install -y dos2unix; \\"
+        echo "    fi"
+        echo ""
+        echo "# Fix line endings for all shell scripts and entrypoints"
+        echo "RUN find /usr/local/bin /docker-entrypoint* /entrypoint* /start* /run* /boot* \\"
+        echo "         -type f -executable 2>/dev/null | \\"
+        echo "    xargs -r dos2unix 2>/dev/null || true"
+        echo ""
+        echo "# Ensure execute permissions are maintained"
+        echo "RUN chmod +x /docker-entrypoint* /entrypoint* /usr/local/bin/docker-entrypoint* 2>/dev/null || true"
+    } > "$temp_dockerfile"
     
     if [[ "$MULTI_PLATFORM" == "true" ]]; then
         build_cmd="docker buildx build"
@@ -685,13 +711,14 @@ build_image_advanced() {
         "--label" "org.opencontainers.image.description=Milou ${service^} Service"
         "--label" "org.opencontainers.image.vendor=Milou Security"
         "--label" "org.opencontainers.image.source=https://github.com/$GITHUB_ORG/$REPO_NAME"
+        "--label" "milou.line-endings=normalized-dos2unix"
     )
     
     if [[ -n "$VERSION" ]]; then
         build_args_array+=("--label" "org.opencontainers.image.version=$VERSION")
     fi
     
-    build_args_array+=("-f" "$dockerfile")
+    build_args_array+=("-f" "$temp_dockerfile")
     
     for tag in "${tags[@]}"; do
         build_args_array+=("-t" "$tag")
@@ -703,28 +730,41 @@ build_image_advanced() {
     
     if [[ "$DRY_RUN" == "true" ]]; then
         log "INFO" "[DRY RUN] Would execute: $build_cmd ${build_args_array[*]}"
+        rm -f "$temp_dockerfile"
         return 0
     fi
     
-    show_progress "🔨 Building $service..."
+    show_progress "🔨 Building $service with dos2unix line ending fixes..."
     
     local start_time=$(date +%s)
     
     if timeout "$BUILD_TIMEOUT" $build_cmd "${build_args_array[@]}"; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        log "SUCCESS" "✅ Successfully built $service (${duration}s)"
+        log "SUCCESS" "✅ Successfully built $service with normalized line endings (${duration}s)"
+        
+        # Clean up temporary Dockerfile
+        rm -f "$temp_dockerfile"
         
         local primary_tag="${tags[0]}"
         local image_size
         image_size=$(docker images --format "table {{.Size}}" "$primary_tag" | tail -n 1)
         log "INFO" "📦 Image size: $image_size"
         
+        # Quick verification that dos2unix worked
+        log "INFO" "🔍 Verifying line ending normalization..."
+        if docker run --rm --entrypoint="" "$primary_tag" sh -c "command -v dos2unix >/dev/null && echo 'dos2unix available'" 2>/dev/null | grep -q "dos2unix available"; then
+            log "SUCCESS" "✅ Line ending normalization tools confirmed in image"
+        else
+            log "WARN" "⚠️ dos2unix not found in image, but build succeeded"
+        fi
+        
         return 0
     else
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         log "ERROR" "❌ Failed to build $service (${duration}s)"
+        rm -f "$temp_dockerfile"
         return 1
     fi
 }

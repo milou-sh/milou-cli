@@ -116,7 +116,7 @@ config_generate() {
     fi
     
     # Generate the actual configuration
-    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "true" "$credentials_data" "$quiet"; then
+    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "false" "$credentials_data" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Configuration written successfully"
         
         # ENTERPRISE VALIDATION: Verify no credentials were lost
@@ -211,6 +211,75 @@ config_find_available_port() {
     return 1
 }
 
+# Detect latest stable version from registry (for better version tracking)
+config_detect_latest_stable_version() {
+    local github_token="${1:-}"
+    local quiet="${2:-false}"
+    local registry_org="${3:-milou-sh}"
+    local registry_repo="${4:-milou}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting to detect latest stable version from registry"
+    
+    # If no GitHub token, fall back to default
+    if [[ -z "$github_token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token provided, using default version"
+        echo "v1.0.0"
+        return 0
+    fi
+    
+    # Try to get latest release from GitHub API
+    local api_url="https://api.github.com/repos/$registry_org/$registry_repo/releases/latest"
+    local response=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        response=$(timeout 10 curl -s --fail --max-time 5 \
+                       -H "Authorization: Bearer $github_token" \
+                       -H "Accept: application/vnd.github.v3+json" \
+                       "$api_url" 2>/dev/null || echo '{"error": "api_failure"}')
+        
+        if [[ "$response" != '{"error": "api_failure"}' ]] && echo "$response" | jq -e '.tag_name' >/dev/null 2>&1; then
+            local latest_version
+            latest_version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null)
+            if [[ -n "$latest_version" && "$latest_version" != "null" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detected latest stable version: $latest_version"
+                echo "$latest_version"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Fallback to checking package versions (alternative approach)
+    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        local package_url="https://api.github.com/orgs/$registry_org/packages/container/$registry_repo%2Fbackend/versions"
+        response=$(timeout 10 curl -s --fail --max-time 5 \
+                       -H "Authorization: Bearer $github_token" \
+                       -H "Accept: application/vnd.github.v3+json" \
+                       "$package_url" 2>/dev/null || echo '[]')
+        
+        if echo "$response" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            # Find the highest semantic version tag
+            local latest_semantic_version
+            latest_semantic_version=$(echo "$response" | jq -r '
+                [.[] | select(.metadata.container.tags != null) | 
+                 .metadata.container.tags[] | 
+                 select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))] | 
+                sort_by(split(".") | map(tonumber)) | 
+                last' 2>/dev/null)
+            
+            if [[ -n "$latest_semantic_version" && "$latest_semantic_version" != "null" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detected latest semantic version from packages: $latest_semantic_version"
+                echo "$latest_semantic_version"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Final fallback to default stable version
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not detect version from registry, using default stable version"
+    echo "v1.0.0"
+    return 0
+}
+
 # Detect and resolve port conflicts automatically
 config_resolve_port_conflicts() {
     local quiet="${1:-false}"
@@ -275,7 +344,7 @@ config_create_env_file() {
     local domain="$1"
     local admin_email="$2"
     local ssl_mode="$3"
-    local use_latest_images="${4:-true}"
+    local use_latest_images="${4:-false}"  # Changed default to false for better version tracking
     local credentials="$5"
     local quiet="${6:-false}"
     
@@ -343,7 +412,7 @@ config_create_env_file() {
     # Determine Docker image tags
     local image_tag="latest"
     if [[ "$use_latest_images" != "true" ]]; then
-        image_tag="v1.0.0"  # Default stable version
+        image_tag=$(config_detect_latest_stable_version "$MILOU_GITHUB_TOKEN" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
     fi
     
     # Create comprehensive configuration file

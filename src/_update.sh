@@ -440,7 +440,7 @@ milou_update_system() {
     # Get user confirmation for the update
     if [[ "$force_update" != "true" ]] && tty -s; then
         echo
-        if ! confirm_action "Proceed with the update?"; then
+        if ! confirm "Proceed with the update?"; then
             milou_log "INFO" "⏹️  Update cancelled by user"
             return 0
         fi
@@ -612,6 +612,12 @@ _milou_update_perform_update() {
         fi
     fi
     
+    # Update .env file with specific version tags for better version tracking
+    if [[ $update_result -eq 0 && -n "$target_version" && "$target_version" != "latest" ]]; then
+        milou_log "INFO" "📝 Updating configuration with specific version tags..."
+        _update_env_version_tags "$target_version" "${services_to_update[@]}"
+    fi
+    
     # Clean up temporary files
     rm -f "$env_backup" "$pre_update_status"
     
@@ -622,6 +628,67 @@ _milou_update_perform_update() {
         milou_log "ERROR" "❌ Update failed"
         return 1
     fi
+}
+
+# Update .env file with specific version tags for better version tracking
+_update_env_version_tags() {
+    local target_version="$1"
+    shift
+    local -a services_to_update=("$@")
+    
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        milou_log "WARN" "⚠️ Environment file not found, skipping version tag update"
+        return 1
+    fi
+    
+    # Clean version (remove 'v' prefix if present)
+    local clean_version="${target_version#v}"
+    if [[ ! "$clean_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        clean_version="v${clean_version}"
+    else
+        clean_version="v${clean_version}"
+    fi
+    
+    milou_log "DEBUG" "Updating .env file with version tags: $clean_version"
+    
+    # Create backup before modifying
+    cp "$env_file" "${env_file}.pre_version_update.$(date +%s)"
+    
+    # Update version tags for each service
+    for service in "${services_to_update[@]}"; do
+        local tag_var=""
+        case "$service" in
+            "database") tag_var="MILOU_DATABASE_TAG" ;;
+            "backend") tag_var="MILOU_BACKEND_TAG" ;;
+            "frontend") tag_var="MILOU_FRONTEND_TAG" ;;
+            "engine") tag_var="MILOU_ENGINE_TAG" ;;
+            "nginx") tag_var="MILOU_NGINX_TAG" ;;
+            *) continue ;;  # Skip unknown services
+        esac
+        
+        if [[ -n "$tag_var" ]]; then
+            if grep -q "^${tag_var}=" "$env_file"; then
+                # Update existing tag
+                sed -i "s/^${tag_var}=.*/${tag_var}=${clean_version}/" "$env_file"
+                milou_log "DEBUG" "Updated ${tag_var}=${clean_version}"
+            else
+                # Add new tag
+                echo "${tag_var}=${clean_version}" >> "$env_file"
+                milou_log "DEBUG" "Added ${tag_var}=${clean_version}"
+            fi
+        fi
+    done
+    
+    # Also update the system version
+    if grep -q "^MILOU_VERSION=" "$env_file"; then
+        sed -i "s/^MILOU_VERSION=.*/MILOU_VERSION=${clean_version}/" "$env_file"
+    else
+        echo "MILOU_VERSION=${clean_version}" >> "$env_file"
+    fi
+    
+    milou_log "SUCCESS" "✅ Version tags updated in configuration"
+    return 0
 }
 
 # Selective service update with health monitoring

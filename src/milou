@@ -142,6 +142,8 @@ function show_contextual_help() {
             echo
             echo -e "${BOLD}System Management:${NC}"
             echo "  status                          Show detailed system status"
+            echo "  version                         Show comprehensive version info"
+            echo "  update-status                   Check for available updates"
             echo "  logs [service]                  View service logs"
             echo "  backup [type]                   Create backup"
             echo "  update                          Check for and install updates"
@@ -165,6 +167,8 @@ function show_contextual_help() {
             echo
             echo -e "${BOLD}Maintenance:${NC}"
             echo "  status                          Diagnose system issues"
+            echo "  version                         Show system version info"
+            echo "  update-status                   Check for available updates"
             echo "  update                          Update before starting"
             echo "  backup                          Backup data before changes"
             echo
@@ -186,6 +190,7 @@ function show_contextual_help() {
             echo
             echo -e "${BOLD}Diagnosis:${NC}"
             echo "  status                          Show detailed system status"
+            echo "  version                         Show system version info"
             echo "  logs                           Check error logs"
             ;;
         *)
@@ -195,6 +200,8 @@ function show_contextual_help() {
             echo -e "${BOLD}Main Commands:${NC}"
             echo "  setup                           Install or configure Milou"
             echo "  status                          Show system status"
+            echo "  version                         Show comprehensive version info"
+            echo "  update-status                   Check for available updates"
             echo "  start/stop/restart              Control services"
             echo "  update                          Update system"
             echo "  backup/restore                  Data management"
@@ -223,17 +230,24 @@ function show_contextual_help() {
 }
 
 function show_version() {
-    echo "Milou CLI v$VERSION"
-    if [[ "${VERBOSE:-false}" == "true" ]]; then
-        echo "Script Directory: $SCRIPT_DIR"
-        echo "Architecture: State-based with unified validation"
-        echo "Environment: $(uname -a)"
-        
-        # Show installation state if available
-        if command -v get_current_state >/dev/null 2>&1; then
-            local state
-            state=$(get_current_state "true")
-            echo "Installation State: $state"
+    # If update module is available, show comprehensive version info
+    if command -v handle_version >/dev/null 2>&1; then
+        handle_version
+    else
+        # Fallback to basic version display
+        echo "Milou CLI v$VERSION"
+        echo "Professional Docker Management Tool"
+        if [[ "${VERBOSE:-false}" == "true" ]]; then
+            echo "Script Directory: $SCRIPT_DIR"
+            echo "Architecture: State-based with unified validation"
+            echo "Environment: $(uname -a)"
+            
+            # Show installation state if available
+            if command -v get_current_state >/dev/null 2>&1; then
+                local state
+                state=$(get_current_state "true")
+                echo "Installation State: $state"
+            fi
         fi
     fi
 }
@@ -790,7 +804,7 @@ function main() {
     # Check if we have any commands
     for arg in "$@"; do
         case $arg in
-            setup|status|start|stop|restart|logs|backup|restore|update|self-update|admin|config|user|ssl|health|shell|help)
+            setup|status|start|stop|restart|logs|backup|restore|update|self-update|admin|config|user|ssl|health|shell|help|version|update-status|recovery)
                 has_command=true
                 break
                 ;;
@@ -868,6 +882,21 @@ function main() {
             ;;
         status)
             handle_smart_status "$@"
+            ;;
+        version)
+            # Load update module for comprehensive version info
+            source "${SRC_DIR}/_update.sh" 2>/dev/null || true
+            show_version
+            ;;
+        update-status)
+            # Show detailed update information
+            source "${SRC_DIR}/_update.sh" || { echo "Update module not available"; exit 1; }
+            if command -v handle_update_status >/dev/null 2>&1; then
+                handle_update_status "$@"
+            else
+                echo "Update status function not available"
+                exit 1
+            fi
             ;;
         start)
             handle_docker_command "start" "$@"

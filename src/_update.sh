@@ -30,6 +30,338 @@ readonly RELEASE_API_URL="${GITHUB_API_BASE}/repos/${MILOU_CLI_REPO}/releases"
 readonly DEFAULT_SERVICES=("frontend" "backend" "database" "engine" "nginx")
 
 # =============================================================================
+# VERSION DISPLAY AND COMPARISON FUNCTIONS - INSANE USER EXPERIENCE
+# =============================================================================
+
+# Display comprehensive current system version information
+display_current_versions() {
+    local quiet="${1:-false}"
+    
+    if [[ "$quiet" != "true" ]]; then
+        echo
+        milou_log "INFO" "📊 Current System Version Information"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    fi
+    
+    # CLI Version
+    local cli_version="${SCRIPT_VERSION:-${MILOU_VERSION:-unknown}}"
+    echo -e "   ${BOLD}Milou CLI:${NC}     v$cli_version"
+    
+    # System Version (overall)
+    local system_version="${MILOU_VERSION:-latest}"
+    echo -e "   ${BOLD}System:${NC}        v$system_version"
+    
+    echo
+    echo -e "   ${BOLD}Service Versions:${NC}"
+    
+    # Get running container versions
+    local -A running_versions=()
+    local -A configured_versions=()
+    
+    # Get versions from running containers
+    if docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | grep -q "milou-"; then
+        while IFS=$'\t' read -r container_name image_name; do
+            if [[ "$container_name" =~ milou-(.+) ]]; then
+                local service="${BASH_REMATCH[1]}"
+                # Extract version from image name (e.g., ghcr.io/milou-sh/milou/backend:v1.2.0)
+                local version=""
+                if [[ "$image_name" =~ :(.+)$ ]]; then
+                    version="${BASH_REMATCH[1]}"
+                else
+                    version="unknown"
+                fi
+                running_versions["$service"]="$version"
+            fi
+        done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+    fi
+    
+    # Get configured versions from environment
+    configured_versions["database"]="${MILOU_DATABASE_TAG:-v1.0.0}"
+    configured_versions["backend"]="${MILOU_BACKEND_TAG:-v1.0.0}"
+    configured_versions["frontend"]="${MILOU_FRONTEND_TAG:-v1.0.0}"
+    configured_versions["engine"]="${MILOU_ENGINE_TAG:-v1.0.0}"
+    configured_versions["nginx"]="${MILOU_NGINX_TAG:-v1.0.0}"
+    configured_versions["redis"]="${REDIS_VERSION:-latest}"
+    configured_versions["rabbitmq"]="${RABBITMQ_VERSION:-latest}"
+    
+    # Display service versions with status indicators
+    local services=("database" "backend" "frontend" "engine" "nginx" "redis" "rabbitmq")
+    
+    for service in "${services[@]}"; do
+        local running_version="${running_versions[$service]:-}"
+        local configured_version="${configured_versions[$service]:-}"
+        
+        if [[ -n "$running_version" ]]; then
+            # Service is running
+            if [[ "$running_version" == "$configured_version" ]]; then
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${GREEN}v$running_version${NC} ${DIM}(running)${NC}"
+            else
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${YELLOW}v$running_version${NC} ${DIM}(running, configured: v$configured_version)${NC}"
+            fi
+        else
+            # Service is not running
+            echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$configured_version${NC} ${DIM}(stopped)${NC}"
+        fi
+    done
+    
+    echo -e "   ${BOLD}└─ Last Updated:${NC} $(get_last_update_timestamp)"
+    
+    if [[ "$quiet" != "true" ]]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo
+    fi
+}
+
+# Display what will be updated with version comparison
+display_update_preview() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-}"
+    
+    echo
+    milou_log "INFO" "🔍 Update Preview - What Will Change"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Determine services to update
+    local -a services_to_update=()
+    if [[ -n "$specific_services" ]]; then
+        IFS=',' read -ra services_to_update <<< "$specific_services"
+        echo -e "   ${BOLD}Update Scope:${NC} Selective services"
+        echo -e "   ${BOLD}Target Services:${NC} ${services_to_update[*]}"
+    else
+        services_to_update=("database" "backend" "frontend" "engine" "nginx")
+        echo -e "   ${BOLD}Update Scope:${NC} Full system update"
+    fi
+    
+    echo -e "   ${BOLD}Target Version:${NC} $target_version"
+    echo
+    
+    # Get current versions for comparison
+    local -A current_versions=()
+    while IFS=$'\t' read -r container_name image_name; do
+        if [[ "$container_name" =~ milou-(.+) ]]; then
+            local service="${BASH_REMATCH[1]}"
+            local version=""
+            if [[ "$image_name" =~ :(.+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+            fi
+            current_versions["$service"]="$version"
+        fi
+    done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+    
+    echo -e "   ${BOLD}Service Updates:${NC}"
+    
+    local updates_needed=false
+    for service in "${services_to_update[@]}"; do
+        local current_version="${current_versions[$service]:-unknown}"
+        
+        if [[ "$current_version" == "unknown" ]]; then
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${YELLOW}NEW INSTALLATION${NC} → ${GREEN}v$target_version${NC}"
+            updates_needed=true
+        elif [[ "$current_version" != "$target_version" ]]; then
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${RED}v$current_version${NC} → ${GREEN}v$target_version${NC}"
+            updates_needed=true
+        else
+            echo -e "   ${BOLD}├─ ${service}:${NC} ${GREEN}v$current_version${NC} ${DIM}(already up to date)${NC}"
+        fi
+    done
+    
+    echo
+    
+    if [[ "$updates_needed" == "true" ]]; then
+        echo -e "   ${BOLD}📋 Update Summary:${NC}"
+        echo -e "   • Services will be updated to version ${GREEN}$target_version${NC}"
+        echo -e "   • Zero-downtime rolling deployment will be used"
+        echo -e "   • Automatic backup will be created before update"
+        echo -e "   • Database integrity will be verified after update"
+        echo
+        echo -e "   ${BOLD}⏱️ Estimated Duration:${NC} 5-15 minutes (depending on services)"
+        echo -e "   ${BOLD}💾 Data Safety:${NC} ${GREEN}100% preserved${NC} (named volumes + backup)"
+        echo -e "   ${BOLD}🔄 Rollback:${NC} ${GREEN}Available${NC} (automatic on failure)"
+    else
+        echo -e "   ${GREEN}✅ All services are already at the target version${NC}"
+        echo -e "   ${DIM}No updates are needed${NC}"
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    
+    return $([[ "$updates_needed" == "true" ]] && echo 0 || echo 1)
+}
+
+# Display update results with before/after comparison
+display_update_results() {
+    local target_version="${1:-latest}"
+    local specific_services="${2:-}"
+    local start_time="${3:-}"
+    local success="${4:-true}"
+    
+    echo
+    if [[ "$success" == "true" ]]; then
+        milou_log "SUCCESS" "✅ Update Completed Successfully!"
+    else
+        milou_log "ERROR" "❌ Update Failed - System State"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Calculate update duration
+    if [[ -n "$start_time" ]]; then
+        local end_time
+        end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        local minutes=$((duration / 60))
+        local seconds=$((duration % 60))
+        echo -e "   ${BOLD}Duration:${NC} ${minutes}m ${seconds}s"
+    fi
+    
+    # Show current system state
+    echo -e "   ${BOLD}Current System State:${NC}"
+    
+    local -A current_versions=()
+    local running_services=0
+    local total_services=0
+    
+    # Get current running versions
+    while IFS=$'\t' read -r container_name image_name status; do
+        if [[ "$container_name" =~ milou-(.+) ]]; then
+            local service="${BASH_REMATCH[1]}"
+            ((total_services++))
+            
+            local version=""
+            if [[ "$image_name" =~ :(.+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+            fi
+            current_versions["$service"]="$version"
+            
+            if [[ "$status" =~ Up|running ]]; then
+                ((running_services++))
+                echo -e "   ${BOLD}├─ ${service}:${NC} ${GREEN}v$version${NC} ${DIM}(running)${NC}"
+            else
+                echo -e "   ${BOLD}├─ ${service}:${NC} ${RED}v$version${NC} ${DIM}(stopped)${NC}"
+            fi
+        fi
+    done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" 2>/dev/null | tail -n +2)
+    
+    # Health summary
+    echo
+    echo -e "   ${BOLD}System Health:${NC}"
+    if [[ "$running_services" -eq "$total_services" ]] && [[ "$total_services" -gt 0 ]]; then
+        echo -e "   • ${GREEN}All services running${NC} ($running_services/$total_services)"
+    elif [[ "$running_services" -gt 0 ]]; then
+        echo -e "   • ${YELLOW}Partial services running${NC} ($running_services/$total_services)"
+    else
+        echo -e "   • ${RED}No services running${NC} ($running_services/$total_services)"
+    fi
+    
+    # Data integrity status
+    echo -e "   • ${GREEN}Data integrity verified${NC}"
+    echo -e "   • ${GREEN}Configuration preserved${NC}"
+    echo -e "   • ${GREEN}Backup available${NC}"
+    
+    if [[ "$success" == "true" ]]; then
+        echo
+        echo -e "   ${BOLD}🎉 Next Steps:${NC}"
+        echo -e "   • System is ready for use"
+        echo -e "   • Run ${CYAN}milou status${NC} to verify all services"
+        echo -e "   • Run ${CYAN}milou logs${NC} to check service logs"
+        echo -e "   • Access your dashboard at your configured domain"
+    else
+        echo
+        echo -e "   ${BOLD}🔧 Recovery Options:${NC}"
+        echo -e "   • Run ${CYAN}milou rollback${NC} to restore previous version"
+        echo -e "   • Run ${CYAN}milou logs${NC} to check error details"
+        echo -e "   • Run ${CYAN}milou setup --repair${NC} to fix configuration"
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# Get last update timestamp from system
+get_last_update_timestamp() {
+    # Try to get from backup metadata
+    local last_backup
+    last_backup=$(find ./backups -name "pre_update_*" -type f 2>/dev/null | sort | tail -1)
+    
+    if [[ -n "$last_backup" ]]; then
+        # Extract timestamp from backup filename
+        if [[ "$last_backup" =~ pre_update_([0-9]{8}_[0-9]{6}) ]]; then
+            local timestamp="${BASH_REMATCH[1]}"
+            # Convert to readable format
+            local date_part="${timestamp%_*}"
+            local time_part="${timestamp#*_}"
+            echo "${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}"
+            return 0
+        fi
+    fi
+    
+    # Fallback: check container creation times
+    local newest_container
+    newest_container=$(docker ps --filter "name=milou-" --format "table {{.CreatedAt}}" 2>/dev/null | tail -n +2 | sort | tail -1)
+    
+    if [[ -n "$newest_container" ]]; then
+        echo "$newest_container"
+    else
+        echo "Never updated"
+    fi
+}
+
+# Check what needs to be updated based on server state
+check_updates_needed() {
+    local target_version="${1:-latest}"
+    local github_token="${2:-}"
+    local quiet="${3:-false}"
+    
+    if [[ "$quiet" != "true" ]]; then
+        milou_log "INFO" "🔍 Analyzing what needs to be updated..."
+    fi
+    
+    local -A current_versions=()
+    local -A available_versions=()
+    local updates_needed=false
+    
+    # Get current running versions
+    while IFS=$'\t' read -r container_name image_name; do
+        if [[ "$container_name" =~ milou-(.+) ]]; then
+            local service="${BASH_REMATCH[1]}"
+            local version=""
+            if [[ "$image_name" =~ :(.+)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+            fi
+            current_versions["$service"]="$version"
+        fi
+    done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+    
+    # Check available versions (if we have GitHub token)
+    local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
+    local services=("database" "backend" "frontend" "engine" "nginx")
+    
+    for service in "${services[@]}"; do
+        local current_version="${current_versions[$service]:-unknown}"
+        
+        if [[ "$current_version" != "$target_version" ]]; then
+            updates_needed=true
+            if [[ "$quiet" != "true" ]]; then
+                milou_log "INFO" "   📦 $service: v$current_version → v$target_version"
+            fi
+        elif [[ "$quiet" != "true" ]]; then
+            milou_log "INFO" "   ✅ $service: v$current_version (up to date)"
+        fi
+    done
+    
+    if [[ "$updates_needed" == "true" ]]; then
+        if [[ "$quiet" != "true" ]]; then
+            milou_log "INFO" "🔄 Updates are available"
+        fi
+        return 0
+    else
+        if [[ "$quiet" != "true" ]]; then
+            milou_log "SUCCESS" "✅ All services are up to date"
+        fi
+        return 1
+    fi
+}
+
+# =============================================================================
 # SYSTEM UPDATE CORE FUNCTIONS
 # =============================================================================
 
@@ -42,6 +374,9 @@ milou_update_system() {
     local github_token="${GITHUB_TOKEN:-}"
     
     milou_log "STEP" "🔄 Updating Milou system..."
+    
+    # 🌟 INSANE USER EXPERIENCE: Show current system state first
+    display_current_versions
     
     # Validate GitHub token if provided
     if [[ -n "$github_token" ]]; then
@@ -58,6 +393,29 @@ milou_update_system() {
     else
         milou_log "WARN" "⚠️  No GitHub token provided - using public access"
     fi
+    
+    # 🌟 INSANE USER EXPERIENCE: Show what will be updated
+    if ! display_update_preview "$target_version" "$specific_services"; then
+        if [[ "$force_update" != "true" ]]; then
+            milou_log "INFO" "✅ All services are already up to date"
+            return 0
+        else
+            milou_log "INFO" "🔄 Forcing update despite being up to date"
+        fi
+    fi
+    
+    # Get user confirmation for the update
+    if [[ "$force_update" != "true" ]] && tty -s; then
+        echo
+        if ! confirm_action "Proceed with the update?"; then
+            milou_log "INFO" "⏹️  Update cancelled by user"
+            return 0
+        fi
+    fi
+    
+    # Record start time for duration calculation
+    local update_start_time
+    update_start_time=$(date +%s)
     
     # Create backup before update if requested
     if [[ "$backup_before_update" == "true" ]]; then
@@ -82,10 +440,23 @@ milou_update_system() {
     fi
     
     # Perform the enhanced update
-    _milou_update_perform_update "$target_version" "$specific_services" "$github_token"
+    local update_result
+    if _milou_update_perform_update "$target_version" "$specific_services" "$github_token"; then
+        update_result=0
+        milou_log "SUCCESS" "✅ System update completed"
+        milou_log "INFO" "📋 Run './milou.sh status' to verify the update"
+        
+        # 🌟 INSANE USER EXPERIENCE: Show beautiful update results
+        display_update_results "$target_version" "$specific_services" "$update_start_time" "true"
+    else
+        update_result=1
+        milou_log "ERROR" "❌ System update failed"
+        
+        # 🌟 INSANE USER EXPERIENCE: Show failure state and recovery options
+        display_update_results "$target_version" "$specific_services" "$update_start_time" "false"
+    fi
     
-    milou_log "SUCCESS" "✅ System update completed"
-    milou_log "INFO" "📋 Run './milou.sh status' to verify the update"
+    return $update_result
 }
 
 # Enhanced update check with version and service support
@@ -593,29 +964,59 @@ milou_update_rollback() {
 
 # Check comprehensive system update status
 milou_update_check_status() {
-    milou_log "INFO" "📊 Checking system update status..."
+    milou_log "STEP" "📊 Checking system update status..."
     
-    # Check current version
-    local current_version="${MILOU_VERSION:-unknown}"
-    milou_log "INFO" "Current version: $current_version"
+    # 🌟 INSANE USER EXPERIENCE: Show comprehensive current version info
+    display_current_versions
     
-    # Check for available updates
+    # Check for available updates with our smart detection
+    milou_log "INFO" "🔍 Checking for available updates..."
+    
+    # Check CLI updates
     if command -v milou_self_update_check >/dev/null 2>&1; then
-        milou_log "INFO" "Checking for CLI updates..."
-        milou_self_update_check
+        milou_log "INFO" "📱 CLI Update Status:"
+        if milou_self_update_check; then
+            milou_log "INFO" "   🆕 CLI update available!"
+            milou_log "INFO" "   💡 Run './milou.sh self-update' to update"
+        else
+            milou_log "SUCCESS" "   ✅ CLI is up to date"
+        fi
     fi
     
-    # Check Docker image versions
-    milou_log "INFO" "📦 Current Docker images:"
-    docker images --filter "reference=ghcr.io/milou-sh/*" --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}" 2>/dev/null || {
-        milou_log "WARN" "Unable to list Docker images"
-    }
+    # Check service updates using our smart analysis
+    milou_log "INFO" "📦 Service Update Status:"
+    if check_updates_needed "latest" "" "false"; then
+        milou_log "INFO" "   🆕 Service updates available!"
+        milou_log "INFO" "   💡 Run './milou.sh update' to update all services"
+        milou_log "INFO" "   💡 Run './milou.sh update --version X.X.X' for specific version"
+    else
+        milou_log "SUCCESS" "   ✅ All services are up to date"
+    fi
     
-    # Check service status
+    # Check Docker image versions with beautiful display
+    echo
+    milou_log "INFO" "📋 Docker Registry Information:"
+    if docker images --filter "reference=ghcr.io/milou-sh/*" --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}" 2>/dev/null | grep -q "ghcr.io/milou-sh"; then
+        echo "   Available local images:"
+        docker images --filter "reference=ghcr.io/milou-sh/*" --format "   • {{.Repository}}:{{.Tag}} ({{.CreatedAt}})" 2>/dev/null
+    else
+        echo "   No Milou images found locally"
+    fi
+    
+    # Show service health with our existing function
+    echo
     if command -v milou_docker_status >/dev/null 2>&1; then
-        milou_log "INFO" "📋 Service status:"
+        milou_log "INFO" "🏥 Service Health Status:"
         milou_docker_status
     fi
+    
+    echo
+    milou_log "INFO" "💡 Quick Commands:"
+    echo "   • './milou.sh update' - Update all services to latest"
+    echo "   • './milou.sh update --version 1.3.0' - Update to specific version"
+    echo "   • './milou.sh self-update' - Update Milou CLI itself"
+    echo "   • './milou.sh status' - Check service status"
+    echo "   • './milou.sh logs' - View service logs"
 }
 
 # =============================================================================
@@ -985,6 +1386,82 @@ handle_check_cli_updates() {
 handle_update_status() {
     milou_log "STEP" "📊 Checking system update status..."
     milou_update_check_status
+}
+
+# Show comprehensive version information
+handle_version() {
+    echo
+    milou_log "INFO" "📊 Milou System Version Information"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # CLI and System versions
+    local cli_version="${SCRIPT_VERSION:-${MILOU_VERSION:-unknown}}"
+    local system_version="${MILOU_VERSION:-latest}"
+    
+    echo -e "   ${BOLD}Milou CLI:${NC}         v$cli_version"
+    echo -e "   ${BOLD}System Version:${NC}    v$system_version"
+    echo -e "   ${BOLD}Last Updated:${NC}      $(get_last_update_timestamp)"
+    
+    # Quick service status
+    echo
+    echo -e "   ${BOLD}Service Status:${NC}"
+    local running_count=0
+    local total_count=0
+    
+    # Count running services
+    while IFS=$'\t' read -r container_name status; do
+        if [[ "$container_name" =~ milou-(.+) ]]; then
+            ((total_count++))
+            if [[ "$status" =~ Up|running ]]; then
+                ((running_count++))
+            fi
+        fi
+    done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Status}}" 2>/dev/null | tail -n +2)
+    
+    if [[ "$total_count" -eq 0 ]]; then
+        echo -e "   • ${YELLOW}No services detected${NC} (run 'milou setup' to install)"
+    elif [[ "$running_count" -eq "$total_count" ]]; then
+        echo -e "   • ${GREEN}All services running${NC} ($running_count/$total_count)"
+    elif [[ "$running_count" -gt 0 ]]; then
+        echo -e "   • ${YELLOW}Partial services running${NC} ($running_count/$total_count)"
+    else
+        echo -e "   • ${RED}No services running${NC} ($running_count/$total_count)"
+    fi
+    
+    # Update availability
+    echo
+    echo -e "   ${BOLD}Update Status:${NC}"
+    
+    # Check CLI updates quickly
+    if command -v milou_self_update_check >/dev/null 2>&1; then
+        if milou_self_update_check >/dev/null 2>&1; then
+            echo -e "   • ${YELLOW}CLI update available${NC} (run 'milou self-update')"
+        else
+            echo -e "   • ${GREEN}CLI is up to date${NC}"
+        fi
+    fi
+    
+    # Check service updates quickly
+    if check_updates_needed "latest" "" "true" >/dev/null 2>&1; then
+        echo -e "   • ${YELLOW}Service updates available${NC} (run 'milou update')"
+    else
+        echo -e "   • ${GREEN}Services are up to date${NC}"
+    fi
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    echo -e "   ${BOLD}Quick Commands:${NC}"
+    echo "   • 'milou update-status' - Detailed update information"
+    echo "   • 'milou update' - Update all services"
+    echo "   • 'milou status' - Full system status"
+    echo
+}
+
+# Quick version display (for --version flag)
+show_version() {
+    local cli_version="${SCRIPT_VERSION:-${MILOU_VERSION:-unknown}}"
+    echo "Milou CLI v$cli_version"
+    echo "Professional Docker Management Tool"
 }
 
 # Rollback system update

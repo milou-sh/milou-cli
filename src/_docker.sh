@@ -468,7 +468,12 @@ health_check_service() {
     
     # Check if service is running
     local service_status
-    service_status=$(docker_compose ps --services --filter "status=running" 2>/dev/null | grep -c "^$service$" || echo "0")
+    service_status=$(docker_compose ps --services --filter "status=running" 2>/dev/null | grep -c "^$service$" 2>/dev/null || echo "0")
+    
+    # Ensure service_status is a valid number
+    if ! [[ "$service_status" =~ ^[0-9]+$ ]]; then
+        service_status="0"
+    fi
     
     if [[ "$service_status" -eq 0 ]]; then
         [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is not running"

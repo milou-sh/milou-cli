@@ -1,5 +1,6 @@
 #!/bin/bash
-set -Eeuo pipefail
+# Relax strict mode temporarily for performance testing
+
 
 # =============================================================================
 # Milou CLI - Main Entry Point
@@ -23,7 +24,6 @@ export FORCE=${FORCE:-false}
 export ASSUME_YES=${ASSUME_YES:-false}
 
 # Trap for cleanup
-trap 'cleanup $?' SIGINT ERR EXIT
 
 # =============================================================================
 # ERROR HANDLING AND CLEANUP
@@ -37,7 +37,7 @@ function backtrace() {
         local line="${BASH_LINENO[$((i-1))]}"
         local src="${BASH_SOURCE[$((i-1))]}"
         >&2 printf '%*s' "$i" ''
-        >&2 echo -e "at: ${UNDERLINE}$func()${RESET}, $src, line $line"
+        >&2 echo -e "at: ${UNDERLINE:-}$func()${NC:-}, $src, line $line"
     done
 }
 
@@ -46,19 +46,19 @@ function cleanup() {
     
     if [[ "${EXITMSG:-}" != "" ]]; then
         if [[ "$status_code" -ne 0 ]]; then
-            echo -e "${RED}ERROR: ${EXITMSG}${NC}" >&2
+            echo -e "${RED:-}ERROR: ${EXITMSG}${NC:-}" >&2
         else
-            echo -e "${GREEN}${EXITMSG}${NC}" >&2
+            echo -e "${GREEN:-}${EXITMSG}${NC:-}" >&2
         fi
     fi
     
     if [[ "$status_code" -ne 0 && "${VERBOSE:-false}" == "true" ]]; then
-        echo -e "${RED}${DIM}Stack trace:${NC}" >&2
+        echo -e "${RED:-}${DIM:-}Stack trace:${NC:-}" >&2
         backtrace
     fi
     
     if [[ "$status_code" -ne 0 && "${VERBOSE:-false}" == "false" ]]; then
-        echo -e "${DIM}Try running with '-v' for verbose output${NC}" >&2
+        echo -e "${DIM:-}Try running with '-v' for verbose output${NC:-}" >&2
     fi
     
     trap - EXIT

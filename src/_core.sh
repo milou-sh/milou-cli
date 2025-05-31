@@ -1,6 +1,100 @@
 #!/bin/bash
 
 # =============================================================================
+# Milou CLI Core Module - Essential functions and utilities
+# Professional logging, error handling, and module management
+# Version: 4.0.0 - State-of-the-art module loading with guards
+# =============================================================================
+
+# MODULE LOADING GUARD SYSTEM - PREVENTS REDUNDANT LOADING
+if [[ "${MILOU_CORE_MODULE_LOADED:-}" == "true" ]]; then
+    return 0  # Already loaded, skip
+fi
+
+# Performance tracking for module loading
+declare -g MILOU_MODULE_LOAD_START_TIME
+MILOU_MODULE_LOAD_START_TIME=$(date +%s%3N 2>/dev/null || date +%s)
+
+# Global module loading registry
+declare -gA MILOU_LOADED_MODULES=()
+
+# Function to mark module as loaded and track performance
+mark_module_loaded() {
+    local module_name="$1"
+    local load_time="${2:-0}"
+    
+    MILOU_LOADED_MODULES["$module_name"]="loaded_at_$(date +%s)_duration_${load_time}ms"
+    
+    # Export guard variable for this module (handle readonly gracefully)
+    local guard_var="MILOU_${module_name^^}_MODULE_LOADED"
+    if ! declare -g "$guard_var"="true" 2>/dev/null; then
+        # Variable already exists as readonly, that's fine
+        true
+    fi
+    
+    # Debug logging if verbose
+    [[ "${VERBOSE:-false}" == "true" && "${MILOU_QUIET_MODULE_LOADING:-false}" != "true" ]] && \
+        echo "   ⚡ Module $module_name loaded in ${load_time}ms" >&2
+}
+
+# Function to check if module is already loaded
+is_module_loaded() {
+    local module_name="$1"
+    local guard_var="MILOU_${module_name^^}_MODULE_LOADED"
+    [[ "${!guard_var:-}" == "true" ]]
+}
+
+# Function to show module loading statistics
+show_module_stats() {
+    [[ "${VERBOSE:-false}" == "true" ]] || return 0
+    
+    echo "📊 Module Loading Statistics:" >&2
+    for module in "${!MILOU_LOADED_MODULES[@]}"; do
+        local stats="${MILOU_LOADED_MODULES[$module]}"
+        if [[ "$stats" =~ loaded_at_([0-9]+)_duration_([0-9]+)ms ]]; then
+            local load_time="${BASH_REMATCH[1]}"
+            local duration="${BASH_REMATCH[2]}"
+            echo "   • $module: ${duration}ms" >&2
+        fi
+    done
+}
+
+# SAFE MODULE LOADING FUNCTION
+safe_load_module() {
+    local module_file="$1"
+    local module_name="$2"
+    
+    # Check if already loaded
+    if is_module_loaded "$module_name"; then
+        [[ "${VERBOSE:-false}" == "true" && "${MILOU_QUIET_MODULE_LOADING:-false}" != "true" ]] && \
+            echo "   ↺ Module $module_name already loaded" >&2
+        return 0
+    fi
+    
+    local start_time
+    start_time=$(date +%s%3N 2>/dev/null || date +%s)
+    
+    if [[ -f "$module_file" ]]; then
+        if source "$module_file"; then
+            local end_time
+            end_time=$(date +%s%3N 2>/dev/null || date +%s)
+            local duration=$((end_time - start_time))
+            mark_module_loaded "$module_name" "$duration"
+            return 0
+        else
+            echo "ERROR: Failed to load module: $module_file" >&2
+            return 1
+        fi
+    else
+        echo "ERROR: Module file not found: $module_file" >&2
+        return 1
+    fi
+}
+
+# Mark core module as loaded
+mark_module_loaded "core" "$(($(date +%s%3N 2>/dev/null || date +%s) - MILOU_MODULE_LOAD_START_TIME))"
+
+# =============================================================================
 # Milou CLI - Core Utilities Module
 # Consolidated utilities to eliminate code duplication
 # Version: 3.1.0 - Refactored Edition

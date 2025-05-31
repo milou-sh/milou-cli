@@ -58,8 +58,8 @@ display_current_versions() {
     local -A running_versions=()
     local -A configured_versions=()
     
-    # Get versions from running containers
-    if docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | grep -q "milou-"; then
+    # Get versions from ALL containers (running AND stopped) to get better current state
+    if docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | grep -q "milou-"; then
         while IFS=$'\t' read -r container_name image_name; do
             if [[ "$container_name" =~ milou-(.+) ]]; then
                 local service="${BASH_REMATCH[1]}"
@@ -67,12 +67,14 @@ display_current_versions() {
                 local version=""
                 if [[ "$image_name" =~ :(.+)$ ]]; then
                     version="${BASH_REMATCH[1]}"
+                    # Clean up version string - remove extra prefixes if present
+                    version="${version#v}"  # Remove 'v' prefix if present
                 else
                     version="unknown"
                 fi
                 running_versions["$service"]="$version"
             fi
-        done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+        done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
     fi
     
     # Get configured versions from environment
@@ -84,23 +86,44 @@ display_current_versions() {
     configured_versions["redis"]="${REDIS_VERSION:-latest}"
     configured_versions["rabbitmq"]="${RABBITMQ_VERSION:-latest}"
     
+    # Clean configured versions too
+    for service in "${!configured_versions[@]}"; do
+        configured_versions["$service"]="${configured_versions[$service]#v}"
+    done
+    
     # Display service versions with status indicators
     local services=("database" "backend" "frontend" "engine" "nginx" "redis" "rabbitmq")
     
     for service in "${services[@]}"; do
-        local running_version="${running_versions[$service]:-}"
+        local current_version="${running_versions[$service]:-}"
         local configured_version="${configured_versions[$service]:-}"
         
-        if [[ -n "$running_version" ]]; then
-            # Service is running
-            if [[ "$running_version" == "$configured_version" ]]; then
-                echo -e "   ${BOLD}├─ ${service}:${NC}      ${GREEN}v$running_version${NC} ${DIM}(running)${NC}"
+        # Check if service is currently running
+        local is_running=false
+        if docker ps --filter "name=milou-$service" --format "{{.Names}}" 2>/dev/null | grep -q "milou-$service"; then
+            is_running=true
+        fi
+        
+        if [[ -n "$current_version" && "$current_version" != "unknown" ]]; then
+            # Service has a known version (from container)
+            if [[ "$is_running" == "true" ]]; then
+                if [[ "$current_version" == "$configured_version" ]]; then
+                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${GREEN}v$current_version${NC} ${DIM}(running)${NC}"
+                else
+                    echo -e "   ${BOLD}├─ ${service}:${NC}      ${YELLOW}v$current_version${NC} ${DIM}(running, configured: v$configured_version)${NC}"
+                fi
             else
-                echo -e "   ${BOLD}├─ ${service}:${NC}      ${YELLOW}v$running_version${NC} ${DIM}(running, configured: v$configured_version)${NC}"
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$current_version${NC} ${DIM}(stopped)${NC}"
             fi
         else
-            # Service is not running
-            echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$configured_version${NC} ${DIM}(stopped)${NC}"
+            # Service doesn't exist or version unknown, use configured version
+            local display_version="$configured_version"
+            if [[ "$configured_version" == "latest" ]]; then
+                display_version="latest"
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}$display_version${NC} ${DIM}(not installed)${NC}"
+            else
+                echo -e "   ${BOLD}├─ ${service}:${NC}      ${RED}v$display_version${NC} ${DIM}(not installed)${NC}"
+            fi
         fi
     done
     
@@ -121,6 +144,9 @@ display_update_preview() {
     milou_log "INFO" "🔍 Update Preview - What Will Change"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
+    # Clean target version
+    target_version="${target_version#v}"
+    
     # Determine services to update
     local -a services_to_update=()
     if [[ -n "$specific_services" ]]; then
@@ -132,21 +158,21 @@ display_update_preview() {
         echo -e "   ${BOLD}Update Scope:${NC} Full system update"
     fi
     
-    echo -e "   ${BOLD}Target Version:${NC} $target_version"
+    echo -e "   ${BOLD}Target Version:${NC} v$target_version"
     echo
     
-    # Get current versions for comparison
+    # Get current versions for comparison (from ALL containers, not just running)
     local -A current_versions=()
     while IFS=$'\t' read -r container_name image_name; do
         if [[ "$container_name" =~ milou-(.+) ]]; then
             local service="${BASH_REMATCH[1]}"
             local version=""
             if [[ "$image_name" =~ :(.+)$ ]]; then
-                version="${BASH_REMATCH[1]}"
+                version="${BASH_REMATCH[1]#v}"  # Remove 'v' prefix if present
             fi
             current_versions["$service"]="$version"
         fi
-    done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+    done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
     
     echo -e "   ${BOLD}Service Updates:${NC}"
     
@@ -154,7 +180,7 @@ display_update_preview() {
     for service in "${services_to_update[@]}"; do
         local current_version="${current_versions[$service]:-unknown}"
         
-        if [[ "$current_version" == "unknown" ]]; then
+        if [[ "$current_version" == "unknown" || "$current_version" == "" ]]; then
             echo -e "   ${BOLD}├─ ${service}:${NC} ${YELLOW}NEW INSTALLATION${NC} → ${GREEN}v$target_version${NC}"
             updates_needed=true
         elif [[ "$current_version" != "$target_version" ]]; then
@@ -169,7 +195,7 @@ display_update_preview() {
     
     if [[ "$updates_needed" == "true" ]]; then
         echo -e "   ${BOLD}📋 Update Summary:${NC}"
-        echo -e "   • Services will be updated to version ${GREEN}$target_version${NC}"
+        echo -e "   • Services will be updated to version ${GREEN}v$target_version${NC}"
         echo -e "   • Zero-downtime rolling deployment will be used"
         echo -e "   • Automatic backup will be created before update"
         echo -e "   • Database integrity will be verified after update"
@@ -228,7 +254,7 @@ display_update_results() {
             
             local version=""
             if [[ "$image_name" =~ :(.+)$ ]]; then
-                version="${BASH_REMATCH[1]}"
+                version="${BASH_REMATCH[1]#v}"  # Remove 'v' prefix if present
             fi
             current_versions["$service"]="$version"
             
@@ -315,21 +341,24 @@ check_updates_needed() {
         milou_log "INFO" "🔍 Analyzing what needs to be updated..."
     fi
     
+    # Clean target version
+    target_version="${target_version#v}"
+    
     local -A current_versions=()
     local -A available_versions=()
     local updates_needed=false
     
-    # Get current running versions
+    # Get current versions from ALL containers (running AND stopped)
     while IFS=$'\t' read -r container_name image_name; do
         if [[ "$container_name" =~ milou-(.+) ]]; then
             local service="${BASH_REMATCH[1]}"
             local version=""
             if [[ "$image_name" =~ :(.+)$ ]]; then
-                version="${BASH_REMATCH[1]}"
+                version="${BASH_REMATCH[1]#v}"  # Remove 'v' prefix if present
             fi
             current_versions["$service"]="$version"
         fi
-    done < <(docker ps --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
+    done < <(docker ps -a --filter "name=milou-" --format "table {{.Names}}\t{{.Image}}" 2>/dev/null | tail -n +2)
     
     # Check available versions (if we have GitHub token)
     local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
@@ -341,7 +370,11 @@ check_updates_needed() {
         if [[ "$current_version" != "$target_version" ]]; then
             updates_needed=true
             if [[ "$quiet" != "true" ]]; then
-                milou_log "INFO" "   📦 $service: v$current_version → v$target_version"
+                if [[ "$current_version" == "unknown" || "$current_version" == "" ]]; then
+                    milou_log "INFO" "   📦 $service: NEW INSTALLATION → v$target_version"
+                else
+                    milou_log "INFO" "   📦 $service: v$current_version → v$target_version"
+                fi
             fi
         elif [[ "$quiet" != "true" ]]; then
             milou_log "INFO" "   ✅ $service: v$current_version (up to date)"
@@ -1046,16 +1079,34 @@ milou_self_update_check() {
     
     milou_log "DEBUG" "Fetching release info from: $api_url"
     
-    if ! release_info=$(curl -s "$api_url"); then
+    # Fetch release info with better error handling
+    if ! release_info=$(curl -s -f "$api_url" 2>/dev/null); then
         milou_log "ERROR" "Failed to fetch release information from GitHub"
+        milou_log "DEBUG" "API URL: $api_url"
         return 1
     fi
     
-    # Parse release information
-    local remote_version
-    if ! remote_version=$(echo "$release_info" | grep '"tag_name"' | cut -d'"' -f4); then
-        milou_log "ERROR" "Failed to parse release version"
+    # Validate we got valid JSON response
+    if [[ -z "$release_info" ]] || ! echo "$release_info" | grep -q '"tag_name"'; then
+        milou_log "ERROR" "Invalid or empty response from GitHub API"
+        milou_log "DEBUG" "Response: ${release_info:0:200}..."
         return 1
+    fi
+    
+    # Parse release information with better error handling
+    local remote_version
+    remote_version=$(echo "$release_info" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+    
+    if [[ -z "$remote_version" ]]; then
+        milou_log "ERROR" "Failed to parse release version from GitHub response"
+        milou_log "DEBUG" "Trying alternative parsing..."
+        # Try alternative parsing method
+        remote_version=$(echo "$release_info" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        
+        if [[ -z "$remote_version" ]]; then
+            milou_log "ERROR" "Could not extract version from GitHub API response"
+            return 1
+        fi
     fi
     
     local current_version="${SCRIPT_VERSION:-3.1.0}"

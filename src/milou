@@ -885,8 +885,15 @@ function main() {
             ;;
         version)
             # Load update module for comprehensive version info
-            source "${SRC_DIR}/_update.sh" 2>/dev/null || true
-            show_version
+            if source "${SRC_DIR}/_update.sh" 2>/dev/null; then
+                if command -v handle_version >/dev/null 2>&1; then
+                    handle_version
+                else
+                    show_version
+                fi
+            else
+                show_version
+            fi
             ;;
         update-status)
             # Show detailed update information

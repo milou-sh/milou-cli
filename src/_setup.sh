@@ -1500,12 +1500,11 @@ setup_configure_ssl() {
                 return 1
             fi
             
-            # Simple, direct certificate setup without SSL module recursion
-            if setup_copy_existing_certificates "$domain" "$cert_source"; then
-                milou_log "SUCCESS" "✓ SSL certificates configured successfully"
+            # Use SSL module for existing certificate setup
+            if command -v ssl_setup_existing >/dev/null 2>&1; then
+                ssl_setup_existing "$domain" "$cert_source" "false" "false"
             else
-                milou_log "ERROR" "Failed to configure SSL certificates"
-                return 1
+                setup_copy_existing_certificates "$domain" "$cert_source"
             fi
             ;;
         "none")

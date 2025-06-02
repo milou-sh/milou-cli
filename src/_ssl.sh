@@ -354,7 +354,7 @@ ssl_generate_self_signed() {
         return 1
     fi
     
-    # Generate certificate
+    # Generate certificate - THIS WAS MISSING IN THE DUPLICATE!
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating certificate (valid for $MILOU_SSL_DEFAULT_VALIDITY_DAYS days)"
     if ! openssl req -new -x509 \
         -key "$MILOU_SSL_KEY_FILE" \
@@ -1048,53 +1048,6 @@ ssl_show_letsencrypt_troubleshooting() {
     echo "   • Get cert: certbot certonly --standalone -d $domain"
     echo "   • Check status: certbot certificates"
     echo
-}
-
-# Enhanced certificate generation with better error handling
-ssl_generate_self_signed() {
-    local domain="${1:-localhost}"
-    local force="${2:-false}"
-    local quiet="${3:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 Generating self-signed certificate for: $domain"
-    
-    # Initialize SSL environment
-    ssl_init "$quiet" || return 1
-    
-    # Backup existing certificates if they exist and not forced
-    if [[ "$force" != "true" ]] && [[ -f "$MILOU_SSL_CERT_FILE" || -f "$MILOU_SSL_KEY_FILE" ]]; then
-        ssl_backup_certificates "$quiet"
-    fi
-    
-    # Create OpenSSL configuration
-    if ! ssl_create_openssl_config "$domain" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to create OpenSSL configuration"
-        return 1
-    fi
-    
-    # Generate private key
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating RSA private key ($MILOU_SSL_DEFAULT_KEY_SIZE bits)"
-    if ! openssl genrsa -out "$MILOU_SSL_KEY_FILE" "$MILOU_SSL_DEFAULT_KEY_SIZE" >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to generate private key"
-        return 1
-    fi
-    
-    # Generate certificate
-    # Set secure permissions
-    chmod 644 "$MILOU_SSL_CERT_FILE" 2>/dev/null || true
-    chmod 600 "$MILOU_SSL_KEY_FILE" 2>/dev/null || true
-    
-    # Validate the installed certificates
-    if ssl_validate "$domain" "true"; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Existing certificates installed successfully"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "📄 Certificate: $MILOU_SSL_CERT_FILE"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Private key: $MILOU_SSL_KEY_FILE"
-        ssl_save_info "$domain" "existing" "$quiet"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Installed certificates failed validation"
-        return 1
-    fi
 }
 
 # Enhanced helper function for setup integration

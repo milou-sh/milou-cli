@@ -654,6 +654,11 @@ service_start_with_validation() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
     
+    # NETWORK CREATION: Ensure required networks exist (like in update process)
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔗 Ensuring required networks exist..."
+    docker network create proxy 2>/dev/null || [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Proxy network already exists or failed to create"
+    docker network create milou_network --subnet 172.20.0.0/16 2>/dev/null || [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Milou network already exists or failed to create"
+    
     # Load environment to check for GitHub token
     local github_token="${GITHUB_TOKEN:-}"
     if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then

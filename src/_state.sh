@@ -38,6 +38,7 @@ declare -gr STATE_INSTALLED_STOPPED="installed_stopped"  # Installed but not run
 declare -gr STATE_CONFIGURED_ONLY="configured_only"      # Has config but no containers
 declare -gr STATE_CONTAINERS_ONLY="containers_only"      # Has containers but no config
 declare -gr STATE_BROKEN="broken"                  # Installation exists but is broken
+declare -gr STATE_PARTIAL_FAILED="partial_failed"         # Failed setup with partial configuration
 declare -gr STATE_UNKNOWN="unknown"                # Cannot determine state
 
 # Setup modes based on detected state
@@ -151,8 +152,12 @@ detect_installation_state() {
         # Has config and containers but nothing running
         state="$STATE_INSTALLED_STOPPED"
     elif [[ "$has_config" == "true" && "$has_containers" == "false" ]]; then
-        # Has config but no containers
-        state="$STATE_CONFIGURED_ONLY"
+        # Has config but no containers - could be partial failed setup
+        if _is_partial_failed_setup "$quiet"; then
+            state="$STATE_PARTIAL_FAILED"
+        else
+            state="$STATE_CONFIGURED_ONLY"
+        fi
     elif [[ "$has_config" == "false" && "$has_containers" == "true" ]]; then
         # Has containers but no config
         state="$STATE_CONTAINERS_ONLY"
@@ -249,6 +254,66 @@ _validate_running_installation() {
     fi
 }
 
+# Check if this is a partial failed setup
+_is_partial_failed_setup() {
+    local quiet="${1:-false}"
+    
+    # Look for indicators of a failed setup
+    local failed_indicators=0
+    
+    # Check for failed config backups
+    if ls "${SCRIPT_DIR:-$(pwd)}/.env.failed."* >/dev/null 2>&1; then
+        ((failed_indicators++))
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found failed config backups"
+    fi
+    
+    # Check for failed SSL backups
+    if ls "${SCRIPT_DIR:-$(pwd)}/ssl.failed."* >/dev/null 2>&1; then
+        ((failed_indicators++))
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found failed SSL backups"
+    fi
+    
+    # Check if SSL directory exists but is empty or has incomplete certificates
+    if [[ -d "${SCRIPT_DIR:-$(pwd)}/ssl" ]]; then
+        local ssl_files_count=$(ls "${SCRIPT_DIR:-$(pwd)}/ssl"/*.{crt,key,pem} 2>/dev/null | wc -l || echo "0")
+        if [[ $ssl_files_count -lt 2 ]]; then
+            ((failed_indicators++))
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "SSL directory incomplete"
+        fi
+    fi
+    
+    # Check if docker-compose.yml is missing (should exist after configuration)
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
+        ((failed_indicators++))
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Missing docker-compose.yml after configuration"
+    fi
+    
+    # Check configuration file for completeness
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        local required_vars=("DOMAIN" "ADMIN_EMAIL" "POSTGRES_PASSWORD" "JWT_SECRET")
+        local missing_vars=0
+        
+        for var in "${required_vars[@]}"; do
+            if ! grep -q "^${var}=" "${SCRIPT_DIR:-$(pwd)}/.env" 2>/dev/null; then
+                ((missing_vars++))
+            fi
+        done
+        
+        if [[ $missing_vars -gt 0 ]]; then
+            ((failed_indicators++))
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Configuration appears incomplete ($missing_vars missing vars)"
+        fi
+    fi
+    
+    # If we have multiple indicators, this is likely a failed setup
+    if [[ $failed_indicators -ge 2 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Detected partial failed setup ($failed_indicators indicators)"
+        return 0
+    else
+        return 1
+    fi
+}
+
 # =============================================================================
 # SMART SETUP MODE SELECTION
 # =============================================================================
@@ -284,6 +349,10 @@ smart_setup_mode() {
         "$STATE_CONFIGURED_ONLY")
             mode="$MODE_RESUME"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "Configuration without containers - will create and start services"
+            ;;
+        "$STATE_PARTIAL_FAILED")
+            mode="$MODE_INSTALL"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Partial failed setup detected - will restart fresh installation"
             ;;
         "$STATE_CONTAINERS_ONLY")
             mode="$MODE_RECONFIGURE"
@@ -381,6 +450,9 @@ describe_installation_state() {
         "$STATE_CONFIGURED_ONLY")
             echo "Milou configuration exists but no containers"
             ;;
+        "$STATE_PARTIAL_FAILED")
+            echo "Previous setup failed with partial configuration"
+            ;;
         "$STATE_CONTAINERS_ONLY")
             echo "Milou containers exist but no configuration"
             ;;
@@ -409,6 +481,9 @@ get_recommended_actions() {
             ;;
         "$STATE_CONFIGURED_ONLY")
             echo "Run: milou start or milou setup --resume"
+            ;;
+        "$STATE_PARTIAL_FAILED")
+            echo "Run: milou setup (will restart with fresh installation)"
             ;;
         "$STATE_CONTAINERS_ONLY")
             echo "Run: milou setup --reconfigure"

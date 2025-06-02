@@ -211,73 +211,45 @@ config_find_available_port() {
     return 1
 }
 
-# Detect latest stable version from registry (for better version tracking)
-config_detect_latest_stable_version() {
+# Detect latest version for each service individually (more robust)
+config_detect_service_versions() {
     local github_token="${1:-}"
     local quiet="${2:-false}"
     local registry_org="${3:-milou-sh}"
     local registry_repo="${4:-milou}"
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting to detect latest stable version from registry"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detecting latest version for each service individually"
     
-    # If no GitHub token, fall back to default
-    if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token provided, using default version"
-        echo "1.0.0"
-        return 0
-    fi
+    # Services to check
+    local services=("backend" "frontend" "engine" "database" "nginx")
     
-    # Try to get latest release from GitHub API
-    local api_url="https://api.github.com/repos/$registry_org/$registry_repo/releases/latest"
-    local response=""
-    
-    if command -v curl >/dev/null 2>&1; then
-        response=$(timeout 10 curl -s --fail --max-time 5 \
-                       -H "Authorization: Bearer $github_token" \
-                       -H "Accept: application/vnd.github.v3+json" \
-                       "$api_url" 2>/dev/null || echo '{"error": "api_failure"}')
+    # Try to get version for each service
+    for service in "${services[@]}"; do
+        local service_version="latest"
         
-        if [[ "$response" != '{"error": "api_failure"}' ]] && echo "$response" | jq -e '.tag_name' >/dev/null 2>&1; then
-            local latest_version
-            latest_version=$(echo "$response" | jq -r '.tag_name' 2>/dev/null)
-            if [[ -n "$latest_version" && "$latest_version" != "null" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detected latest stable version: $latest_version"
-                echo "$latest_version"
-                return 0
-            fi
-        fi
-    fi
-    
-    # Fallback to checking package versions (alternative approach)
-    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-        local package_url="https://api.github.com/orgs/$registry_org/packages/container/$registry_repo%2Fbackend/versions"
-        response=$(timeout 10 curl -s --fail --max-time 5 \
-                       -H "Authorization: Bearer $github_token" \
-                       -H "Accept: application/vnd.github.v3+json" \
-                       "$package_url" 2>/dev/null || echo '[]')
-        
-        if echo "$response" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
-            # Find the highest semantic version tag
-            local latest_semantic_version
-            latest_semantic_version=$(echo "$response" | jq -r '
-                [.[] | select(.metadata.container.tags != null) | 
-                 .metadata.container.tags[] | 
-                 select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))] | 
-                sort_by(split(".") | map(tonumber)) | 
-                last' 2>/dev/null)
+        # Method 1: Try Docker inspection of latest tag
+        if command -v docker >/dev/null 2>&1; then
+            local registry_image="ghcr.io/$registry_org/$registry_repo/$service:latest"
             
-            if [[ -n "$latest_semantic_version" && "$latest_semantic_version" != "null" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detected latest semantic version from packages: $latest_semantic_version"
-                echo "$latest_semantic_version"
-                return 0
+            # Try to get version from image labels (quietly)
+            local version_from_label
+            version_from_label=$(docker image inspect "$registry_image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || echo "")
+            
+            if [[ -n "$version_from_label" && "$version_from_label" != "<no value>" && "$version_from_label" != "null" ]]; then
+                # Clean up version (remove 'v' prefix if present)
+                version_from_label="${version_from_label#v}"
+                service_version="$version_from_label"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✓ $service: $service_version"
+            else
+                # Fallback to latest if no specific version found
+                service_version="latest"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✓ $service: latest (no version label)"
             fi
         fi
-    fi
-    
-    # Final fallback to default stable version
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not detect version from registry, using default stable version"
-    echo "1.0.0"
-    return 0
+        
+        # Output the service version mapping
+        echo "${service^^}_TAG=$service_version"
+    done
 }
 
 # Detect and resolve port conflicts automatically
@@ -411,17 +383,34 @@ config_create_env_file() {
     
     # Determine Docker image tags
     local image_tag="latest"
+    local service_versions=""
+    
     if [[ "$use_latest_images" != "true" ]]; then
-        # Use selected version if available, otherwise detect latest stable
-        if [[ -n "${MILOU_SELECTED_VERSION:-}" ]]; then
-            image_tag="$MILOU_SELECTED_VERSION"
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using selected version: $image_tag"
-        else
-            # Use the provided GitHub token or fall back to environment variable
-            local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-            image_tag=$(config_detect_latest_stable_version "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
-        fi
+        # Use per-service version detection for better accuracy
+        local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+        service_versions=$(config_detect_service_versions "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Using per-service version detection for optimal compatibility"
+    else
+        # Use latest for all services
+        service_versions="BACKEND_TAG=latest
+FRONTEND_TAG=latest
+ENGINE_TAG=latest
+DATABASE_TAG=latest
+NGINX_TAG=latest"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Using latest tags for all services"
     fi
+    
+    # Parse service versions into variables
+    local backend_tag="latest" frontend_tag="latest" engine_tag="latest" database_tag="latest" nginx_tag="latest"
+    while IFS='=' read -r key value; do
+        case "$key" in
+            BACKEND_TAG) backend_tag="$value" ;;
+            FRONTEND_TAG) frontend_tag="$value" ;;
+            ENGINE_TAG) engine_tag="$value" ;;
+            DATABASE_TAG) database_tag="$value" ;;
+            NGINX_TAG) nginx_tag="$value" ;;
+        esac
+    done <<< "$service_versions"
     
     # Create comprehensive configuration file
     cat > "$MILOU_CONFIG_FILE" << EOF
@@ -531,11 +520,11 @@ DOCKER_BUILDKIT=1
 # =============================================================================
 # DOCKER IMAGE CONFIGURATION
 # =============================================================================
-MILOU_DATABASE_TAG=$image_tag
-MILOU_BACKEND_TAG=$image_tag
-MILOU_FRONTEND_TAG=$image_tag
-MILOU_ENGINE_TAG=$image_tag
-MILOU_NGINX_TAG=$image_tag
+MILOU_DATABASE_TAG=$database_tag
+MILOU_BACKEND_TAG=$backend_tag
+MILOU_FRONTEND_TAG=$frontend_tag
+MILOU_ENGINE_TAG=$engine_tag
+MILOU_NGINX_TAG=$nginx_tag
 
 # Third-party service versions
 REDIS_VERSION=7-alpine
@@ -1450,6 +1439,7 @@ export -f config_generate_credentials_with_preservation
 export -f config_create_env_file
 export -f config_find_available_port
 export -f config_resolve_port_conflicts
+export -f config_detect_service_versions
 
 # Configuration validation operations
 export -f config_validate_inputs

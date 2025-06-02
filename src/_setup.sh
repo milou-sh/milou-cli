@@ -1580,6 +1580,23 @@ setup_start_services() {
         fi
     fi
     
+    # CRITICAL FIX: Pull images before starting services to prevent fresh install crashes
+    milou_log "INFO" "⬇️  Pulling latest Docker images..."
+    
+    # Initialize Docker environment first
+    if ! docker_init "" "" "false" "false"; then
+        milou_log "ERROR" "Docker initialization failed"
+        return 1
+    fi
+    
+    # Pull all images first
+    if ! docker_execute "pull" "" "false"; then
+        milou_log "WARN" "⚠️  Image pull had issues, but continuing with startup"
+        milou_log "INFO" "💡 Some images may already exist locally or authentication may be needed"
+    else
+        milou_log "SUCCESS" "✅ All images pulled successfully"
+    fi
+    
     # Use the Docker module's start function which handles authentication
     if service_start_with_validation "" "60" "false"; then
         milou_log "SUCCESS" "✓ Services started successfully"

@@ -1589,13 +1589,14 @@ setup_start_services() {
         should_pull_images="true"
         pull_reason="fresh server installation"
     else
-        # Check if any Milou images are missing locally
+        # Check if any Milou images are missing locally - check for any tag, not just :latest
         local missing_images=()
-        local core_images=("ghcr.io/milou-sh/milou/database:latest" "ghcr.io/milou-sh/milou/backend:latest" "ghcr.io/milou-sh/milou/frontend:latest")
+        local core_services=("database" "backend" "frontend")
         
-        for image in "${core_images[@]}"; do
-            if ! docker image inspect "$image" >/dev/null 2>&1; then
-                missing_images+=("$image")
+        for service in "${core_services[@]}"; do
+            # Check if any image exists for this service (any tag)
+            if ! docker images --format "{{.Repository}}" | grep -q "ghcr.io/milou-sh/milou/$service"; then
+                missing_images+=("ghcr.io/milou-sh/milou/$service")
             fi
         done
         

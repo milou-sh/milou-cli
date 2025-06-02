@@ -1580,21 +1580,56 @@ setup_start_services() {
         fi
     fi
     
-    # CRITICAL FIX: Pull images before starting services to prevent fresh install crashes
-    milou_log "INFO" "⬇️  Pulling latest Docker images..."
+    # INTELLIGENT IMAGE PULLING: Only pull when necessary to avoid unnecessary downloads
+    local should_pull_images="false"
+    local pull_reason=""
     
-    # Initialize Docker environment first
-    if ! docker_init "" "" "false" "false"; then
-        milou_log "ERROR" "Docker initialization failed"
-        return 1
+    # Check if we should pull images based on system state
+    if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]]; then
+        should_pull_images="true"
+        pull_reason="fresh server installation"
+    else
+        # Check if any Milou images are missing locally
+        local missing_images=()
+        local core_images=("ghcr.io/milou-sh/milou/database:latest" "ghcr.io/milou-sh/milou/backend:latest" "ghcr.io/milou-sh/milou/frontend:latest")
+        
+        for image in "${core_images[@]}"; do
+            if ! docker image inspect "$image" >/dev/null 2>&1; then
+                missing_images+=("$image")
+            fi
+        done
+        
+        if [[ ${#missing_images[@]} -gt 0 ]]; then
+            should_pull_images="true"
+            pull_reason="missing core images: ${missing_images[*]}"
+        else
+            milou_log "INFO" "✓ Core images already present locally - skipping pull"
+        fi
     fi
     
-    # Pull all images first
-    if ! docker_execute "pull" "" "false"; then
-        milou_log "WARN" "⚠️  Image pull had issues, but continuing with startup"
-        milou_log "INFO" "💡 Some images may already exist locally or authentication may be needed"
+    # Pull images only when necessary
+    if [[ "$should_pull_images" == "true" ]]; then
+        milou_log "INFO" "⬇️  Pulling Docker images ($pull_reason)..."
+        
+        # Initialize Docker environment first
+        if ! docker_init "" "" "false" "false"; then
+            milou_log "ERROR" "Docker initialization failed"
+            return 1
+        fi
+        
+        # Pull all images
+        if ! docker_execute "pull" "" "false"; then
+            milou_log "WARN" "⚠️  Image pull had issues, but continuing with startup"
+            milou_log "INFO" "💡 Some images may already exist locally or authentication may be needed"
+        else
+            milou_log "SUCCESS" "✅ Images pulled successfully"
+        fi
     else
-        milou_log "SUCCESS" "✅ All images pulled successfully"
+        # Still need to initialize Docker environment
+        if ! docker_init "" "" "false" "false"; then
+            milou_log "ERROR" "Docker initialization failed"
+            return 1
+        fi
     fi
     
     # Use the Docker module's start function which handles authentication

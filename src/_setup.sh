@@ -1070,6 +1070,121 @@ setup_generate_configuration_interactive() {
                 echo -e "   ${YELLOW}${CHECKMARK} Professional setup!${NC} Using: ${BOLD}Your own certificates${NC}"
                 echo -e "   ${BLUE}✓ SSL directory:${NC} $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")"
                 echo -e "   ${DIM}   Supports: Let's Encrypt (.pem), Standard (.crt/.key), and custom formats${NC}"
+                echo
+                
+                # Load SSL module for interactive certificate setup
+                if [[ "${MILOU_SSL_LOADED:-}" != "true" ]]; then
+                    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                    source "${script_dir}/_ssl.sh" || {
+                        echo -e "   ${RED}${CROSSMARK} Error: Cannot load SSL module${NC}"
+                        continue
+                    }
+                fi
+                
+                # Interactive certificate setup RIGHT NOW
+                log_section "📁 Certificate Location Setup" "Let's locate your SSL certificates"
+                echo -e "${DIM}We need to find your SSL certificate files to configure HTTPS properly.${NC}"
+                echo
+                
+                echo -e "${BOLD}${CYAN}💡 Common Enterprise Certificate Sources:${NC}"
+                echo
+                echo -e "${GREEN}Cloud Provider Managed:${NC}"
+                echo "  • Azure Key Vault exported certificates"
+                echo "  • AWS Certificate Manager exports"
+                echo "  • Google Cloud Certificate Manager"
+                echo
+                echo -e "${BLUE}Corporate/Internal CA:${NC}"  
+                echo "  • Internal Certificate Authority"
+                echo "  • Corporate PKI certificates"
+                echo "  • Domain-joined certificate stores"
+                echo
+                echo -e "${PURPLE}Commercial CA:${NC}"
+                echo "  • DigiCert, GlobalSign, Sectigo, etc."
+                echo "  • Wildcard certificates"
+                echo "  • Extended Validation (EV) certificates"
+                echo
+                echo -e "${YELLOW}Self-Managed:${NC}"
+                echo "  • Let's Encrypt (Certbot)"
+                echo "  • Self-signed for development"
+                echo
+                echo -e "${CYAN}📋 Supported Formats:${NC}"
+                echo "  • PEM format: certificate.pem + private-key.pem"
+                echo "  • Standard format: certificate.crt + private-key.key"
+                echo "  • Combined format: fullchain.pem + privkey.pem (Let's Encrypt)"
+                echo "  • PKCS#12: certificate.p12 or certificate.pfx (will be converted)"
+                echo
+                
+                # Show certificate directories if they exist
+                local common_paths=("/etc/ssl/certs" "/etc/pki/tls/certs" "/etc/letsencrypt/live" "/opt/certificates" "/var/ssl")
+                local found_paths=()
+                
+                for path in "${common_paths[@]}"; do
+                    if [[ -d "$path" ]] && [[ -n "$(ls -A "$path" 2>/dev/null)" ]]; then
+                        found_paths+=("$path")
+                    fi
+                done
+                
+                if [[ ${#found_paths[@]} -gt 0 ]]; then
+                    echo -e "${GREEN}💡 Found certificate directories on your system:${NC}"
+                    for path in "${found_paths[@]}"; do
+                        echo "  • $path"
+                    done
+                    echo
+                fi
+                
+                local cert_source=""
+                while true; do
+                    echo -ne "${BOLD}${GREEN}Enter certificate directory path${NC}: "
+                    read -r cert_source
+                    
+                    if [[ -z "$cert_source" ]]; then
+                        echo -e "${YELLOW}No path provided. Try again or press Ctrl+C to cancel.${NC}"
+                        continue
+                    fi
+                    
+                    # Expand tilde
+                    cert_source="${cert_source/#\~/$HOME}"
+                    
+                    if [[ ! -d "$cert_source" ]]; then
+                        echo -e "${RED}Directory not found: $cert_source${NC}"
+                        echo "Please check the path and try again."
+                        continue
+                    fi
+                    
+                    if [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
+                        echo -e "${YELLOW}Directory is empty: $cert_source${NC}"
+                        echo "Please choose a directory containing certificate files."
+                        continue
+                    fi
+                    
+                    echo -e "${GREEN}✓ Certificate directory found: $cert_source${NC}"
+                    echo
+                    
+                    # Show what certificate files were found
+                    echo -e "${CYAN}📂 Found certificate files:${NC}"
+                    local cert_files=($(ls "$cert_source"/*.{crt,key,pem,p12,pfx} 2>/dev/null || true))
+                    if [[ ${#cert_files[@]} -gt 0 ]]; then
+                        for file in "${cert_files[@]}"; do
+                            echo "  • $(basename "$file")"
+                        done
+                    else
+                        echo "  ${YELLOW}⚠️  No certificate files found (.crt, .key, .pem, .p12, .pfx)${NC}"
+                        echo "  Please ensure your certificate files are in this directory."
+                    fi
+                    echo
+                    
+                    if confirm "Use certificates from this directory?" "Y"; then
+                        # Store the certificate source for later use
+                        export MILOU_SSL_CERT_SOURCE="$cert_source"
+                        echo -e "${GREEN}✓ Certificate location configured!${NC}"
+                        echo -e "${DIM}   Certificates will be copied to Milou's SSL directory during setup.${NC}"
+                        break
+                    else
+                        echo "Please enter a different path."
+                        echo
+                    fi
+                done
+                echo
                 break
                 ;;
             3) 
@@ -1356,19 +1471,42 @@ setup_configure_ssl() {
     local ssl_mode="${SSL_MODE:-generate}"
     local domain="${DOMAIN:-localhost}"
     
+    # Load SSL module if not already loaded
+    if [[ "${MILOU_SSL_LOADED:-}" != "true" ]]; then
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        source "${script_dir}/_ssl.sh" || {
+            milou_log "ERROR" "Cannot load SSL module"
+            return 1
+        }
+    fi
+    
     case "$ssl_mode" in
         "generate")
             milou_log "INFO" "✓ Generating self-signed SSL certificates..."
-            # Use SSL module if available, otherwise basic generation
+            # Use SSL module for proper certificate generation
             if command -v ssl_generate_self_signed >/dev/null 2>&1; then
-                ssl_generate_self_signed "$domain"
+                ssl_generate_self_signed "$domain" "false" "false"
             else
                 setup_generate_basic_ssl_certificates "$domain"
             fi
             ;;
         "existing")
-            milou_log "INFO" "✓ Using existing SSL certificates..."
-            # Validation handled by config module
+            milou_log "INFO" "✓ Setting up existing SSL certificates..."
+            # Use the certificate source collected during interactive setup
+            local cert_source="${MILOU_SSL_CERT_SOURCE:-}"
+            
+            if [[ -z "$cert_source" ]]; then
+                milou_log "ERROR" "No certificate source specified for existing SSL mode"
+                return 1
+            fi
+            
+            # Simple, direct certificate setup without SSL module recursion
+            if setup_copy_existing_certificates "$domain" "$cert_source"; then
+                milou_log "SUCCESS" "✓ SSL certificates configured successfully"
+            else
+                milou_log "ERROR" "Failed to configure SSL certificates"
+                return 1
+            fi
             ;;
         "none")
             milou_log "INFO" "✓ SSL disabled - using HTTP only"
@@ -1415,6 +1553,118 @@ EOF
     chmod 644 "$ssl_dir/milou.crt"
     
     milou_log "SUCCESS" "✓ Self-signed SSL certificates generated"
+}
+
+# Copy existing certificates to Milou SSL directory
+setup_copy_existing_certificates() {
+    local domain="$1"
+    local cert_source="$2"
+    local ssl_dir="${SCRIPT_DIR:-$(pwd)}/ssl"
+    
+    milou_log "INFO" "📂 Copying certificates from: $cert_source"
+    
+    # Create SSL directory
+    ensure_directory "$ssl_dir" "755"
+    
+    # Backup existing certificates if they exist
+    if [[ -f "$ssl_dir/milou.crt" || -f "$ssl_dir/milou.key" ]]; then
+        local backup_dir="$ssl_dir/backup"
+        ensure_directory "$backup_dir" "755"
+        local timestamp=$(date +%Y%m%d_%H%M%S)
+        
+        [[ -f "$ssl_dir/milou.crt" ]] && cp "$ssl_dir/milou.crt" "$backup_dir/milou.crt.$timestamp"
+        [[ -f "$ssl_dir/milou.key" ]] && cp "$ssl_dir/milou.key" "$backup_dir/milou.key.$timestamp"
+        milou_log "INFO" "✓ Backed up existing certificates"
+    fi
+    
+    # Try to detect and copy certificate files based on common patterns
+    local cert_file=""
+    local key_file=""
+    local found_format=""
+    
+    # Pattern 1: Let's Encrypt format (fullchain.pem + privkey.pem)
+    if [[ -f "$cert_source/fullchain.pem" && -f "$cert_source/privkey.pem" ]]; then
+        cert_file="$cert_source/fullchain.pem"
+        key_file="$cert_source/privkey.pem"
+        found_format="Let's Encrypt"
+    
+    # Pattern 2: Standard PEM format (certificate.pem + private-key.pem or similar)
+    elif [[ -f "$cert_source/certificate.pem" && -f "$cert_source/private-key.pem" ]]; then
+        cert_file="$cert_source/certificate.pem"
+        key_file="$cert_source/private-key.pem"
+        found_format="PEM"
+    elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/key.pem" ]]; then
+        cert_file="$cert_source/cert.pem"
+        key_file="$cert_source/key.pem"
+        found_format="PEM"
+    
+    # Pattern 3: Standard CRT format (certificate.crt + private-key.key or similar)
+    elif [[ -f "$cert_source/certificate.crt" && -f "$cert_source/private-key.key" ]]; then
+        cert_file="$cert_source/certificate.crt"
+        key_file="$cert_source/private-key.key"
+        found_format="CRT/KEY"
+    elif [[ -f "$cert_source/$domain.crt" && -f "$cert_source/$domain.key" ]]; then
+        cert_file="$cert_source/$domain.crt"
+        key_file="$cert_source/$domain.key"
+        found_format="Domain-named CRT/KEY"
+    
+    # Pattern 4: Generic patterns - find any .crt/.pem with corresponding .key
+    else
+        # Look for any certificate file
+        local cert_candidates=($(ls "$cert_source"/*.{crt,pem} 2>/dev/null | grep -v key || true))
+        local key_candidates=($(ls "$cert_source"/*.{key,pem} 2>/dev/null | grep -E "(key|private)" || true))
+        
+        if [[ ${#cert_candidates[@]} -gt 0 && ${#key_candidates[@]} -gt 0 ]]; then
+            cert_file="${cert_candidates[0]}"
+            key_file="${key_candidates[0]}"
+            found_format="Auto-detected"
+        fi
+    fi
+    
+    # If we found certificate files, copy them
+    if [[ -n "$cert_file" && -n "$key_file" ]]; then
+        milou_log "INFO" "✓ Found $found_format format certificates"
+        milou_log "INFO" "  Certificate: $(basename "$cert_file")"
+        milou_log "INFO" "  Private Key: $(basename "$key_file")"
+        
+        # Copy and set permissions
+        if cp "$cert_file" "$ssl_dir/milou.crt" && cp "$key_file" "$ssl_dir/milou.key"; then
+            chmod 644 "$ssl_dir/milou.crt"
+            chmod 600 "$ssl_dir/milou.key"
+            
+            # Validate the certificates
+            if openssl x509 -in "$ssl_dir/milou.crt" -noout -text >/dev/null 2>&1; then
+                milou_log "SUCCESS" "✓ SSL certificates successfully copied and validated"
+                
+                # Show certificate info
+                local cert_subject=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -subject 2>/dev/null | cut -d= -f2- || echo "Unknown")
+                local cert_expires=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+                milou_log "INFO" "  Subject: $cert_subject"
+                milou_log "INFO" "  Expires: $cert_expires"
+                
+                return 0
+            else
+                milou_log "ERROR" "Certificate validation failed - invalid certificate format"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "Failed to copy certificate files"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "Could not find valid certificate files in: $cert_source"
+        milou_log "INFO" "Expected formats:"
+        milou_log "INFO" "  • fullchain.pem + privkey.pem (Let's Encrypt)"
+        milou_log "INFO" "  • certificate.pem + private-key.pem"
+        milou_log "INFO" "  • certificate.crt + private-key.key"
+        milou_log "INFO" "  • $domain.crt + $domain.key"
+        
+        # List what we actually found
+        milou_log "INFO" "Files in directory:"
+        ls -la "$cert_source" | grep -E '\.(crt|key|pem|p12|pfx)$' | sed 's/^/    /' || true
+        
+        return 1
+    fi
 }
 
 # Prepare Docker environment

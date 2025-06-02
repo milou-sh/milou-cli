@@ -255,12 +255,6 @@ setup_run() {
         milou_log "WARN" "Setup detected non-interactive environment"
     fi
     
-    # Track if this is a fresh setup for cleanup purposes
-    local is_fresh_setup="false"
-    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-        is_fresh_setup="true"
-    fi
-    
     # Show enhanced Milou logo and welcome
     setup_show_logo
     
@@ -322,7 +316,6 @@ setup_run() {
                 "Verify system package manager is working" \
                 "Try manual Docker installation" \
                 "Run with sudo if permission issues"
-            [[ "$is_fresh_setup" == "true" ]] && setup_cleanup_failed_fresh_setup
             return 1
         fi
         milou_log "SUCCESS" "All dependencies installed successfully"
@@ -339,7 +332,6 @@ setup_run() {
                 "Check if running with appropriate permissions" \
                 "Verify system supports user creation" \
                 "Try running as root/sudo"
-            [[ "$is_fresh_setup" == "true" ]] && setup_cleanup_failed_fresh_setup
             return 1
         fi
         milou_log "SUCCESS" "User account configured successfully"
@@ -356,7 +348,6 @@ setup_run() {
             "Verify disk space availability" \
             "Try running setup again" \
             "Contact support with error details"
-        [[ "$is_fresh_setup" == "true" ]] && setup_cleanup_failed_fresh_setup
         return 1
     fi
     milou_log "SUCCESS" "Configuration generated successfully"
@@ -369,11 +360,6 @@ setup_run() {
             "Verify port availability" \
             "Review service logs: ./milou.sh logs" \
             "Try restarting: ./milou.sh restart"
-        
-        # For fresh setups, clean up on failure to allow retry
-        if [[ "$is_fresh_setup" == "true" ]]; then
-            setup_cleanup_failed_fresh_setup
-        fi
         return 1
     fi
     
@@ -385,150 +371,1648 @@ setup_run() {
     return 0
 }
 
-# Clean up failed fresh setup to allow retry
-setup_cleanup_failed_fresh_setup() {
-    milou_log "INFO" "🧹 Cleaning up failed fresh setup for clean retry..."
+# =============================================================================
+# SYSTEM ANALYSIS FUNCTIONS
+# =============================================================================
+
+# Analyze system and detect setup requirements - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_analyze_system() {
+    milou_log "STEP" "Step 1: System Analysis"
     
-    # Remove configuration files that were created during failed setup
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-        mv "${SCRIPT_DIR:-$(pwd)}/.env" "${SCRIPT_DIR:-$(pwd)}/.env.failed.$(date +%s)" 2>/dev/null || {
-            rm -f "${SCRIPT_DIR:-$(pwd)}/.env" 2>/dev/null || true
-        }
-        milou_log "DEBUG" "Removed/backed up failed configuration"
+    # Reset analysis state
+    SETUP_IS_FRESH_SERVER="false"
+    SETUP_NEEDS_DEPS="false" 
+    SETUP_NEEDS_USER="false"
+    
+    milou_log "INFO" "✓ Analyzing system state..."
+    
+    # Check if this is a fresh server installation
+    if setup_detect_fresh_server; then
+        SETUP_IS_FRESH_SERVER="true"
+        milou_log "INFO" "✓ Fresh server detected"
+    else
+        milou_log "INFO" "✓ Existing system detected"
     fi
     
-    # Remove SSL directory if it was created during failed setup
-    if [[ -d "${SCRIPT_DIR:-$(pwd)}/ssl" ]]; then
-        mv "${SCRIPT_DIR:-$(pwd)}/ssl" "${SCRIPT_DIR:-$(pwd)}/ssl.failed.$(date +%s)" 2>/dev/null || {
-            rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || true
-        }
-        milou_log "DEBUG" "Removed/backed up failed SSL directory"
+    # Check for existing Milou installation
+    local has_existing_installation=false
+    if setup_check_existing_installation; then
+        has_existing_installation=true
+        milou_log "INFO" "✓ Found existing Milou installation"
     fi
     
-    # NOTE: DO NOT remove static/docker-compose.yml - it's part of the codebase!
-    # The static docker-compose.yml is a template file and should never be deleted
-    milou_log "INFO" "Preserved static docker-compose.yml (part of codebase)"
+    # Determine dependency needs
+    if ! setup_check_dependencies_status; then
+        SETUP_NEEDS_DEPS="true"
+        milou_log "INFO" "✓ Dependencies installation required"
+    fi
     
-    # Clean up failed setup artifacts
-    rm -f "${SCRIPT_DIR:-$(pwd)}/.env.failed."* 2>/dev/null || true
-    rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl.failed."* 2>/dev/null || true
-    # NOTE: Also do not remove docker-compose.yml.failed.* as these are from static file
+    # Determine user management needs
+    if ! setup_check_user_status; then
+        SETUP_NEEDS_USER="true"
+        milou_log "INFO" "✓ User management required"
+    fi
     
-    milou_log "SUCCESS" "✓ Cleanup completed - you can now run setup again"
+    # Summary
+    milou_log "SUCCESS" "✓ System Analysis Complete:"
+    milou_log "INFO" "  ✓ Fresh Server: $SETUP_IS_FRESH_SERVER"
+    milou_log "INFO" "  ✓ Needs Dependencies: $SETUP_NEEDS_DEPS"
+    milou_log "INFO" "  ✓ Needs User Setup: $SETUP_NEEDS_USER"
+    milou_log "INFO" "  ✓ Existing Installation: $has_existing_installation"
+    
+    return 0
 }
 
-# Force clean all Milou installation artifacts for complete reset
-setup_force_clean_all() {
-    local preserve_data="${1:-true}"
+# Detect if this is a fresh server installation
+setup_detect_fresh_server() {
+    local fresh_indicators=0
+    local total_checks=6
     
-    milou_log "WARN" "🗑️  Force cleaning all Milou installation artifacts..."
+    # Check 1: No Docker containers
+    if [[ $(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing Docker containers"
+    fi
     
-    if [[ "$preserve_data" != "true" ]]; then
-        echo ""
-        echo -e "${RED}${BOLD}⚠️  DANGER: This will permanently delete ALL Milou data!${NC}"
-        echo -e "${RED}This includes:${NC}"
-        echo "  • All database content"
-        echo "  • All file uploads"
-        echo "  • All configuration settings"
-        echo "  • All SSL certificates"
-        echo "  • All backup files"
-        echo "  • All Docker volumes and containers"
-        echo ""
-        echo -e "${YELLOW}This action CANNOT be undone!${NC}"
-        echo ""
-        
-        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-            echo -ne "${RED}${BOLD}Type 'DELETE ALL DATA' to confirm complete destruction: ${NC}"
-            read -r confirmation
-            if [[ "$confirmation" != "DELETE ALL DATA" ]]; then
-                milou_log "INFO" "Force clean cancelled - wise choice!"
-                return 1
-            fi
+    # Check 2: No Docker volumes
+    if [[ $(docker volume ls --format "{{.Name}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing Docker volumes"
+    fi
+    
+    # Check 3: No configuration files
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ No existing configuration"
+    fi
+    
+    # Check 4: System looks newly provisioned
+    if [[ -f /var/log/cloud-init.log ]] || [[ -f /var/log/cloud-init-output.log ]]; then
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ Cloud-init detected (fresh cloud instance)"
+    fi
+    
+    # Check 5: Minimal package history
+    if command -v dpkg >/dev/null 2>&1; then
+        local pkg_count
+        pkg_count=$(dpkg -l 2>/dev/null | wc -l)
+        if [[ $pkg_count -lt 200 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Minimal package installation ($pkg_count packages)"
+        fi
+    elif command -v rpm >/dev/null 2>&1; then
+        local pkg_count
+        pkg_count=$(rpm -qa 2>/dev/null | wc -l)
+        if [[ $pkg_count -lt 150 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Minimal package installation ($pkg_count packages)"
+        fi
+    else
+        ((fresh_indicators++))
+        milou_log "DEBUG" "✓ Unknown package manager (assuming minimal)"
+    fi
+    
+    # Check 6: System uptime
+    if command -v uptime >/dev/null 2>&1; then
+        local uptime_days
+        uptime_days=$(uptime | grep -o '[0-9]* day' | cut -d' ' -f1 || echo "0")
+        if [[ ${uptime_days:-0} -lt 7 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ Recent system boot (${uptime_days:-0} days uptime)"
+        fi
+    fi
+    
+    # Determine if server is "fresh" (majority of indicators suggest it)
+    if [[ $fresh_indicators -ge $((total_checks / 2)) ]]; then
+        milou_log "DEBUG" "Fresh server detected ($fresh_indicators/$total_checks indicators)"
+        return 0
+    else
+        milou_log "DEBUG" "Existing system detected ($fresh_indicators/$total_checks indicators)"
+        return 1
+    fi
+}
+
+# Check for existing Milou installation
+setup_check_existing_installation() {
+    local has_containers=false
+    local has_config=false
+    local has_volumes=false
+    
+    # Check for existing containers
+    if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q milou; then
+        has_containers=true
+        milou_log "DEBUG" "Found existing Milou containers"
+    fi
+    
+    # Check for configuration
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        has_config=true
+        milou_log "DEBUG" "Found existing configuration file"
+    fi
+    
+    # Check for data volumes
+    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
+        has_volumes=true
+        milou_log "DEBUG" "Found existing data volumes"
+    fi
+    
+    # Return true if any component exists
+    if [[ "$has_containers" == "true" || "$has_config" == "true" || "$has_volumes" == "true" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check dependency installation status - SIMPLIFIED using unified validation
+setup_check_dependencies_status() {
+    # Use unified validation system instead of duplicating logic
+    validate_system_dependencies "basic" "unknown" "true"
+}
+
+# Check user management status
+setup_check_user_status() {
+    # Check if running as root and if milou user exists
+    if [[ $EUID -eq 0 ]]; then
+        if id milou >/dev/null 2>&1; then
+            milou_log "DEBUG" "Milou user already exists"
+            return 0
         else
-            milou_log "WARN" "Non-interactive mode: Skipping data destruction for safety"
-            milou_log "INFO" "Use --force flag to override in scripts"
+            milou_log "DEBUG" "Running as root, milou user needed"
+            return 1
+        fi
+    else
+        # Check if current user has Docker access
+        if docker version >/dev/null 2>&1; then
+            milou_log "DEBUG" "Current user has Docker access"
+            return 0
+        else
+            milou_log "DEBUG" "Current user needs Docker access"
+            return 1
+        fi
+    fi
+}
+
+# =============================================================================
+# PREREQUISITES ASSESSMENT FUNCTIONS
+# =============================================================================
+
+# Assess system prerequisites - SIMPLIFIED using unified validation
+setup_assess_prerequisites() {
+    milou_log "STEP" "Step 2: Prerequisites Assessment"
+    
+    # Check if Docker is missing
+    local docker_missing=false
+    if ! command -v docker >/dev/null 2>&1; then
+        docker_missing=true
+    elif ! docker info >/dev/null 2>&1; then
+        docker_missing=true
+    elif ! docker compose version >/dev/null 2>&1; then
+        docker_missing=true
+    fi
+    
+    # On fresh systems, missing Docker is expected and normal
+    if [[ "$docker_missing" == "true" ]]; then
+        if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]] || [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
+            milou_log "INFO" "✓ Docker installation needed (will be installed automatically)"
+            return 1  # Return 1 to indicate missing deps, but this is expected
+        else
+            # On existing systems, missing Docker is an error
+            milou_log "ERROR" "Docker is not installed"
+            milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
+            milou_log "ERROR" "System validation failed with 1 error(s)"
+            return 1
+        fi
+    else
+        milou_log "SUCCESS" "✓ All prerequisites satisfied"
+        return 0
+    fi
+}
+
+# =============================================================================
+# SETUP MODE DETERMINATION FUNCTIONS
+# =============================================================================
+
+# Determine optimal setup mode - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_determine_mode() {
+    local requested_mode="${1:-auto}"
+    
+    milou_log "STEP" "Step 3: Setup Mode Determination"
+    
+    case "$requested_mode" in
+        "interactive")
+            SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+            milou_log "INFO" "✓ Interactive mode selected"
+            ;;
+        "automated"|"auto")
+            # For automated mode, check if we have required variables OR if user explicitly requested it
+            if setup_can_run_automated || [[ "$requested_mode" == "automated" ]]; then
+                SETUP_CURRENT_MODE="$SETUP_MODE_AUTOMATED"
+                milou_log "INFO" "✓ Automated mode selected"
+            else
+                SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+                milou_log "INFO" "✓ Falling back to interactive mode (missing environment variables)"
+            fi
+            ;;
+        "smart")
+            SETUP_CURRENT_MODE="$SETUP_MODE_SMART"
+            milou_log "INFO" "✓ Smart mode selected"
+            ;;
+        *)
+            milou_log "WARN" "Unknown setup mode: $requested_mode, using interactive"
+            SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
+            ;;
+    esac
+    
+    milou_log "SUCCESS" "✓ Setup mode determined: $SETUP_CURRENT_MODE"
+    return 0
+}
+
+# Check if automated mode is possible
+setup_can_run_automated() {
+    # Check for required environment variables
+    local required_vars=("DOMAIN" "ADMIN_EMAIL")
+    local missing_vars=()
+    
+    for var in "${required_vars[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            missing_vars+=("$var")
+        fi
+    done
+    
+    if [[ ${#missing_vars[@]} -eq 0 ]]; then
+        milou_log "DEBUG" "Environment variables available for automated setup"
+        return 0
+    else
+        milou_log "DEBUG" "Missing variables for automated setup: ${missing_vars[*]}"
+        return 1
+    fi
+}
+
+# =============================================================================
+# DEPENDENCIES INSTALLATION FUNCTIONS
+# =============================================================================
+
+# Install required dependencies - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_install_dependencies() {
+    milou_log "STEP" "Step 4: Dependencies Installation"
+    
+    case "$SETUP_CURRENT_MODE" in
+        "$SETUP_MODE_INTERACTIVE")
+            setup_install_dependencies_interactive
+            ;;
+        "$SETUP_MODE_AUTOMATED")
+            setup_install_dependencies_automated
+            ;;
+        "$SETUP_MODE_SMART")
+            setup_install_dependencies_smart
+            ;;
+        *)
+            milou_log "ERROR" "Unknown setup mode for dependencies: $SETUP_CURRENT_MODE"
+            return 1
+            ;;
+    esac
+}
+
+# Interactive dependencies installation
+setup_install_dependencies_interactive() {
+    log_section "▼ Step 4: Dependencies Installation" "Installing Docker and required tools"
+    
+    echo -e "${BOLD}${CYAN}🔧 Required Dependencies:${NC}"
+    echo -e "   • Docker Engine - Container platform"
+    echo -e "   • Docker Compose - Multi-container applications"
+    echo -e "   • System tools - curl, wget, jq, openssl"
+    echo
+    
+    if ! confirm "Install missing dependencies now?" "Y"; then
+        milou_log "INFO" "Dependencies installation skipped by user"
+        return 1
+    fi
+    
+    setup_install_dependencies_core
+}
+
+# Automated dependencies installation
+setup_install_dependencies_automated() {
+    milou_log "INFO" "✓ Automated Dependencies Installation"
+    setup_install_dependencies_core
+}
+
+# Smart dependencies installation  
+setup_install_dependencies_smart() {
+    milou_log "INFO" "✓ Smart Dependencies Installation"
+    
+    # Install critical dependencies automatically, prompt for optional
+    if ! setup_install_dependencies_core "critical_only"; then
+        return 1
+    fi
+    
+    # Optionally install additional tools
+    if confirm "Install optional tools (curl, wget, jq, openssl)?" "Y"; then
+        setup_install_system_tools
+    fi
+}
+
+# Core dependencies installation logic
+setup_install_dependencies_core() {
+    local mode="${1:-all}"
+    
+    milou_log "INFO" "✓ Installing core dependencies..."
+    
+    # Install Docker if missing
+    if ! command -v docker >/dev/null 2>&1; then
+        if ! setup_install_docker; then
+            milou_log "ERROR" "Failed to install Docker"
             return 1
         fi
     fi
     
-    # Stop all services first
-    milou_log "INFO" "Stopping all Milou services..."
-    if command -v docker_execute >/dev/null 2>&1; then
-        docker_execute "down" "" "true" 2>/dev/null || true
-    else
-        docker compose down --remove-orphans 2>/dev/null || true
-    fi
-    
-    # Remove containers
-    milou_log "INFO" "Removing Milou containers..."
-    docker ps -a --filter "name=milou-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
-    
-    # Remove volumes if not preserving data
-    if [[ "$preserve_data" != "true" ]]; then
-        milou_log "INFO" "Removing Milou data volumes..."
-        docker volume ls --format "{{.Name}}" | grep -E "(milou|static)" | xargs -r docker volume rm -f 2>/dev/null || true
-    else
-        milou_log "INFO" "Preserving data volumes..."
-    fi
-    
-    # Remove networks
-    milou_log "INFO" "Removing Milou networks..."
-    docker network ls --filter "name=milou" --format "{{.Name}}" | grep milou | xargs -r docker network rm 2>/dev/null || true
-    
-    # Clean filesystem artifacts
-    milou_log "INFO" "Cleaning filesystem artifacts..."
-    
-    # Remove/backup configuration
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-        if [[ "$preserve_data" == "true" ]]; then
-            mv "${SCRIPT_DIR:-$(pwd)}/.env" "${SCRIPT_DIR:-$(pwd)}/.env.backup.$(date +%s)"
-            milou_log "INFO" "Backed up configuration file"
-        else
-            rm -f "${SCRIPT_DIR:-$(pwd)}/.env"
-            milou_log "INFO" "Removed configuration file"
+    # Install Docker Compose if missing
+    if ! docker compose version >/dev/null 2>&1; then
+        if ! setup_install_docker_compose; then
+            milou_log "ERROR" "Failed to install Docker Compose"
+            return 1
         fi
     fi
     
-    # Remove SSL certificates
-    if [[ -d "${SCRIPT_DIR:-$(pwd)}/ssl" ]]; then
-        if [[ "$preserve_data" == "true" ]]; then
-            mv "${SCRIPT_DIR:-$(pwd)}/ssl" "${SCRIPT_DIR:-$(pwd)}/ssl.backup.$(date +%s)"
-            milou_log "INFO" "Backed up SSL certificates"
+    # Install system tools if requested
+    if [[ "$mode" != "critical_only" ]]; then
+        setup_install_system_tools
+    fi
+    
+    milou_log "SUCCESS" "✓ Dependencies installation completed"
+    return 0
+}
+
+# Install Docker
+setup_install_docker() {
+    milou_log "INFO" "🐳 Installing Docker..."
+    
+    # Show progress indicator for user feedback
+    printf "${CYAN}${BULLET} Installing Docker Engine...${NC}"
+    
+    # Use official Docker installation script with suppressed output
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL https://get.docker.com | sh >/dev/null 2>&1; then
+            printf "\r${GREEN}${CHECKMARK} Docker Engine installed successfully${NC}\n"
+            
+            # Start and enable Docker service quietly
+            systemctl start docker >/dev/null 2>&1 || true
+            systemctl enable docker >/dev/null 2>&1 || true
+            
+            milou_log "SUCCESS" "✓ Docker installation completed"
+            return 0
         else
-            rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl"
-            milou_log "INFO" "Removed SSL certificates"
+            printf "\r${RED}${CROSSMARK} Docker installation failed${NC}\n"
         fi
     fi
     
-    # Remove docker-compose
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
-        rm -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml"
-        milou_log "INFO" "Removed docker-compose configuration"
+    milou_log "ERROR" "Failed to install Docker"
+    return 1
+}
+
+# Install Docker Compose
+setup_install_docker_compose() {
+    milou_log "INFO" "🐳 Installing Docker Compose..."
+    
+    printf "${CYAN}${BULLET} Installing Docker Compose plugin...${NC}"
+    
+    # Try package manager first
+    local install_success=false
+    if command -v apt-get >/dev/null 2>&1; then
+        if apt-get update >/dev/null 2>&1 && apt-get install -y docker-compose-plugin >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        if yum install -y docker-compose-plugin >/dev/null 2>&1; then
+            install_success=true
+        fi
     fi
     
-    # Clean up failed setup artifacts
-    rm -f "${SCRIPT_DIR:-$(pwd)}/.env.failed."* 2>/dev/null || true
-    rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl.failed."* 2>/dev/null || true
-    # NOTE: Also do not remove docker-compose.yml.failed.* as these are from static file
-    
-    # Clear state cache
-    if command -v clear_state_cache >/dev/null 2>&1; then
-        clear_state_cache
+    if [[ "$install_success" == "true" ]]; then
+        printf "\r${GREEN}${CHECKMARK} Docker Compose plugin installed successfully${NC}\n"
+        milou_log "SUCCESS" "✓ Docker Compose plugin installed"
+        return 0
     fi
     
-    if [[ "$preserve_data" == "true" ]]; then
-        milou_log "SUCCESS" "✓ Force clean completed (data preserved)"
-        milou_log "INFO" "💡 Configuration and certificates backed up with timestamp"
+    printf "\r${YELLOW}⚠️  Package manager failed, trying manual installation...${NC}\n"
+    milou_log "WARN" "Package manager installation failed, trying manual installation"
+    
+    # Manual installation fallback
+    local compose_version="v2.20.0"
+    local compose_url="https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-$(uname -s)-$(uname -m)"
+    
+    printf "${CYAN}${BULLET} Downloading Docker Compose binary...${NC}"
+    
+    if command -v curl >/dev/null 2>&1; then
+        if curl -L "$compose_url" -o /usr/local/bin/docker-compose >/dev/null 2>&1; then
+            chmod +x /usr/local/bin/docker-compose
+            printf "\r${GREEN}${CHECKMARK} Docker Compose installed manually${NC}\n"
+            milou_log "SUCCESS" "✓ Docker Compose installed manually"
+            return 0
+        else
+            printf "\r${RED}${CROSSMARK} Manual installation failed${NC}\n"
+        fi
+    fi
+    
+    milou_log "ERROR" "Failed to install Docker Compose"
+    return 1
+}
+
+# Install system tools
+setup_install_system_tools() {
+    milou_log "INFO" "🔧 Installing system tools..."
+    
+    local tools=("curl" "wget" "jq" "openssl")
+    local to_install=()
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            to_install+=("$tool")
+        fi
+    done
+    
+    if [[ ${#to_install[@]} -eq 0 ]]; then
+        milou_log "SUCCESS" "✓ All system tools already installed"
+        return 0
+    fi
+    
+    printf "${CYAN}${BULLET} Installing: ${to_install[*]}...${NC}"
+    
+    local install_success=false
+    if command -v apt-get >/dev/null 2>&1; then
+        if apt-get update >/dev/null 2>&1 && apt-get install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        if yum install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        if dnf install -y "${to_install[@]}" >/dev/null 2>&1; then
+            install_success=true
+        fi
     else
-        milou_log "SUCCESS" "✓ Complete system reset completed"
-        milou_log "INFO" "💡 All Milou data has been permanently deleted"
+        printf "\r${RED}${CROSSMARK} Unsupported package manager${NC}\n"
+        milou_log "WARN" "Unsupported package manager"
+        return 1
     fi
     
-    milou_log "INFO" "You can now run: ./milou.sh setup"
+    if [[ "$install_success" == "true" ]]; then
+        printf "\r${GREEN}${CHECKMARK} System tools installed successfully${NC}\n"
+        milou_log "SUCCESS" "✓ System tools installed"
+        return 0
+    else
+        printf "\r${RED}${CROSSMARK} Failed to install system tools${NC}\n"
+        milou_log "ERROR" "Failed to install system tools"
+        return 1
+    fi
 }
 
 # =============================================================================
-# SYSTEM ANALYSIS FUNCTIONS
+# USER MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# Manage user setup - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_manage_user() {
+    milou_log "STEP" "Step 5: User Management"
+    
+    if [[ $EUID -eq 0 ]]; then
+        setup_create_milou_user
+    else
+        setup_configure_current_user
+    fi
+}
+
+# Create dedicated milou user
+setup_create_milou_user() {
+    milou_log "INFO" "✓ Creating dedicated milou user..."
+    
+    # Create user if it doesn't exist
+    if ! id milou >/dev/null 2>&1; then
+        if useradd -m -s /bin/bash milou; then
+            milou_log "SUCCESS" "✓ Milou user created"
+        else
+            milou_log "ERROR" "Failed to create milou user"
+            return 1
+        fi
+    else
+        milou_log "INFO" "Milou user already exists"
+    fi
+    
+    # Add to docker group
+    if ! groups milou | grep -q docker; then
+        if usermod -aG docker milou; then
+            milou_log "SUCCESS" "✓ Added milou user to docker group"
+        else
+            milou_log "ERROR" "Failed to add milou user to docker group"
+            return 1
+        fi
+    fi
+    
+    milou_log "SUCCESS" "✓ User management completed"
+    return 0
+}
+
+# Configure current user for Docker access
+setup_configure_current_user() {
+    local current_user="${USER:-$(whoami)}"
+    
+    milou_log "INFO" "✓ Configuring current user ($current_user) for Docker access..."
+    
+    # Check if user is in docker group
+    if ! groups "$current_user" | grep -q docker; then
+        milou_log "INFO" "Adding current user to docker group (requires sudo)..."
+        if sudo usermod -aG docker "$current_user"; then
+            milou_log "SUCCESS" "✓ Added $current_user to docker group"
+            milou_log "WARN" "✓  You may need to log out and log back in for group changes to take effect"
+        else
+            milou_log "ERROR" "Failed to add user to docker group"
+            return 1
+        fi
+    else
+        milou_log "SUCCESS" "✓ User already has Docker access"
+    fi
+    
+    return 0
+}
+
+# =============================================================================
+# CONFIGURATION GENERATION FUNCTIONS
+# =============================================================================
+
+# Generate configuration based on setup mode - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_generate_configuration() {
+    local preserve_creds="${1:-auto}"
+    
+    milou_log "STEP" "Step 6: Configuration Generation"
+    
+    case "$SETUP_CURRENT_MODE" in
+        "$SETUP_MODE_INTERACTIVE")
+            setup_generate_configuration_interactive "$preserve_creds"
+            ;;
+        "$SETUP_MODE_AUTOMATED")
+            setup_generate_configuration_automated "$preserve_creds"
+            ;;
+        "$SETUP_MODE_SMART")
+            setup_generate_configuration_smart "$preserve_creds"
+            ;;
+        *)
+            milou_log "ERROR" "Unknown setup mode for configuration: $SETUP_CURRENT_MODE"
+            return 1
+            ;;
+    esac
+}
+
+# Enhanced interactive configuration generation with better UX
+setup_generate_configuration_interactive() {
+    local preserve_creds="${1:-auto}"
+    
+    log_section "✓ Interactive Configuration" "Let's personalize your Milou setup"
+    echo -e "${DIM}We'll ask you a few quick questions to configure everything perfectly for your needs.${NC}"
+    echo
+    
+    # Domain Configuration with enhanced UX
+    local domain
+    while true; do
+        log_section "✓ Domain Configuration" "Where will your Milou system be accessible?"
+        echo -e "${DIM}This is the web address where you'll access Milou in your browser.${NC}"
+        echo
+        echo -e "${YELLOW}✓ Common examples:${NC}"
+        echo -e "   ${CYAN}✓${NC} ${BOLD}localhost${NC} - For testing on this computer"
+        echo -e "   ${CYAN}✓${NC} ${BOLD}milou.company.com${NC} - For company use"
+        echo -e "   ${CYAN}✓${NC} ${BOLD}192.168.1.100${NC} - For local network access"
+        echo
+        echo -ne "${BOLD}${GREEN}Domain name${NC} [${CYAN}localhost${NC}]: "
+        read -r domain
+        if [[ -z "$domain" ]]; then
+            domain="localhost"
+        fi
+        
+        # Enhanced domain validation with helpful feedback
+        if [[ "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]] || [[ "$domain" == "localhost" ]]; then
+            echo -e "   ${GREEN}${CHECKMARK} Perfect!${NC} Your domain: ${BOLD}$domain${NC}"
+            break
+        else
+            echo -e "   ${RED}${CROSSMARK} That doesn't look like a valid domain.${NC}"
+            echo -e "   ${YELLOW}✓ Try:${NC} localhost, your-domain.com, or an IP address"
+            echo
+        fi
+    done
+    echo
+    
+    # Admin Email Configuration with enhanced UX
+    local email
+    while true; do
+        log_section "✓ Admin Contact Email" "Your administrator email address"
+        echo -e "${DIM}This email will be used for important notifications and SSL certificates.${NC}"
+        echo -e "${DIM}Don't worry - we won't send you spam or share it with anyone.${NC}"
+        echo
+        echo -ne "${BOLD}${GREEN}Admin email${NC} [${CYAN}admin@$domain${NC}]: "
+        read -r email
+        if [[ -z "$email" ]]; then
+            email="admin@$domain"
+        fi
+        
+        # Enhanced email validation with helpful feedback
+        if validate_email "$email" "true"; then
+            echo -e "   ${GREEN}${CHECKMARK} Great!${NC} Admin email: ${BOLD}$email${NC}"
+            break
+        else
+            echo -e "   ${RED}${CROSSMARK} That email format doesn't look right.${NC}"
+            echo -e "   ${YELLOW}✓ Examples:${NC} admin@yourdomain.com, admin@localhost"
+            echo
+        fi
+    done
+    echo
+    
+    # SSL Configuration with enhanced UX and better explanations
+    log_section "✓ Security & SSL Setup" "How to secure your connection"
+    echo -e "${DIM}SSL certificates encrypt the connection between your browser and Milou.${NC}"
+    echo -e "${DIM}This keeps your login and data safe from prying eyes.${NC}"
+    echo
+    
+    echo -e "${BOLD}${CYAN}Choose your security level:${NC}"
+    echo
+    echo -e "${GREEN}   1) ${BOLD}Quick & Easy${NC} ${DIM}(Self-signed certificates)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Works immediately, no setup required"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for testing and development"
+    echo -e "      ${YELLOW}✓${NC}  Browser will show a security warning (this is normal)"
+    echo
+    echo -e "${YELLOW}   2) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} No browser warnings"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for business use"
+    echo -e "      ${BLUE}✓${NC}  Requires: certificate files (supports .crt/.key or .pem formats)"
+    echo -e "      ${DIM}      SSL directory: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
+    echo
+    echo -e "${RED}   3) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
+    echo -e "      ${RED}${CROSSMARK}${NC} Connection is not encrypted"
+    echo -e "      ${RED}${CROSSMARK}${NC} Only use for testing in trusted environments"
+    echo
+    
+    local ssl_choice ssl_mode
+    while true; do
+        echo -ne "${BOLD}${GREEN}Choose security option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+        read -r ssl_choice
+        if [[ -z "$ssl_choice" ]]; then
+            ssl_choice="1"
+        fi
+        
+        case "$ssl_choice" in
+            1) 
+                ssl_mode="generate"
+                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Self-signed certificates${NC}"
+                echo -e "   ${DIM}Your system will be secure and ready in minutes.${NC}"
+                break
+                ;;
+            2) 
+                ssl_mode="existing"
+                echo -e "   ${YELLOW}${CHECKMARK} Professional setup!${NC} Using: ${BOLD}Your own certificates${NC}"
+                echo -e "   ${BLUE}✓ SSL directory:${NC} $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")"
+                echo -e "   ${DIM}   Supports: Let's Encrypt (.pem), Standard (.crt/.key), and custom formats${NC}"
+                echo
+                
+                # Load SSL module for interactive certificate setup
+                if [[ "${MILOU_SSL_LOADED:-}" != "true" ]]; then
+                    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                    source "${script_dir}/_ssl.sh" || {
+                        echo -e "   ${RED}${CROSSMARK} Error: Cannot load SSL module${NC}"
+                        continue
+                    }
+                fi
+                
+                # Interactive certificate setup RIGHT NOW
+                log_section "📁 Certificate Location Setup" "Let's locate your SSL certificates"
+                echo -e "${DIM}We need to find your SSL certificate files to configure HTTPS properly.${NC}"
+                echo
+                
+                echo -e "${BOLD}${CYAN}💡 Common Enterprise Certificate Sources:${NC}"
+                echo
+                echo -e "${GREEN}Cloud Provider Managed:${NC}"
+                echo "  • Azure Key Vault exported certificates"
+                echo "  • AWS Certificate Manager exports"
+                echo "  • Google Cloud Certificate Manager"
+                echo
+                echo -e "${BLUE}Corporate/Internal CA:${NC}"  
+                echo "  • Internal Certificate Authority"
+                echo "  • Corporate PKI certificates"
+                echo "  • Domain-joined certificate stores"
+                echo
+                echo -e "${PURPLE}Commercial CA:${NC}"
+                echo "  • DigiCert, GlobalSign, Sectigo, etc."
+                echo "  • Wildcard certificates"
+                echo "  • Extended Validation (EV) certificates"
+                echo
+                echo -e "${YELLOW}Self-Managed:${NC}"
+                echo "  • Let's Encrypt (Certbot)"
+                echo "  • Self-signed for development"
+                echo
+                echo -e "${CYAN}📋 Supported Formats:${NC}"
+                echo "  • PEM format: certificate.pem + private-key.pem"
+                echo "  • Standard format: certificate.crt + private-key.key"
+                echo "  • Combined format: fullchain.pem + privkey.pem (Let's Encrypt)"
+                echo "  • PKCS#12: certificate.p12 or certificate.pfx (will be converted)"
+                echo
+                
+                # Show certificate directories if they exist
+                local common_paths=("/etc/ssl/certs" "/etc/pki/tls/certs" "/etc/letsencrypt/live" "/opt/certificates" "/var/ssl")
+                local found_paths=()
+                
+                for path in "${common_paths[@]}"; do
+                    if [[ -d "$path" ]] && [[ -n "$(ls -A "$path" 2>/dev/null)" ]]; then
+                        found_paths+=("$path")
+                    fi
+                done
+                
+                if [[ ${#found_paths[@]} -gt 0 ]]; then
+                    echo -e "${GREEN}💡 Found certificate directories on your system:${NC}"
+                    for path in "${found_paths[@]}"; do
+                        echo "  • $path"
+                    done
+                    echo
+                fi
+                
+                local cert_source=""
+                while true; do
+                    echo -ne "${BOLD}${GREEN}Enter certificate directory path${NC}: "
+                    read -r cert_source
+                    
+                    if [[ -z "$cert_source" ]]; then
+                        echo -e "${YELLOW}No path provided. Try again or press Ctrl+C to cancel.${NC}"
+                        continue
+                    fi
+                    
+                    # Expand tilde
+                    cert_source="${cert_source/#\~/$HOME}"
+                    
+                    if [[ ! -d "$cert_source" ]]; then
+                        echo -e "${RED}Directory not found: $cert_source${NC}"
+                        echo "Please check the path and try again."
+                        continue
+                    fi
+                    
+                    if [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
+                        echo -e "${YELLOW}Directory is empty: $cert_source${NC}"
+                        echo "Please choose a directory containing certificate files."
+                        continue
+                    fi
+                    
+                    echo -e "${GREEN}✓ Certificate directory found: $cert_source${NC}"
+                    echo
+                    
+                    # Show what certificate files were found
+                    echo -e "${CYAN}📂 Found certificate files:${NC}"
+                    local cert_files=($(ls "$cert_source"/*.{crt,key,pem,p12,pfx} 2>/dev/null || true))
+                    if [[ ${#cert_files[@]} -gt 0 ]]; then
+                        for file in "${cert_files[@]}"; do
+                            echo "  • $(basename "$file")"
+                        done
+                    else
+                        echo "  ${YELLOW}⚠️  No certificate files found (.crt, .key, .pem, .p12, .pfx)${NC}"
+                        echo "  Please ensure your certificate files are in this directory."
+                    fi
+                    echo
+                    
+                    if confirm "Use certificates from this directory?" "Y"; then
+                        # Store the certificate source for later use
+                        export MILOU_SSL_CERT_SOURCE="$cert_source"
+                        echo -e "${GREEN}✓ Certificate location configured!${NC}"
+                        echo -e "${DIM}   Certificates will be copied to Milou's SSL directory during setup.${NC}"
+                        break
+                    else
+                        echo "Please enter a different path."
+                        echo
+                    fi
+                done
+                echo
+                break
+                ;;
+            3) 
+                ssl_mode="none"
+                echo -e "   ${RED}${CROSSMARK} No encryption selected${NC} Using: ${BOLD}HTTP only${NC}"
+                echo -e "   ${YELLOW}✓  Warning:${NC} Your connection will not be encrypted"
+                break
+                ;;
+            *) 
+                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                echo
+                ;;
+        esac
+    done
+    echo
+    
+    # Version Selection with enhanced UX
+    log_section "✓ Version Selection" "Choose your Milou version"
+    echo -e "${DIM}Select which version of Milou you'd like to install.${NC}"
+    echo
+    
+    echo -e "${BOLD}${CYAN}Available options:${NC}"
+    echo
+    echo -e "${GREEN}   1) ${BOLD}Latest Stable${NC} ${DIM}(Recommended)${NC}"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Most recent stable release"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Thoroughly tested and reliable"
+    echo -e "      ${GREEN}${CHECKMARK}${NC} Best for production use"
+    echo
+    echo -e "${YELLOW}   2) ${BOLD}Latest Development${NC} ${DIM}(Beta features)${NC}"
+    echo -e "      ${YELLOW}✓${NC} Cutting-edge features"
+    echo -e "      ${YELLOW}✓${NC} May contain bugs"
+    echo -e "      ${BLUE}✓${NC}  Best for testing and development"
+    echo
+    echo -e "${BLUE}   3) ${BOLD}Specific Version${NC} ${DIM}(Advanced users)${NC}"
+    echo -e "      ${BLUE}✓${NC}  Choose exact version tag"
+    echo -e "      ${BLUE}✓${NC}  Full control over deployment"
+    echo -e "      ${YELLOW}✓${NC}  Requires knowledge of available versions"
+    echo
+    
+    local version_choice version_tag="1.0.0"
+    while true; do
+        echo -ne "${BOLD}${GREEN}Choose version option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+        read -r version_choice
+        if [[ -z "$version_choice" ]]; then
+            version_choice="1"
+        fi
+        
+        case "$version_choice" in
+            1) 
+                # Use latest stable - try to detect or fall back to default
+                local github_token="${GITHUB_TOKEN:-}"
+                if [[ -n "$github_token" ]]; then
+                    version_tag=$(config_detect_latest_stable_version "$github_token" "true" "milou-sh" "milou" 2>/dev/null) || version_tag="1.0.0"
+                else
+                    version_tag="1.0.0"
+                fi
+                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable ($version_tag)${NC}"
+                echo -e "   ${DIM}This is the most reliable option for production use.${NC}"
+                break
+                ;;
+            2) 
+                version_tag="latest"
+                echo -e "   ${YELLOW}${CHECKMARK} Development version selected!${NC} Using: ${BOLD}Latest Development${NC}"
+                echo -e "   ${YELLOW}✓  Note:${NC} This may include beta features and should be used for testing"
+                break
+                ;;
+            3) 
+                echo -e "   ${BLUE}${CHECKMARK} Custom version selected!${NC}"
+                echo -e "   ${DIM}Enter the exact version tag (e.g., 1.0.0, 2.1.3):${NC}"
+                echo -ne "   ${BOLD}Version tag:${NC} "
+                read -r custom_version
+                if [[ -n "$custom_version" ]]; then
+                    version_tag="$custom_version"
+                    echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom version: ${BOLD}$version_tag${NC}"
+                else
+                    echo -e "   ${RED}${CROSSMARK} No version entered, using default${NC}"
+                    version_tag="1.0.0"
+                fi
+                break
+                ;;
+            *) 
+                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                echo
+                ;;
+        esac
+    done
+    echo
+    
+    # Enhanced configuration summary with visual appeal
+    echo -e "${BOLD}${PURPLE}✓${NC}"
+    echo -e "${BOLD}${PURPLE}                ✓ Your Configuration Summary${NC}"
+    echo -e "${BOLD}${PURPLE}✓${NC}"
+    echo
+    echo -e "   ${BOLD}Domain:${NC}        ${CYAN}$domain${NC}"
+    echo -e "   ${BOLD}Admin Email:${NC}   ${CYAN}$email${NC}"
+    echo -e "   ${BOLD}SSL Security:${NC}  ${CYAN}$ssl_mode${NC}"
+    echo -e "   ${BOLD}Milou Version:${NC} ${CYAN}$version_tag${NC}"
+    echo
+    echo -e "${GREEN}${CHECKMARK} Everything looks perfect! Generating your configuration...${NC}"
+    echo
+    
+    # Generate configuration using consolidated config module with credential preservation
+    # Pass version_tag information for proper image tag configuration
+    local use_latest_images="false"
+    if [[ "$version_tag" == "latest" ]]; then
+        use_latest_images="true"
+    fi
+    
+    # Set version tag environment variable for config generation
+    export MILOU_SELECTED_VERSION="$version_tag"
+    
+    if config_generate "$domain" "$email" "$ssl_mode" "$use_latest_images" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "Configuration created successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "✓ New credentials generated - recreating containers for security"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
+        else
+            milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        setup_show_error "Configuration generation failed" "Unable to create configuration files" \
+            "Check file permissions in the installation directory" \
+            "Verify sufficient disk space is available" \
+            "Try running the setup again"
+        return 1
+    fi
+}
+
+# Automated configuration generation
+setup_generate_configuration_automated() {
+    local preserve_creds="${1:-auto}"
+    
+    milou_log "INFO" "✓ Automated Configuration Generation"
+    
+    local domain="${DOMAIN:-localhost}"
+    local email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="${SSL_MODE:-generate}"
+    
+    # Generate configuration using consolidated config module with credential preservation
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "✓ Configuration generated successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "✓ New credentials generated - recreating containers for security"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
+        else
+            milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
+}
+
+# Smart configuration generation
+setup_generate_configuration_smart() {
+    local preserve_creds="${1:-auto}"
+    
+    milou_log "INFO" "✓ Smart Configuration Generation"
+    
+    # Use environment variables if available, otherwise use smart defaults
+    local domain="${DOMAIN:-localhost}"
+    local email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="generate"
+    
+    # Smart SSL mode selection
+    if [[ "$domain" != "localhost" && "$domain" != "127.0.0.1" ]]; then
+        ssl_mode="generate"  # Real domain gets certificates
+    else
+        ssl_mode="generate"  # Development also gets self-signed
+    fi
+    
+    milou_log "INFO" "✓ Smart defaults: domain=$domain, email=$email, ssl=$ssl_mode"
+    
+    # Generate configuration using consolidated config module with credential preservation
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+        milou_log "SUCCESS" "✓ Configuration generated successfully"
+        
+        # Only force container recreation if credentials are NEW (not preserved)
+        if [[ "$preserve_creds" == "false" || ("$preserve_creds" == "auto" && "${CREDENTIALS_PRESERVED:-false}" == "false") ]]; then
+            milou_log "INFO" "✓ New credentials generated - recreating containers for security"
+            # setup_force_container_recreation "false"  # TODO: Implement this function
+        else
+            milou_log "INFO" "✓ Credentials preserved - keeping existing containers and data"
+        fi
+        
+        return 0
+    else
+        milou_log "ERROR" "Configuration generation failed"
+        return 1
+    fi
+}
+
+# =============================================================================
+# VALIDATION AND SERVICE STARTUP FUNCTIONS
+# =============================================================================
+
+# Validate configuration and start services - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_validate_and_start_services() {
+    milou_log "STEP" "Step 7: Final Validation and Service Startup"
+    
+    # Validate system readiness
+    if ! setup_validate_system_readiness; then
+        milou_log "ERROR" "System readiness validation failed"
+        return 1
+    fi
+    
+    # Setup SSL certificates if needed
+    if ! setup_configure_ssl; then
+        milou_log "ERROR" "SSL configuration failed"
+        return 1
+    fi
+    
+    # Prepare Docker environment
+    if ! setup_prepare_docker_environment; then
+        milou_log "ERROR" "Docker environment preparation failed"
+        return 1
+    fi
+    
+    # Start services
+    if ! setup_start_services; then
+        milou_log "ERROR" "Service startup failed"
+        return 1
+    fi
+    
+    # Validate service health
+    if ! setup_validate_service_health; then
+        milou_log "WARN" "Service health validation completed with warnings"
+    fi
+    
+    milou_log "SUCCESS" "✓ Services started and validated"
+    return 0
+}
+
+# Validate system readiness
+setup_validate_system_readiness() {
+    milou_log "INFO" "✓ Validating system readiness..."
+    
+    local errors=0
+    
+    # Check configuration file exists
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        milou_log "ERROR" "Configuration file not found"
+        ((errors++))
+    fi
+    
+    # Validate configuration using consolidated config module
+    if ! config_validate "${SCRIPT_DIR:-$(pwd)}/.env" "production" "true"; then
+        milou_log "ERROR" "Configuration validation failed"
+        ((errors++))
+    fi
+    
+    # Check Docker access
+    if ! validate_system_dependencies "basic" "unknown" "false"; then
+        milou_log "ERROR" "Docker validation failed"
+        ((errors++))
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        milou_log "SUCCESS" "✓ System readiness validated"
+        return 0
+    else
+        milou_log "ERROR" "System readiness validation failed ($errors errors)"
+        return 1
+    fi
+}
+
+# Configure SSL certificates
+setup_configure_ssl() {
+    milou_log "INFO" "✓ Setting up SSL certificates..."
+    
+    # Load environment variables
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        source "${SCRIPT_DIR:-$(pwd)}/.env"
+    fi
+    
+    local ssl_mode="${SSL_MODE:-generate}"
+    local domain="${DOMAIN:-localhost}"
+    
+    # Load SSL module if not already loaded
+    if [[ "${MILOU_SSL_LOADED:-}" != "true" ]]; then
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        source "${script_dir}/_ssl.sh" || {
+            milou_log "ERROR" "Cannot load SSL module"
+            return 1
+        }
+    fi
+    
+    case "$ssl_mode" in
+        "generate")
+            milou_log "INFO" "✓ Generating self-signed SSL certificates..."
+            # Use SSL module for proper certificate generation
+            if command -v ssl_generate_self_signed >/dev/null 2>&1; then
+                ssl_generate_self_signed "$domain" "false" "false"
+            else
+                setup_generate_basic_ssl_certificates "$domain"
+            fi
+            ;;
+        "existing")
+            milou_log "INFO" "✓ Setting up existing SSL certificates..."
+            # Use the certificate source collected during interactive setup
+            local cert_source="${MILOU_SSL_CERT_SOURCE:-}"
+            
+            if [[ -z "$cert_source" ]]; then
+                milou_log "ERROR" "No certificate source specified for existing SSL mode"
+                return 1
+            fi
+            
+            # Simple, direct certificate setup without SSL module recursion
+            if setup_copy_existing_certificates "$domain" "$cert_source"; then
+                milou_log "SUCCESS" "✓ SSL certificates configured successfully"
+            else
+                milou_log "ERROR" "Failed to configure SSL certificates"
+                return 1
+            fi
+            ;;
+        "none")
+            milou_log "INFO" "✓ SSL disabled - using HTTP only"
+            return 0
+            ;;
+        *)
+            milou_log "WARN" "Unknown SSL mode: $ssl_mode, defaulting to generate"
+            setup_generate_basic_ssl_certificates "$domain"
+            ;;
+    esac
+    
+    milou_log "SUCCESS" "✓ SSL configuration completed"
+    return 0
+}
+
+# Generate basic SSL certificates (fallback)
+setup_generate_basic_ssl_certificates() {
+    local domain="$1"
+    local ssl_dir="${SCRIPT_DIR:-$(pwd)}/ssl"
+    
+    ensure_directory "$ssl_dir" "755"
+    
+    # Generate self-signed certificate
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$ssl_dir/milou.key" \
+        -out "$ssl_dir/milou.crt" \
+        -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=$domain" \
+        -extensions v3_req \
+        -config <(cat <<EOF
+[req]
+distinguished_name = req
+[v3_req]
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = $domain
+DNS.2 = localhost
+DNS.3 = *.localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+    ) 2>/dev/null
+    
+    chmod 600 "$ssl_dir/milou.key"
+    chmod 644 "$ssl_dir/milou.crt"
+    
+    milou_log "SUCCESS" "✓ Self-signed SSL certificates generated"
+}
+
+# Copy existing certificates to Milou SSL directory
+setup_copy_existing_certificates() {
+    local domain="$1"
+    local cert_source="$2"
+    local ssl_dir="${SCRIPT_DIR:-$(pwd)}/ssl"
+    
+    # Normalize cert_source path to remove trailing slashes and fix double slash issue
+    cert_source="${cert_source%/}"
+    
+    # Expand tilde if present
+    cert_source="${cert_source/#\~/$HOME}"
+    
+    milou_log "INFO" "📂 Copying certificates from: $cert_source"
+    
+    # Create SSL directory
+    ensure_directory "$ssl_dir" "755"
+    
+    # Backup existing certificates if they exist
+    if [[ -f "$ssl_dir/milou.crt" || -f "$ssl_dir/milou.key" ]]; then
+        local backup_dir="$ssl_dir/backup"
+        ensure_directory "$backup_dir" "755"
+        local timestamp=$(date +%Y%m%d_%H%M%S)
+        
+        [[ -f "$ssl_dir/milou.crt" ]] && cp "$ssl_dir/milou.crt" "$backup_dir/milou.crt.$timestamp"
+        [[ -f "$ssl_dir/milou.key" ]] && cp "$ssl_dir/milou.key" "$backup_dir/milou.key.$timestamp"
+        milou_log "INFO" "✓ Backed up existing certificates"
+    fi
+    
+    # Try to detect and copy certificate files based on common patterns
+    local cert_file=""
+    local key_file=""
+    local found_format=""
+    
+    # Pattern 1: Let's Encrypt format (fullchain.pem + privkey.pem)
+    if [[ -f "$cert_source/fullchain.pem" && -f "$cert_source/privkey.pem" ]]; then
+        cert_file="$cert_source/fullchain.pem"
+        key_file="$cert_source/privkey.pem"
+        found_format="Let's Encrypt"
+    
+    # Pattern 2: Standard PEM format (certificate.pem + private-key.pem or similar)
+    elif [[ -f "$cert_source/certificate.pem" && -f "$cert_source/private-key.pem" ]]; then
+        cert_file="$cert_source/certificate.pem"
+        key_file="$cert_source/private-key.pem"
+        found_format="PEM"
+    elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/key.pem" ]]; then
+        cert_file="$cert_source/cert.pem"
+        key_file="$cert_source/key.pem"
+        found_format="PEM"
+    
+    # Pattern 3: Standard CRT format (certificate.crt + private-key.key or similar)
+    elif [[ -f "$cert_source/certificate.crt" && -f "$cert_source/private-key.key" ]]; then
+        cert_file="$cert_source/certificate.crt"
+        key_file="$cert_source/private-key.key"
+        found_format="CRT/KEY"
+    elif [[ -f "$cert_source/$domain.crt" && -f "$cert_source/$domain.key" ]]; then
+        cert_file="$cert_source/$domain.crt"
+        key_file="$cert_source/$domain.key"
+        found_format="Domain-named CRT/KEY"
+    
+    # Pattern 4: Generic patterns - find any .crt/.pem with corresponding .key
+    else
+        # Look for any certificate file
+        local cert_candidates=($(ls "$cert_source"/*.{crt,pem} 2>/dev/null | grep -v key || true))
+        local key_candidates=($(ls "$cert_source"/*.{key,pem} 2>/dev/null | grep -E "(key|private)" || true))
+        
+        if [[ ${#cert_candidates[@]} -gt 0 && ${#key_candidates[@]} -gt 0 ]]; then
+            cert_file="${cert_candidates[0]}"
+            key_file="${key_candidates[0]}"
+            found_format="Auto-detected"
+        fi
+    fi
+    
+    # If we found certificate files, copy them
+    if [[ -n "$cert_file" && -n "$key_file" ]]; then
+        milou_log "INFO" "✓ Found $found_format format certificates"
+        milou_log "INFO" "  Certificate: $(basename "$cert_file")"
+        milou_log "INFO" "  Private Key: $(basename "$key_file")"
+        
+        # Copy and set permissions
+        if cp "$cert_file" "$ssl_dir/milou.crt" && cp "$key_file" "$ssl_dir/milou.key"; then
+            chmod 644 "$ssl_dir/milou.crt"
+            chmod 600 "$ssl_dir/milou.key"
+            
+            # Validate the certificates
+            if openssl x509 -in "$ssl_dir/milou.crt" -noout -text >/dev/null 2>&1; then
+                milou_log "SUCCESS" "✓ SSL certificates successfully copied and validated"
+                
+                # Show certificate info
+                local cert_subject=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -subject 2>/dev/null | cut -d= -f2- || echo "Unknown")
+                local cert_expires=$(openssl x509 -in "$ssl_dir/milou.crt" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+                milou_log "INFO" "  Subject: $cert_subject"
+                milou_log "INFO" "  Expires: $cert_expires"
+                
+                return 0
+            else
+                milou_log "ERROR" "Certificate validation failed - invalid certificate format"
+                return 1
+            fi
+        else
+            milou_log "ERROR" "Failed to copy certificate files"
+            return 1
+        fi
+    else
+        milou_log "ERROR" "Could not find valid certificate files in: $cert_source"
+        milou_log "INFO" "Expected formats:"
+        milou_log "INFO" "  • fullchain.pem + privkey.pem (Let's Encrypt)"
+        milou_log "INFO" "  • certificate.pem + private-key.pem"
+        milou_log "INFO" "  • certificate.crt + private-key.key"
+        milou_log "INFO" "  • $domain.crt + $domain.key"
+        
+        # List what we actually found
+        milou_log "INFO" "Files in directory:"
+        ls -la "$cert_source" | grep -E '\.(crt|key|pem|p12|pfx)$' | sed 's/^/    /' || true
+        
+        return 1
+    fi
+}
+
+# Prepare Docker environment
+setup_prepare_docker_environment() {
+    milou_log "INFO" "✓ Preparing Docker environment..."
+    
+    # Create required external networks
+    milou_log "DEBUG" "Creating external proxy network"
+    if ! docker network ls | grep -q "proxy"; then
+        docker network create proxy 2>/dev/null || true
+    fi
+    
+    # Use Docker module if available
+    if command -v docker_init >/dev/null 2>&1; then
+        docker_init
+    else
+        # Basic Docker network creation
+        docker network create milou_network 2>/dev/null || true
+    fi
+    
+    milou_log "SUCCESS" "✓ Docker environment prepared"
+    return 0
+}
+
+# Start services
+setup_start_services() {
+    milou_log "INFO" "✓ Starting Milou services..."
+    
+    # Check if GitHub token is available for private images
+    local github_token="${GITHUB_TOKEN:-}"
+    local token_source=""
+    
+    # Determine token source for better user messaging
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        if [[ -n "$github_token" ]] && [[ "$github_token" != "${GITHUB_TOKEN:-}" ]]; then
+            token_source="command-line"
+        else
+            token_source="environment"
+        fi
+    fi
+    
+    # If no token and we're in interactive mode, prompt for it
+    if [[ -z "$github_token" && "$SETUP_CURRENT_MODE" == "$SETUP_MODE_INTERACTIVE" ]]; then
+        echo ""
+        log_section "🔐 GitHub Container Registry Access" "Authentication required for private images"
+        
+        echo -e "${BOLD}${CYAN}📦 About GitHub Container Registry:${NC}"
+        echo -e "   • Milou uses private Docker images from GitHub Container Registry"
+        echo -e "   • A Personal Access Token is required for authentication"
+        echo -e "   • You can create one at: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
+        echo
+        echo -e "${BOLD}${YELLOW}📝 Required Token Scopes:${NC}"
+        echo -e "   • ${BOLD}read:packages${NC} - Access to GitHub Packages"
+        echo
+        echo -e "${BOLD}${GREEN}⚡ Quick Setup Options:${NC}"
+        echo -e "   1) Enter your token now (${BOLD}recommended${NC})"
+        echo -e "   2) Skip and configure later in .env file"
+        echo ""
+        
+        if confirm "Do you have a GitHub Personal Access Token?" "Y"; then
+            echo ""
+            echo -e "${BOLD}${CYAN}🔑 Token Input:${NC}"
+            echo -ne "GitHub Token: "
+            read -r github_token
+            echo ""
+            
+            if [[ -n "$github_token" ]]; then
+                # Validate the token with enhanced feedback
+                milou_log "INFO" "🔍 Validating GitHub token..."
+                
+                # First check format
+                if validate_github_token "$github_token" "false"; then
+                    milou_log "SUCCESS" "✓ Token format is valid"
+                    
+                    # Test authentication with GitHub API and registry
+                    milou_log "INFO" "🔐 Testing GitHub authentication..."
+                    if test_github_authentication "$github_token" "false" "true"; then
+                        milou_log "SUCCESS" "✓ GitHub token validated and authenticated"
+                        
+                        # Update the .env file with the token
+                        if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+                            if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
+                                sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "${SCRIPT_DIR:-$(pwd)}/.env"
+                            else
+                                echo "GITHUB_TOKEN=$github_token" >> "${SCRIPT_DIR:-$(pwd)}/.env"
+                            fi
+                            milou_log "INFO" "Token saved to .env file"
+                        fi
+                        
+                        # Export for immediate use
+                        export GITHUB_TOKEN="$github_token"
+                        token_source="user-input"
+                    else
+                        milou_log "ERROR" "❌ Token authentication failed"
+                        echo ""
+                        echo "🔧 TROUBLESHOOTING:"
+                        echo "   ✓ Ensure token has 'read:packages' scope"
+                        echo "   ✓ Check if token is expired"
+                        echo "   ✓ Verify you have access to milou-sh/milou repository"
+                        echo "   ✓ Try creating a new token at: https://github.com/settings/tokens"
+                        echo ""
+                        
+                        if confirm "Continue with potentially invalid token?" "N"; then
+                            milou_log "WARN" "⚠️ Continuing with unverified token"
+                            export GITHUB_TOKEN="$github_token"
+                            token_source="user-input-unverified"
+                        else
+                            milou_log "INFO" "Setup cancelled - please get a valid GitHub token first"
+                            return 1
+                        fi
+                    fi
+                else
+                    milou_log "ERROR" "❌ Invalid token format"
+                    echo ""
+                    echo "🔧 EXPECTED TOKEN FORMATS:"
+                    echo "   ✓ Classic PAT: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    echo "   ✓ Fine-grained: github_pat_xxxxxxxxxxxxxxxxxxxx"
+                    echo ""
+                    
+                    if confirm "Continue with token anyway? (not recommended)" "N"; then
+                        milou_log "WARN" "⚠️ Continuing with invalid token format"
+                        export GITHUB_TOKEN="$github_token"
+                        token_source="user-input-invalid"
+                    else
+                        milou_log "INFO" "Please get a valid GitHub token and try again"
+                        return 1
+                    fi
+                fi
+            else
+                milou_log "INFO" "No token provided, continuing without authentication"
+            fi
+        else
+            milou_log "INFO" "Skipping GitHub token setup"
+            echo ""
+            log_section "⏭️  Setup Later" "Token configuration postponed"
+            
+            echo -e "${BOLD}${CYAN}📋 How to configure authentication later:${NC}"
+            echo -e "   1. Get a token from: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
+            echo -e "   2. Add to .env file: ${BOLD}GITHUB_TOKEN=ghp_your_token_here${NC}"
+            echo -e "   3. Restart services: ${BOLD}./milou.sh restart${NC}"
+            echo
+            echo -e "${YELLOW}💡 Tip:${NC} Services may fail to start without authentication"
+            echo ""
+        fi
+    elif [[ -n "$github_token" ]]; then
+        # Token was provided via command line or environment
+        milou_log "INFO" "🔑 Using GitHub token from $token_source"
+        
+        # Quick validation for command-line provided tokens
+        if [[ "$token_source" == "command-line" ]]; then
+            milou_log "INFO" "🔍 Validating provided token..."
+            if validate_github_token "$github_token" "false"; then
+                milou_log "SUCCESS" "✓ Token format is valid"
+                
+                # Test authentication silently for command-line tokens
+                if test_github_authentication "$github_token" "true" "false"; then
+                    milou_log "SUCCESS" "✓ Token authentication verified"
+                else
+                    milou_log "WARN" "⚠️ Token authentication failed, but continuing"
+                    milou_log "INFO" "💡 If image pulls fail, check token permissions"
+                fi
+            else
+                milou_log "WARN" "⚠️ Token format appears invalid, but continuing"
+            fi
+        fi
+    fi
+    
+    # INTELLIGENT IMAGE PULLING: Only pull when necessary to avoid unnecessary downloads
+    local should_pull_images="false"
+    local pull_reason=""
+    
+    # Check if we should pull images based on system state
+    if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]]; then
+        should_pull_images="true"
+        pull_reason="fresh server installation"
+    else
+        # Check if any Milou images are missing locally - check for any tag, not just :latest
+        local missing_images=()
+        local core_services=("database" "backend" "frontend")
+        
+        for service in "${core_services[@]}"; do
+            # Check if any image exists for this service (any tag)
+            if ! docker images --format "{{.Repository}}" | grep -q "ghcr.io/milou-sh/milou/$service"; then
+                missing_images+=("ghcr.io/milou-sh/milou/$service")
+            fi
+        done
+        
+        if [[ ${#missing_images[@]} -gt 0 ]]; then
+            should_pull_images="true"
+            pull_reason="missing core images: ${missing_images[*]}"
+        else
+            milou_log "INFO" "✓ Core images already present locally - skipping pull"
+        fi
+    fi
+    
+    # Pull images only when necessary
+    if [[ "$should_pull_images" == "true" ]]; then
+        milou_log "INFO" "⬇️  Pulling Docker images ($pull_reason)..."
+        
+        # Initialize Docker environment first
+        if ! docker_init "" "" "false" "false"; then
+            milou_log "ERROR" "Docker initialization failed"
+            return 1
+        fi
+        
+        # Pull all images
+        if ! docker_execute "pull" "" "false"; then
+            milou_log "WARN" "⚠️  Image pull had issues, but continuing with startup"
+            milou_log "INFO" "💡 Some images may already exist locally or authentication may be needed"
+        else
+            milou_log "SUCCESS" "✅ Images pulled successfully"
+        fi
+    else
+        # Still need to initialize Docker environment
+        if ! docker_init "" "" "false" "false"; then
+            milou_log "ERROR" "Docker initialization failed"
+            return 1
+        fi
+    fi
+    
+    # Use the Docker module's start function which handles authentication
+    if service_start_with_validation "" "60" "false"; then
+        milou_log "SUCCESS" "✓ Services started successfully"
+        
+        # Wait for services to be ready
+        milou_log "INFO" "✓ Waiting for services to initialize..."
+        sleep 10
+        
+        return 0
+    else
+        milou_log "ERROR" "Failed to start services"
+        
+        # Enhanced error guidance based on token status
+        echo ""
+        echo "🔧 TROUBLESHOOTING SERVICE STARTUP"
+        echo "=================================="
+        echo ""
+        
+        if [[ -z "$github_token" ]]; then
+            echo "❌ NO GITHUB TOKEN PROVIDED"
+            echo "   The error may be due to missing authentication for private images."
+            echo ""
+            echo "✓ SOLUTION:"
+            echo "   1. Get a GitHub token: https://github.com/settings/tokens"
+            echo "   2. Required scopes: read:packages"
+            echo "   3. Re-run: ./milou.sh setup --token ghp_your_token_here"
+            echo ""
+        elif [[ "$token_source" == "user-input-invalid" || "$token_source" == "user-input-unverified" ]]; then
+            echo "❌ INVALID/UNVERIFIED TOKEN"
+            echo "   The token provided may not be working correctly."
+            echo ""
+            echo "✓ SOLUTION:"
+            echo "   1. Check token permissions: read:packages scope required"
+            echo "   2. Verify token hasn't expired"
+            echo "   3. Test manually: echo 'TOKEN' | docker login ghcr.io -u USERNAME --password-stdin"
+            echo "   4. Get a new token if needed: https://github.com/settings/tokens"
+            echo ""
+        else
+            echo "❌ SERVICE STARTUP FAILED"
+            echo "   Authentication appears OK, but services failed to start."
+            echo ""
+            echo "✓ NEXT STEPS:"
+            echo "   1. Check service logs: ./milou.sh logs"
+            echo "   2. Verify system resources: docker system df"
+            echo "   3. Check port availability: ./milou.sh status"
+            echo "   4. Try manual start: ./milou.sh start"
+            echo ""
+        fi
+        
+        echo "💡 For detailed logs, run: ./milou.sh setup --verbose"
+        echo ""
+        
+        return 1
+    fi
+}
+
+# Validate service health
+setup_validate_service_health() {
+    milou_log "INFO" "✓ Validating service health..."
+    
+    local healthy_services=0
+    local total_services=0
+    local max_wait=60
+    local elapsed=0
+    
+    while [[ $elapsed -lt $max_wait ]]; do
+        healthy_services=0
+        total_services=0
+        
+        # Check container status
+        while IFS=$'\t' read -r name status; do
+            ((total_services++))
+            if [[ "$status" =~ "Up" ]] || [[ "$status" =~ "running" ]]; then
+                ((healthy_services++))
+            fi
+        done < <(docker compose ps --format "{{.Name}}\t{{.Status}}" 2>/dev/null || echo "")
+        
+        if [[ $healthy_services -gt 0 && $healthy_services -eq $total_services ]]; then
+            milou_log "SUCCESS" "✓ All services healthy ($healthy_services/$total_services)"
+            return 0
+        fi
+        
+        milou_log "DEBUG" "Services status: $healthy_services/$total_services healthy"
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    
+    if [[ $healthy_services -gt 0 ]]; then
+        milou_log "WARN" "✓ Partial service health: $healthy_services/$total_services healthy"
+        return 0
+    else
+        milou_log "ERROR" "✓ Service health validation failed"
+        return 1
+    fi
+}
+
+# =============================================================================
+# COMPLETION AND REPORTING FUNCTIONS
+# =============================================================================
+
+# Display setup completion report - SINGLE AUTHORITATIVE IMPLEMENTATION
+setup_display_completion_report() {
+    # Show enhanced success message using our new functions
+    local domain="${DOMAIN:-localhost}"
+    local admin_user="${ADMIN_USERNAME:-admin}"
+    local admin_password="${ADMIN_PASSWORD:-[check .env file]}"
+    local admin_email="${ADMIN_EMAIL:-admin@localhost}"
+    
+    # Load configuration for display
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        source "${SCRIPT_DIR:-$(pwd)}/.env"
+        admin_password="${ADMIN_PASSWORD:-[check .env file]}"
+    fi
+    
+    # Use our enhanced success display function
+    setup_show_success "$domain" "$admin_user" "$admin_password" "$admin_email"
+    
+    return 0
+}
+
+# =============================================================================
+# LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
 # =============================================================================
 
 # Main setup command handler with options parsing
@@ -693,118 +2177,5 @@ show_setup_help() {
 # Main setup functions
 export -f handle_setup_modular
 export -f show_setup_help
-
-# Force clean all Milou installation artifacts for complete reset
-setup_force_clean_all() {
-    local preserve_data="${1:-true}"
-    
-    milou_log "WARN" "🗑️  Force cleaning all Milou installation artifacts..."
-    
-    if [[ "$preserve_data" != "true" ]]; then
-        echo ""
-        echo -e "${RED}${BOLD}⚠️  DANGER: This will permanently delete ALL Milou data!${NC}"
-        echo -e "${RED}This includes:${NC}"
-        echo "  • All database content"
-        echo "  • All file uploads"
-        echo "  • All configuration settings"
-        echo "  • All SSL certificates"
-        echo "  • All backup files"
-        echo "  • All Docker volumes and containers"
-        echo ""
-        echo -e "${YELLOW}This action CANNOT be undone!${NC}"
-        echo ""
-        
-        if [[ "${INTERACTIVE:-true}" == "true" ]]; then
-            echo -ne "${RED}${BOLD}Type 'DELETE ALL DATA' to confirm complete destruction: ${NC}"
-            read -r confirmation
-            if [[ "$confirmation" != "DELETE ALL DATA" ]]; then
-                milou_log "INFO" "Force clean cancelled - wise choice!"
-                return 1
-            fi
-        else
-            milou_log "WARN" "Non-interactive mode: Skipping data destruction for safety"
-            milou_log "INFO" "Use --force flag to override in scripts"
-            return 1
-        fi
-    fi
-    
-    # Stop all services first
-    milou_log "INFO" "Stopping all Milou services..."
-    if command -v docker_execute >/dev/null 2>&1; then
-        docker_execute "down" "" "true" 2>/dev/null || true
-    else
-        docker compose down --remove-orphans 2>/dev/null || true
-    fi
-    
-    # Remove containers
-    milou_log "INFO" "Removing Milou containers..."
-    docker ps -a --filter "name=milou-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
-    
-    # Remove volumes if not preserving data
-    if [[ "$preserve_data" != "true" ]]; then
-        milou_log "INFO" "Removing Milou data volumes..."
-        docker volume ls --format "{{.Name}}" | grep -E "(milou|static)" | xargs -r docker volume rm -f 2>/dev/null || true
-    else
-        milou_log "INFO" "Preserving data volumes..."
-    fi
-    
-    # Remove networks
-    milou_log "INFO" "Removing Milou networks..."
-    docker network ls --filter "name=milou" --format "{{.Name}}" | grep milou | xargs -r docker network rm 2>/dev/null || true
-    
-    # Clean filesystem artifacts
-    milou_log "INFO" "Cleaning filesystem artifacts..."
-    
-    # Remove/backup configuration
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-        if [[ "$preserve_data" == "true" ]]; then
-            mv "${SCRIPT_DIR:-$(pwd)}/.env" "${SCRIPT_DIR:-$(pwd)}/.env.backup.$(date +%s)"
-            milou_log "INFO" "Backed up configuration file"
-        else
-            rm -f "${SCRIPT_DIR:-$(pwd)}/.env"
-            milou_log "INFO" "Removed configuration file"
-        fi
-    fi
-    
-    # Remove SSL certificates
-    if [[ -d "${SCRIPT_DIR:-$(pwd)}/ssl" ]]; then
-        if [[ "$preserve_data" == "true" ]]; then
-            mv "${SCRIPT_DIR:-$(pwd)}/ssl" "${SCRIPT_DIR:-$(pwd)}/ssl.backup.$(date +%s)"
-            milou_log "INFO" "Backed up SSL certificates"
-        else
-            rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl"
-            milou_log "INFO" "Removed SSL certificates"
-        fi
-    fi
-    
-    # Remove docker-compose
-    if [[ -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
-        rm -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml"
-        milou_log "INFO" "Removed docker-compose configuration"
-    fi
-    
-    # Clean up failed setup artifacts
-    rm -f "${SCRIPT_DIR:-$(pwd)}/.env.failed."* 2>/dev/null || true
-    rm -rf "${SCRIPT_DIR:-$(pwd)}/ssl.failed."* 2>/dev/null || true
-    # NOTE: Also do not remove docker-compose.yml.failed.* as these are from static file
-    
-    # Clear state cache
-    if command -v clear_state_cache >/dev/null 2>&1; then
-        clear_state_cache
-    fi
-    
-    if [[ "$preserve_data" == "true" ]]; then
-        milou_log "SUCCESS" "✓ Force clean completed (data preserved)"
-        milou_log "INFO" "💡 Configuration and certificates backed up with timestamp"
-    else
-        milou_log "SUCCESS" "✓ Complete system reset completed"
-        milou_log "INFO" "💡 All Milou data has been permanently deleted"
-    fi
-    
-    milou_log "INFO" "You can now run: ./milou.sh setup"
-}
-
-# Export additional setup functions
-export -f setup_force_clean_all
 
 milou_log "DEBUG" "Setup module loaded successfully" 

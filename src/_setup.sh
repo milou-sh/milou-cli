@@ -1042,7 +1042,8 @@ setup_generate_configuration_interactive() {
     echo -e "${YELLOW}   2) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
     echo -e "      ${GREEN}${CHECKMARK}${NC} No browser warnings"
     echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for business use"
-    echo -e "      ${BLUE}✓${NC}  Requires: certificate.crt and private.key in ssl/ folder"
+    echo -e "      ${BLUE}✓${NC}  Requires: certificate files (supports .crt/.key or .pem formats)"
+    echo -e "      ${DIM}      SSL directory: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
     echo
     echo -e "${RED}   3) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
     echo -e "      ${RED}${CROSSMARK}${NC} Connection is not encrypted"
@@ -1067,7 +1068,8 @@ setup_generate_configuration_interactive() {
             2) 
                 ssl_mode="existing"
                 echo -e "   ${YELLOW}${CHECKMARK} Professional setup!${NC} Using: ${BOLD}Your own certificates${NC}"
-                echo -e "   ${BLUE}✓ Remember:${NC} Place your certificate files in the ssl/ directory"
+                echo -e "   ${BLUE}✓ SSL directory:${NC} $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")"
+                echo -e "   ${DIM}   Supports: Let's Encrypt (.pem), Standard (.crt/.key), and custom formats${NC}"
                 break
                 ;;
             3) 

@@ -10,13 +10,10 @@ set -euo pipefail
 get_default_install_dir() {
     local username
     if [[ $EUID -eq 0 ]]; then
-        username=$(getent passwd 2>/dev/null | awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' || true)
-        if [[ -n "$username" ]]; then
-            echo "/home/$username/milou-cli"
-        else
-            echo "/home/milou/milou-cli"
-        fi
+        # For root user, prefer /opt for system-wide installation
+        echo "/opt/milou-cli"
     else
+        # For regular users, use home directory
         echo "$HOME/milou-cli"
     fi
 }
@@ -33,6 +30,10 @@ readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
+
+# Symbols
+readonly CHECKMARK='✓'
+readonly CROSSMARK='✗'
 
 # Global variables
 QUIET=false
@@ -118,17 +119,113 @@ prompt_installation_directory() {
         return 0
     fi
     
-    local choice
-    choice=$(prompt_user "Install to $INSTALL_DIR? (Y/n)" "y")
+    local current_install_dir="$INSTALL_DIR"
     
-    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
-        local custom_dir
-        custom_dir=$(prompt_user "Installation directory" "/opt/milou")
+    echo -e "${BLUE}📁 Installation Directory Setup${NC}"
+    echo -e "${DIM}Choose where to install Milou CLI on your system.${NC}"
+    echo
+    
+    echo -e "${BOLD}${CYAN}Recommended options:${NC}"
+    echo
+    if [[ $EUID -eq 0 ]]; then
+        echo -e "${GREEN}   1) ${BOLD}System-wide${NC} ${DIM}(/opt/milou-cli)${NC}"
+        echo -e "      ${GREEN}${CHECKMARK}${NC} Accessible to all users"
+        echo -e "      ${GREEN}${CHECKMARK}${NC} Standard system location"
+        echo -e "      ${GREEN}${CHECKMARK}${NC} Recommended for production servers"
+        echo
+        echo -e "${YELLOW}   2) ${BOLD}User directory${NC} ${DIM}($(eval echo ~$(whoami))/milou-cli)${NC}"
+        echo -e "      ${YELLOW}✓${NC} Single user access"
+        echo -e "      ${YELLOW}✓${NC} Easy to manage"
+        echo
+        echo -e "${BLUE}   3) ${BOLD}Custom location${NC} ${DIM}(specify your own path)${NC}"
+        echo -e "      ${BLUE}✓${NC} Full control over location"
+        echo -e "      ${BLUE}✓${NC} For advanced setups"
+        echo
         
-        if [[ -n "$custom_dir" ]]; then
-            INSTALL_DIR="$custom_dir"
-        fi
+        local dir_choice
+        while true; do
+            echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+            read -r dir_choice
+            if [[ -z "$dir_choice" ]]; then
+                dir_choice="1"
+            fi
+            
+            case "$dir_choice" in
+                1) 
+                    INSTALL_DIR="/opt/milou-cli"
+                    echo -e "   ${GREEN}${CHECKMARK} System-wide installation!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
+                    break
+                    ;;
+                2) 
+                    local username
+                    username=$(getent passwd 2>/dev/null | awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' || echo "milou")
+                    INSTALL_DIR="/home/$username/milou-cli"
+                    echo -e "   ${YELLOW}${CHECKMARK} User installation!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
+                    break
+                    ;;
+                3) 
+                    echo -e "   ${BLUE}${CHECKMARK} Custom location selected!${NC}"
+                    local custom_dir
+                    custom_dir=$(prompt_user "Installation directory" "/opt/milou-cli")
+                    if [[ -n "$custom_dir" ]]; then
+                        INSTALL_DIR="$custom_dir"
+                        echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom location: ${BOLD}$INSTALL_DIR${NC}"
+                    else
+                        echo -e "   ${RED}${CROSSMARK} No path entered, using default${NC}"
+                        INSTALL_DIR="/opt/milou-cli"
+                    fi
+                    break
+                    ;;
+                *) 
+                    echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                    echo
+                    ;;
+            esac
+        done
+    else
+        echo -e "${GREEN}   1) ${BOLD}Default location${NC} ${DIM}($current_install_dir)${NC}"
+        echo -e "      ${GREEN}${CHECKMARK}${NC} Recommended for your user"
+        echo -e "      ${GREEN}${CHECKMARK}${NC} No additional permissions needed"
+        echo
+        echo -e "${BLUE}   2) ${BOLD}Custom location${NC} ${DIM}(specify your own path)${NC}"
+        echo -e "      ${BLUE}✓${NC} Choose your preferred location"
+        echo -e "      ${YELLOW}✓${NC} May require different permissions"
+        echo
+        
+        local dir_choice
+        while true; do
+            echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-2${NC}] (recommended: ${BOLD}1${NC}): "
+            read -r dir_choice
+            if [[ -z "$dir_choice" ]]; then
+                dir_choice="1"
+            fi
+            
+            case "$dir_choice" in
+                1) 
+                    echo -e "   ${GREEN}${CHECKMARK} Default location!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
+                    break
+                    ;;
+                2) 
+                    echo -e "   ${BLUE}${CHECKMARK} Custom location selected!${NC}"
+                    local custom_dir
+                    custom_dir=$(prompt_user "Installation directory" "$HOME/milou-cli")
+                    if [[ -n "$custom_dir" ]]; then
+                        INSTALL_DIR="$custom_dir"
+                        echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom location: ${BOLD}$INSTALL_DIR${NC}"
+                    else
+                        echo -e "   ${RED}${CROSSMARK} No path entered, using default${NC}"
+                    fi
+                    break
+                    ;;
+                *) 
+                    echo -e "   ${RED}${CROSSMARK} Please choose 1 or 2${NC}"
+                    echo
+                    ;;
+            esac
+        done
     fi
+    
+    echo
 }
 
 # Parse command line arguments

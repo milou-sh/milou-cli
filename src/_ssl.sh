@@ -832,34 +832,119 @@ ssl_setup_existing() {
     local force="$3"
     local quiet="$4"
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Setting up existing SSL certificates from: $cert_source"
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Setting up existing SSL certificates"
     
-    if [[ -z "$cert_source" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source path required"
-        return 1
+    # If no cert_source provided or ssl directory is empty, prompt interactively
+    if [[ -z "$cert_source" ]] || [[ ! -d "$cert_source" ]] || [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
+        if [[ "$INTERACTIVE" != "false" ]] && [[ "$quiet" != "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "SSL certificate directory is empty or doesn't exist."
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Current SSL directory: $(realpath "$MILOU_SSL_DIR")"
+            echo
+            echo "Please provide the path to your SSL certificates:"
+            echo "  • For certbot certificates: /etc/letsencrypt/live/yourdomain.com/"
+            echo "  • For custom certificates: /path/to/your/certificates/"
+            echo
+            read -p "Certificate directory path: " cert_source
+            
+            if [[ -z "$cert_source" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "No certificate path provided"
+                return 1
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source path required"
+            return 1
+        fi
     fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Looking for certificates in: $cert_source"
     
     local source_cert source_key
     
-    # Determine source files
+    # Determine source files with enhanced support for different certificate formats
     if [[ -f "$cert_source" ]]; then
         # Single file provided - assume it's the certificate
         source_cert="$cert_source"
-        source_key="${cert_source%.*}.key"  # Try .key extension
-    elif [[ -d "$cert_source" ]]; then
-        # Directory provided - look for standard files
-        if [[ -f "$cert_source/milou.crt" && -f "$cert_source/milou.key" ]]; then
-            source_cert="$cert_source/milou.crt"
-            source_key="$cert_source/milou.key"
-        elif [[ -f "$cert_source/server.crt" && -f "$cert_source/server.key" ]]; then
-            source_cert="$cert_source/server.crt"
-            source_key="$cert_source/server.key"
-        elif [[ -f "$cert_source/certificate.crt" && -f "$cert_source/certificate.key" ]]; then
-            source_cert="$cert_source/certificate.crt"
-            source_key="$cert_source/certificate.key"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot find certificate files in directory: $cert_source"
+        # Try different key file extensions
+        for ext in key pem; do
+            local potential_key="${cert_source%.*}.$ext"
+            if [[ -f "$potential_key" ]]; then
+                source_key="$potential_key"
+                break
+            fi
+        done
+        
+        if [[ -z "$source_key" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot find corresponding private key for certificate: $source_cert"
             return 1
+        fi
+    elif [[ -d "$cert_source" ]]; then
+        # Directory provided - look for standard files with support for various formats
+        local cert_patterns=("cert.pem" "fullchain.pem" "milou.crt" "server.crt" "certificate.crt" "ssl.crt" "*.crt")
+        local key_patterns=("privkey.pem" "milou.key" "server.key" "certificate.key" "ssl.key" "private.key" "*.key")
+        
+        # First priority: Look for certbot Let's Encrypt format (cert.pem/fullchain.pem + privkey.pem)
+        if [[ -f "$cert_source/fullchain.pem" && -f "$cert_source/privkey.pem" ]]; then
+            source_cert="$cert_source/fullchain.pem"
+            source_key="$cert_source/privkey.pem"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Found Let's Encrypt format certificates (fullchain.pem + privkey.pem)"
+        elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/privkey.pem" ]]; then
+            source_cert="$cert_source/cert.pem"
+            source_key="$cert_source/privkey.pem"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Found Let's Encrypt format certificates (cert.pem + privkey.pem)"
+        else
+            # Look for other common certificate formats
+            for cert_pattern in "${cert_patterns[@]}"; do
+                local cert_file
+                if [[ "$cert_pattern" == *"*"* ]]; then
+                    # Handle wildcard patterns
+                    cert_file=$(find "$cert_source" -maxdepth 1 -name "$cert_pattern" -type f | head -1)
+                else
+                    cert_file="$cert_source/$cert_pattern"
+                fi
+                
+                if [[ -f "$cert_file" ]]; then
+                    source_cert="$cert_file"
+                    
+                    # Find corresponding key file
+                    local cert_basename=$(basename "$cert_file")
+                    local cert_name="${cert_basename%.*}"
+                    
+                    for key_pattern in "${key_patterns[@]}"; do
+                        local key_file
+                        if [[ "$key_pattern" == *"*"* ]]; then
+                            # Handle wildcard patterns
+                            key_file=$(find "$cert_source" -maxdepth 1 -name "$key_pattern" -type f | head -1)
+                        else
+                            key_file="$cert_source/$key_pattern"
+                        fi
+                        
+                        if [[ -f "$key_file" ]]; then
+                            source_key="$key_file"
+                            break
+                        fi
+                        
+                        # Also try with same basename as certificate
+                        local key_with_cert_name="$cert_source/${cert_name}.${key_pattern#*.}"
+                        if [[ -f "$key_with_cert_name" ]]; then
+                            source_key="$key_with_cert_name"
+                            break
+                        fi
+                    done
+                    
+                    if [[ -n "$source_key" ]]; then
+                        break
+                    fi
+                fi
+            done
+            
+            if [[ -z "$source_cert" || -z "$source_key" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot find certificate and key files in directory: $cert_source"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "Supported formats:"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Let's Encrypt: fullchain.pem + privkey.pem"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Standard: *.crt + *.key"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • PEM format: *.pem files"
+                return 1
+            fi
         fi
     else
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source not found: $cert_source"
@@ -877,14 +962,26 @@ ssl_setup_existing() {
         return 1
     fi
     
-    # Validate source certificate format
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Using certificate: $(basename "$source_cert")"
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Using private key: $(basename "$source_key")"
+    
+    # Validate source certificate format (support both PEM and DER formats)
     if ! openssl x509 -in "$source_cert" -noout -text >/dev/null 2>&1; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid certificate format: $source_cert"
         return 1
     fi
     
-    # Validate source key format
-    if ! openssl rsa -in "$source_key" -check -noout >/dev/null 2>&1; then
+    # Validate source key format (support different key formats)
+    local key_valid=false
+    # Try RSA format first
+    if openssl rsa -in "$source_key" -check -noout >/dev/null 2>&1; then
+        key_valid=true
+    # Try generic private key format (for EC keys, etc.)
+    elif openssl pkey -in "$source_key" -check -noout >/dev/null 2>&1; then
+        key_valid=true
+    fi
+    
+    if [[ "$key_valid" != "true" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid private key format: $source_key"
         return 1
     fi
@@ -912,6 +1009,8 @@ ssl_setup_existing() {
     # Validate the installed certificates
     if ssl_validate "$domain" "true"; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Existing certificates installed successfully"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "📄 Certificate: $MILOU_SSL_CERT_FILE"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Private key: $MILOU_SSL_KEY_FILE"
         ssl_save_info "$domain" "existing" "$quiet"
         return 0
     else

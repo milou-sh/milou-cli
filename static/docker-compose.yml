@@ -405,8 +405,10 @@ networks:
       - "environment=${NODE_ENV:-production}"
   
   proxy:
-    external: true
-    name: proxy
+    driver: bridge
+    labels:
+      - "project=milou"
+      - "environment=${NODE_ENV:-production}"
 
 # =============================================================================
 # Volumes Configuration

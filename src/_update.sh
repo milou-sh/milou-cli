@@ -717,9 +717,12 @@ _perform_fixed_update() {
     
     milou_log "INFO" "📦 Updating services: ${services_to_update[*]}"
     
-    # Ensure networks exist
-    docker network create proxy 2>/dev/null || true
-    docker network create milou_network --subnet 172.21.0.0/16 2>/dev/null || true
+    # Create required networks if they don't exist - Let Docker Compose handle this
+    milou_log "INFO" "🔗 Ensuring Docker networks are ready..."
+    # Remove manual network creation to avoid conflicts with docker-compose
+    # docker network create proxy 2>/dev/null || true
+    # docker network create milou_network --subnet 172.21.0.0/16 2>/dev/null || true
+    milou_log "DEBUG" "Networks will be created by Docker Compose"
     
     # Update each service
     local failed_services=()

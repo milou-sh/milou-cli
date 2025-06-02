@@ -1676,18 +1676,14 @@ setup_copy_existing_certificates() {
 setup_prepare_docker_environment() {
     milou_log "INFO" "✓ Preparing Docker environment..."
     
-    # Create required external networks
-    milou_log "DEBUG" "Creating external proxy network"
-    if ! docker network ls | grep -q "proxy"; then
-        docker network create proxy 2>/dev/null || true
-    fi
+    # Networks will be created by Docker Compose - no need for manual creation
+    milou_log "DEBUG" "Networks will be created by Docker Compose automatically"
     
     # Use Docker module if available
     if command -v docker_init >/dev/null 2>&1; then
         docker_init
     else
-        # Basic Docker network creation
-        docker network create milou_network 2>/dev/null || true
+        milou_log "DEBUG" "Docker module not available, networks will be created by compose"
     fi
     
     milou_log "SUCCESS" "✓ Docker environment prepared"

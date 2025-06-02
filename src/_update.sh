@@ -27,7 +27,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Load core module first (with its own guard system)
 if [[ -f "${script_dir}/_core.sh" ]]; then
     source "${script_dir}/_core.sh" || {
-        echo "ERROR: Cannot load required core module" >&2
+        echo "ERROR: Cannot load core module" >&2
         return 1
     }
 fi

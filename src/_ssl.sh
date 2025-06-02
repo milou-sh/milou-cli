@@ -39,9 +39,29 @@ fi
 # SSL CONSTANTS AND CONFIGURATION
 # =============================================================================
 
-# Ensure SCRIPT_DIR is set before using it
+# Ensure SCRIPT_DIR is set before using it - robust detection
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # Try to detect from the current script location
+    if [[ -f "milou.sh" ]]; then
+        # We're already in the main directory
+        SCRIPT_DIR="$(pwd)"
+    elif [[ -f "../milou.sh" ]]; then
+        # We're in a subdirectory, go up one level
+        SCRIPT_DIR="$(cd .. && pwd)"
+    else
+        # Fallback: try to find milou.sh in common locations
+        for dir in "." ".." "../.." "$(pwd)" "$(dirname "$0")"; do
+            if [[ -f "$dir/milou.sh" ]]; then
+                SCRIPT_DIR="$(cd "$dir" && pwd)"
+                break
+            fi
+        done
+        # Final fallback
+        if [[ -z "${SCRIPT_DIR:-}" ]]; then
+            SCRIPT_DIR="$(pwd)"
+        fi
+    fi
+    export SCRIPT_DIR
 fi
 
 # Single source of truth for SSL paths - CONSOLIDATED

@@ -98,6 +98,39 @@ declare -a failed_services=()
 declare -a skipped_services=()
 
 # =============================================================================
+# MODULE DEPENDENCIES
+# =============================================================================
+# Source validation module for GitHub token validation
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VALIDATION_MODULE="${SCRIPT_DIR}/../../src/_validation.sh"
+
+if [[ -f "$VALIDATION_MODULE" ]]; then
+    source "$VALIDATION_MODULE" || {
+        log "ERROR" "Failed to load validation module: $VALIDATION_MODULE"
+        exit 1
+    }
+else
+    log "WARN" "Validation module not found: $VALIDATION_MODULE"
+    log "WARN" "Using fallback token validation"
+    
+    # Fallback validation function if module not available
+    validate_github_token() {
+        local token="$1"
+        if [[ -z "$token" ]]; then
+            return 1
+        fi
+        if [[ "$token" =~ ^gh[ps]_[A-Za-z0-9]{36}$ ]] || \
+           [[ "$token" =~ ^github_pat_[A-Za-z0-9_]{22,}$ ]] || \
+           [[ "$token" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
+            return 0
+        else
+            log "ERROR" "Invalid GitHub token format"
+            return 1
+        fi
+    }
+fi
+
+# =============================================================================
 # LOGGING AND OUTPUT FUNCTIONS
 # =============================================================================
 log() {
@@ -146,21 +179,6 @@ validate_service() {
     else
         log "ERROR" "Invalid service: $service"
         log "ERROR" "Available services: ${AVAILABLE_SERVICES[*]}"
-        return 1
-    fi
-}
-
-validate_github_token() {
-    local token="$1"
-    if [[ -z "$token" ]]; then
-        return 1
-    fi
-    if [[ "$token" =~ ^gh[ps]_[A-Za-z0-9]{36}$ ]] || \
-       [[ "$token" =~ ^github_pat_[A-Za-z0-9_]{22,}$ ]] || \
-       [[ "$token" =~ ^gho_[A-Za-z0-9]{36}$ ]]; then
-        return 0
-    else
-        log "ERROR" "Invalid GitHub token format"
         return 1
     fi
 }

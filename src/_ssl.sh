@@ -3,7 +3,7 @@
 # =============================================================================
 # Milou CLI - SSL Management Module  
 # Consolidated SSL operations to eliminate code duplication
-# Version: 3.1.0 - Refactored Edition
+# Version: 3.2.0 - Enhanced User Experience Edition
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly
@@ -39,28 +39,43 @@ fi
 # SSL CONSTANTS AND CONFIGURATION
 # =============================================================================
 
-# Ensure SCRIPT_DIR is set before using it - robust detection
-if [[ -z "${SCRIPT_DIR:-}" ]]; then
-    # Try to detect from the current script location
-    if [[ -f "milou.sh" ]]; then
-        # We're already in the main directory
-        SCRIPT_DIR="$(pwd)"
-    elif [[ -f "../milou.sh" ]]; then
-        # We're in a subdirectory, go up one level
-        SCRIPT_DIR="$(cd .. && pwd)"
+# Robust SCRIPT_DIR detection with failsafe mechanisms
+ssl_detect_script_dir() {
+    local detected_dir=""
+    
+    # Method 1: Use pre-exported SCRIPT_DIR if available and valid
+    if [[ -n "${SCRIPT_DIR:-}" ]] && [[ -f "${SCRIPT_DIR}/milou.sh" ]]; then
+        detected_dir="$SCRIPT_DIR"
+    # Method 2: Detect from main entry point location  
+    elif [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+        local src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [[ -f "$src_dir/../milou.sh" ]]; then
+            detected_dir="$(cd "$src_dir/.." && pwd)"
+        fi
+    # Method 3: Search upward from current directory
     else
-        # Fallback: try to find milou.sh in common locations
-        for dir in "." ".." "../.." "$(pwd)" "$(dirname "$0")"; do
-            if [[ -f "$dir/milou.sh" ]]; then
-                SCRIPT_DIR="$(cd "$dir" && pwd)"
+        local search_dir="$(pwd)"
+        for i in {1..5}; do  # Limit search depth
+            if [[ -f "$search_dir/milou.sh" ]]; then
+                detected_dir="$search_dir"
                 break
             fi
+            search_dir="$(dirname "$search_dir")"
+            [[ "$search_dir" == "/" ]] && break
         done
-        # Final fallback
-        if [[ -z "${SCRIPT_DIR:-}" ]]; then
-            SCRIPT_DIR="$(pwd)"
-        fi
     fi
+    
+    # Failsafe: use current directory if all else fails
+    if [[ -z "$detected_dir" ]]; then
+        detected_dir="$(pwd)"
+    fi
+    
+    echo "$detected_dir"
+}
+
+# Initialize SCRIPT_DIR robustly
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
+    SCRIPT_DIR="$(ssl_detect_script_dir)"
     export SCRIPT_DIR
 fi
 
@@ -77,14 +92,186 @@ declare -g MILOU_SSL_DEFAULT_KEY_SIZE=2048
 declare -g MILOU_SSL_BACKUP_DIR="${MILOU_SSL_DIR}/backup"
 
 # =============================================================================
-# SSL INITIALIZATION AND SETUP
+# ENHANCED USER EXPERIENCE FUNCTIONS
 # =============================================================================
 
-# Initialize SSL environment - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Interactive SSL mode selection with intelligent defaults
+ssl_select_mode_interactive() {
+    local domain="${1:-localhost}"
+    local current_mode="${2:-auto}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" == "true" ]] && echo "$current_mode" && return 0
+    
+    echo -e "${BLUE}🔒 SSL Certificate Setup${NC}"
+    echo "=============================="
+    echo
+    echo "Choose how you want to handle SSL certificates for: ${BOLD}$domain${NC}"
+    echo
+    
+    # Show mode options with intelligent recommendations
+    if [[ "$domain" == "localhost" || "$domain" == "127.0.0.1" ]]; then
+        echo -e "${GREEN}   1) ${BOLD}Generate Self-Signed${NC} ${DIM}(Recommended for localhost)${NC}"
+        echo -e "      ${GREEN}✓${NC} Quick and automatic"
+        echo -e "      ${GREEN}✓${NC} Perfect for local development"
+        echo -e "      ${YELLOW}⚠${NC}  Browser security warnings"
+        echo
+        echo -e "${BLUE}   2) ${BOLD}Use Existing Certificates${NC}"
+        echo -e "      ${BLUE}✓${NC} Bring your own certificates"
+        echo -e "      ${BLUE}✓${NC} No security warnings"
+        echo
+        echo -e "${GRAY}   3) ${BOLD}Disable SSL${NC} ${DIM}(HTTP Only)${NC}"
+        echo -e "      ${YELLOW}⚠${NC}  Less secure"
+        echo -e "      ${YELLOW}⚠${NC}  Not recommended for production"
+        echo
+        
+        local default_choice="1"
+    else
+        echo -e "${GREEN}   1) ${BOLD}Let's Encrypt${NC} ${DIM}(Recommended for public domains)${NC}"
+        echo -e "      ${GREEN}✓${NC} Free trusted certificates"
+        echo -e "      ${GREEN}✓${NC} Automatic renewal"
+        echo -e "      ${YELLOW}⚠${NC}  Requires domain pointing to this server"
+        echo
+        echo -e "${BLUE}   2) ${BOLD}Use Existing Certificates${NC}"
+        echo -e "      ${BLUE}✓${NC} Bring your own certificates"
+        echo -e "      ${BLUE}✓${NC} Full control over certificate source"
+        echo
+        echo -e "${CYAN}   3) ${BOLD}Generate Self-Signed${NC}"
+        echo -e "      ${CYAN}✓${NC} Quick and automatic"
+        echo -e "      ${YELLOW}⚠${NC}  Browser security warnings"
+        echo
+        echo -e "${GRAY}   4) ${BOLD}Disable SSL${NC} ${DIM}(HTTP Only)${NC}"
+        echo -e "      ${YELLOW}⚠${NC}  Not secure"
+        echo -e "      ${RED}❌${NC} Not recommended for public domains"
+        echo
+        
+        local default_choice="1"
+    fi
+    
+    local choice
+    while true; do
+        if [[ "$domain" == "localhost" || "$domain" == "127.0.0.1" ]]; then
+            read -p "Choose SSL option [1-3] (default: $default_choice): " choice
+            choice="${choice:-$default_choice}"
+            
+            case "$choice" in
+                1) echo "generate"; return 0 ;;
+                2) echo "existing"; return 0 ;;
+                3) echo "none"; return 0 ;;
+                *) echo -e "${RED}Please choose 1, 2, or 3${NC}" ;;
+            esac
+        else
+            read -p "Choose SSL option [1-4] (default: $default_choice): " choice
+            choice="${choice:-$default_choice}"
+            
+            case "$choice" in
+                1) echo "letsencrypt"; return 0 ;;
+                2) echo "existing"; return 0 ;;
+                3) echo "generate"; return 0 ;;
+                4) echo "none"; return 0 ;;
+                *) echo -e "${RED}Please choose 1, 2, 3, or 4${NC}" ;;
+            esac
+        fi
+    done
+}
+
+# Enhanced existing certificate setup with better user guidance
+ssl_setup_existing_enhanced() {
+    local domain="$1"
+    local cert_source="$2"
+    local force="$3"
+    local quiet="$4"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "📁 Setting up existing SSL certificates"
+    
+    # Enhanced interactive certificate path selection
+    if [[ -z "$cert_source" ]] || [[ ! -d "$cert_source" ]] || [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
+        if [[ "$INTERACTIVE" != "false" ]] && [[ "$quiet" != "true" ]]; then
+            echo
+            echo -e "${BLUE}📁 SSL Certificate Location${NC}"
+            echo "================================"
+            echo
+            echo "We need to locate your SSL certificate files."
+            echo -e "Current SSL directory: ${BOLD}$(realpath "$MILOU_SSL_DIR")${NC}"
+            echo
+            echo -e "${BOLD}💡 Common Certificate Locations:${NC}"
+            echo
+            echo -e "${GREEN}Let's Encrypt (Certbot):${NC}"
+            echo "  • /etc/letsencrypt/live/yourdomain.com/"
+            echo "  • Contains: fullchain.pem + privkey.pem"
+            echo
+            echo -e "${BLUE}Custom Certificates:${NC}"  
+            echo "  • /path/to/your/certificates/"
+            echo "  • Contains: *.crt + *.key files"
+            echo "  • Or: *.pem files"
+            echo
+            echo -e "${CYAN}Supported Formats:${NC}"
+            echo "  • Let's Encrypt: fullchain.pem + privkey.pem"
+            echo "  • Standard: *.crt + *.key"
+            echo "  • PEM format: certificate.pem + private.pem"
+            echo "  • Custom naming: server.crt + server.key"
+            echo
+            
+            # Show some path suggestions based on system
+            if [[ -d "/etc/letsencrypt/live" ]]; then
+                echo -e "${GREEN}💡 Found Let's Encrypt directory!${NC}"
+                echo "Available domains:"
+                ls /etc/letsencrypt/live/ 2>/dev/null | grep -v README | head -5 | sed 's/^/  • /'
+                echo
+            fi
+            
+            while true; do
+                read -p "Enter certificate directory path: " cert_source
+                
+                if [[ -z "$cert_source" ]]; then
+                    echo -e "${YELLOW}No path provided. Try again or press Ctrl+C to cancel.${NC}"
+                    continue
+                fi
+                
+                # Expand tilde
+                cert_source="${cert_source/#\~/$HOME}"
+                
+                if [[ ! -d "$cert_source" ]]; then
+                    echo -e "${RED}Directory not found: $cert_source${NC}"
+                    echo "Please check the path and try again."
+                    continue
+                fi
+                
+                if [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
+                    echo -e "${YELLOW}Directory is empty: $cert_source${NC}"
+                    echo "Please choose a directory containing certificate files."
+                    continue
+                fi
+                
+                echo -e "${GREEN}✓ Using certificate directory: $cert_source${NC}"
+                break
+            done
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source path required for non-interactive mode"
+            return 1
+        fi
+    fi
+    
+    # Continue with existing implementation but with enhanced error messages
+    ssl_setup_existing "$domain" "$cert_source" "$force" "$quiet"
+}
+
+# =============================================================================
+# SSL INITIALIZATION AND SETUP (Enhanced)
+# =============================================================================
+
+# Initialize SSL environment - ENHANCED IMPLEMENTATION
 ssl_init() {
     local quiet="${1:-false}"
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Initializing SSL environment"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detected SCRIPT_DIR: $SCRIPT_DIR"
+    
+    # Validate SCRIPT_DIR before proceeding
+    if [[ ! -d "$SCRIPT_DIR" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid SCRIPT_DIR: $SCRIPT_DIR"
+        return 1
+    fi
     
     # Create SSL directory structure
     if ! ensure_directory "$MILOU_SSL_DIR" "755"; then
@@ -103,7 +290,7 @@ ssl_init() {
     return 0
 }
 
-# Main SSL setup function - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Main SSL setup function - ENHANCED IMPLEMENTATION
 ssl_setup() {
     local domain="${1:-localhost}"
     local ssl_mode="${2:-auto}"      # auto, generate, existing, letsencrypt, none
@@ -119,6 +306,13 @@ ssl_setup() {
         return 1
     fi
     
+    # Interactive mode selection if mode is auto and we're in interactive mode
+    if [[ "$ssl_mode" == "auto" ]] && [[ "${INTERACTIVE:-true}" != "false" ]] && [[ "$quiet" != "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🤖 Starting intelligent SSL setup"
+        ssl_mode=$(ssl_select_mode_interactive "$domain" "$ssl_mode" "$quiet")
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "Selected SSL mode: $ssl_mode"
+    fi
+    
     # Execute appropriate SSL setup based on mode
     case "$ssl_mode" in
         "none"|"disabled")
@@ -127,7 +321,7 @@ ssl_setup() {
             ;;
         "existing")
             [[ "$quiet" != "true" ]] && milou_log "INFO" "📁 Using existing SSL certificates"
-            ssl_setup_existing "$domain" "$cert_source" "$force" "$quiet"
+            ssl_setup_existing_enhanced "$domain" "$cert_source" "$force" "$quiet"
             ;;
         "generate"|"self-signed")
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 Generating self-signed certificates"
@@ -135,7 +329,7 @@ ssl_setup() {
             ;;
         "letsencrypt")
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Setting up Let's Encrypt certificates"
-            ssl_generate_letsencrypt "$domain" "$force" "$quiet"
+            ssl_generate_letsencrypt_enhanced "$domain" "$force" "$quiet"
             ;;
         "auto"|*)
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🤖 Automatic SSL setup"
@@ -192,6 +386,26 @@ ssl_setup_auto() {
 # SSL CERTIFICATE GENERATION
 # =============================================================================
 
+# Modern certificate validation for all key types
+ssl_validate_key_file() {
+    local key_file="$1"
+    local quiet="${2:-false}"
+    
+    if [[ ! -f "$key_file" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Key file not found: $key_file"
+        return 1
+    fi
+    
+    # Use modern openssl pkey command (supports RSA, EC, and all key types)
+    if openssl pkey -in "$key_file" -check -noout >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Key file validated"
+        return 0
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "Key file validation failed"
+    return 1
+}
+
 # Generate self-signed SSL certificates - SINGLE AUTHORITATIVE IMPLEMENTATION
 ssl_generate_self_signed() {
     local domain="${1:-localhost}"
@@ -245,6 +459,13 @@ ssl_generate_self_signed() {
         [[ "$quiet" != "true" ]] && milou_log "INFO" "📄 Certificate: $MILOU_SSL_CERT_FILE"
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Private key: $MILOU_SSL_KEY_FILE"
         [[ "$quiet" != "true" ]] && milou_log "INFO" "⏰ Valid for: $MILOU_SSL_DEFAULT_VALIDITY_DAYS days"
+        
+        # Show browser warning info for non-localhost domains
+        if [[ "$domain" != "localhost" && "$domain" != "127.0.0.1" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "⚠️  Note: Browsers will show security warnings for self-signed certificates"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 For production, consider using Let's Encrypt certificates"
+        fi
+        
         return 0
     else
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Generated certificate failed validation"
@@ -335,8 +556,8 @@ ssl_validate() {
         ((errors++))
     fi
     
-    # Validate private key format
-    if ! openssl rsa -in "$MILOU_SSL_KEY_FILE" -check -noout >/dev/null 2>&1; then
+    # Validate key file (support both RSA and EC keys)
+    if ! ssl_validate_key_file "$MILOU_SSL_KEY_FILE" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid private key format"
         ((errors++))
     fi
@@ -397,8 +618,8 @@ ssl_status() {
         cert_info=$(openssl x509 -in "$MILOU_SSL_CERT_FILE" -noout -subject -dates 2>/dev/null || echo "")
     fi
     
-    # Validate key file
-    if openssl rsa -in "$MILOU_SSL_KEY_FILE" -check -noout >/dev/null 2>&1; then
+    # Validate key file using enhanced validation (supports both RSA and EC keys)
+    if ssl_validate_key_file "$MILOU_SSL_KEY_FILE" "true"; then
         key_valid=true
     fi
     
@@ -501,17 +722,22 @@ ssl_validate_cert_key_pair() {
         return 1
     fi
     
-    local cert_modulus key_modulus
-    cert_modulus=$(openssl x509 -noout -modulus -in "$cert_file" 2>/dev/null | md5sum | cut -d' ' -f1 2>/dev/null || echo "")
-    key_modulus=$(openssl rsa -noout -modulus -in "$key_file" 2>/dev/null | md5sum | cut -d' ' -f1 2>/dev/null || echo "")
+    # Modern method: Compare public key hashes (works for all key types: RSA, EC, etc.)
+    local cert_pubkey_hash key_pubkey_hash
     
-    if [[ -n "$cert_modulus" && "$cert_modulus" == "$key_modulus" ]]; then
+    # Extract public key hash from certificate
+    cert_pubkey_hash=$(openssl x509 -in "$cert_file" -pubkey -noout 2>/dev/null | openssl dgst -sha256 2>/dev/null | cut -d' ' -f2)
+    
+    # Extract public key hash from private key
+    key_pubkey_hash=$(openssl pkey -in "$key_file" -pubout 2>/dev/null | openssl dgst -sha256 2>/dev/null | cut -d' ' -f2)
+    
+    if [[ -n "$cert_pubkey_hash" && -n "$key_pubkey_hash" && "$cert_pubkey_hash" == "$key_pubkey_hash" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "TRACE" "Certificate and key pair match"
         return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate and key pair do not match"
-        return 1
     fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate and key pair do not match"
+    return 1
 }
 
 # Check certificate expiration - SINGLE AUTHORITATIVE IMPLEMENTATION
@@ -788,7 +1014,7 @@ ssl_can_use_letsencrypt() {
     return 1
 }
 
-# Install certbot (simplified for consolidation)
+# Install certbot (enhanced implementation)
 ssl_install_certbot() {
     local quiet="${1:-false}"
     
@@ -797,236 +1023,144 @@ ssl_install_certbot() {
         return 0
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Installing certbot..."
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "📦 Installing certbot..."
     
+    # Update package lists first
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y certbot >/dev/null 2>&1
+        apt-get update -qq >/dev/null 2>&1
+        if apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ certbot installed successfully (apt)"
+            return 0
+        fi
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y certbot >/dev/null 2>&1
+        if yum install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ certbot installed successfully (yum)"
+            return 0
+        fi
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y certbot >/dev/null 2>&1
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot install certbot - unsupported package manager"
-        return 1
+        if dnf install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ certbot installed successfully (dnf)"
+            return 0
+        fi
+    elif command -v snap >/dev/null 2>&1; then
+        if snap install certbot --classic >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ certbot installed successfully (snap)"
+            return 0
+        fi
     fi
     
-    if command -v certbot >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "certbot installed successfully"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to install certbot"
-        return 1
-    fi
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to install certbot"
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Try installing manually: apt install certbot"
+    return 1
 }
 
-# Simplified Let's Encrypt functions (consolidated from generation.sh)
+# Enhanced port 80 status check
 ssl_check_port_80_status() {
     local quiet="${1:-false}"
-    return 0  # Simplified for consolidation - assume port 80 is available
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking port 80 availability for Let's Encrypt"
+    
+    # Check if port 80 is in use
+    if ss -tlnp | grep -q ":80 "; then
+        local process
+        process=$(ss -tlnp | grep ":80 " | head -1 | awk '{print $NF}' | cut -d',' -f2 2>/dev/null || echo "unknown")
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Port 80 is in use by: $process"
+        
+        # Check if it's a service we can temporarily stop
+        if systemctl is-active nginx >/dev/null 2>&1 || systemctl is-active apache2 >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Can temporarily stop web server for certificate generation"
+            return 0
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Port 80 conflict may prevent Let's Encrypt"
+            return 1
+        fi
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Port 80 is available"
+        return 0
+    fi
 }
 
+# Remove the stub implementations and replace with enhanced ones
 ssl_generate_letsencrypt_standalone() {
-    local domain="$1"
-    local email="$2"
-    local quiet="$3"
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Let's Encrypt standalone mode not implemented in consolidated version"
-    return 1
+    ssl_letsencrypt_standalone "$@"
 }
 
 ssl_generate_letsencrypt_with_nginx_stop() {
-    local domain="$1"
-    local email="$2"
-    local quiet="$3"
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Let's Encrypt nginx-stop mode not implemented in consolidated version"
-    return 1
+    ssl_letsencrypt_nginx "$@"
 }
 
+# Enhanced troubleshooting guide
 ssl_show_letsencrypt_troubleshooting() {
     local domain="$1"
-    milou_log "INFO" "💡 Let's Encrypt Troubleshooting for $domain:"
-    milou_log "INFO" "  • Ensure domain points to this server"
-    milou_log "INFO" "  • Check port 80 is accessible from internet"
-    milou_log "INFO" "  • Verify no firewall blocking port 80"
-    milou_log "INFO" "  • Consider using self-signed certificates instead"
+    
+    echo
+    echo -e "${BLUE}💡 Let's Encrypt Troubleshooting Guide for $domain${NC}"
+    echo "============================================================"
+    echo
+    echo -e "${BOLD}Common Issues and Solutions:${NC}"
+    echo
+    echo -e "${GREEN}1. Domain Configuration:${NC}"
+    echo "   • Ensure $domain points to this server's IP address"
+    echo "   • Check DNS with: nslookup $domain"
+    echo "   • Verify A record is correct in DNS settings"
+    echo
+    echo -e "${GREEN}2. Network Connectivity:${NC}"
+    echo "   • Port 80 must be accessible from the internet"
+    echo "   • Check firewall: ufw status or iptables -L"
+    echo "   • Test external access: curl -I http://$domain"
+    echo
+    echo -e "${GREEN}3. Server Requirements:${NC}"
+    echo "   • Stop conflicting web servers: systemctl stop nginx apache2"
+    echo "   • Ensure no other service uses port 80"
+    echo "   • Check with: ss -tlnp | grep :80"
+    echo
+    echo -e "${GREEN}4. Rate Limiting:${NC}"
+    echo "   • Let's Encrypt has rate limits (5 failures per hour)"
+    echo "   • Wait before retrying if you hit limits"
+    echo "   • Use staging environment for testing"
+    echo
+    echo -e "${YELLOW}💡 Alternative Options:${NC}"
+    echo "   • Use self-signed certificates: Choose option 3"
+    echo "   • Import existing certificates: Choose option 2"
+    echo "   • Try manual verification later"
+    echo
+    echo -e "${CYAN}🔧 Manual Let's Encrypt Commands:${NC}"
+    echo "   • Test: certbot certonly --dry-run --standalone -d $domain"
+    echo "   • Get cert: certbot certonly --standalone -d $domain"
+    echo "   • Check status: certbot certificates"
+    echo
 }
 
-# Setup existing certificates - SINGLE AUTHORITATIVE IMPLEMENTATION
-ssl_setup_existing() {
-    local domain="$1"
-    local cert_source="$2"
-    local force="$3"
-    local quiet="$4"
+# Enhanced certificate generation with better error handling
+ssl_generate_self_signed() {
+    local domain="${1:-localhost}"
+    local force="${2:-false}"
+    local quiet="${3:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Setting up existing SSL certificates"
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 Generating self-signed certificate for: $domain"
     
-    # If no cert_source provided or ssl directory is empty, prompt interactively
-    if [[ -z "$cert_source" ]] || [[ ! -d "$cert_source" ]] || [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
-        if [[ "$INTERACTIVE" != "false" ]] && [[ "$quiet" != "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "SSL certificate directory is empty or doesn't exist."
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Current SSL directory: $(realpath "$MILOU_SSL_DIR")"
-            echo
-            echo "Please provide the path to your SSL certificates:"
-            echo "  • For certbot certificates: /etc/letsencrypt/live/yourdomain.com/"
-            echo "  • For custom certificates: /path/to/your/certificates/"
-            echo
-            read -p "Certificate directory path: " cert_source
-            
-            if [[ -z "$cert_source" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "No certificate path provided"
-                return 1
-            fi
-        else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source path required"
-            return 1
-        fi
-    fi
+    # Initialize SSL environment
+    ssl_init "$quiet" || return 1
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Looking for certificates in: $cert_source"
-    
-    local source_cert source_key
-    
-    # Determine source files with enhanced support for different certificate formats
-    if [[ -f "$cert_source" ]]; then
-        # Single file provided - assume it's the certificate
-        source_cert="$cert_source"
-        # Try different key file extensions
-        for ext in key pem; do
-            local potential_key="${cert_source%.*}.$ext"
-            if [[ -f "$potential_key" ]]; then
-                source_key="$potential_key"
-                break
-            fi
-        done
-        
-        if [[ -z "$source_key" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot find corresponding private key for certificate: $source_cert"
-            return 1
-        fi
-    elif [[ -d "$cert_source" ]]; then
-        # Directory provided - look for standard files with support for various formats
-        local cert_patterns=("cert.pem" "fullchain.pem" "milou.crt" "server.crt" "certificate.crt" "ssl.crt" "*.crt")
-        local key_patterns=("privkey.pem" "milou.key" "server.key" "certificate.key" "ssl.key" "private.key" "*.key")
-        
-        # First priority: Look for certbot Let's Encrypt format (cert.pem/fullchain.pem + privkey.pem)
-        if [[ -f "$cert_source/fullchain.pem" && -f "$cert_source/privkey.pem" ]]; then
-            source_cert="$cert_source/fullchain.pem"
-            source_key="$cert_source/privkey.pem"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Found Let's Encrypt format certificates (fullchain.pem + privkey.pem)"
-        elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/privkey.pem" ]]; then
-            source_cert="$cert_source/cert.pem"
-            source_key="$cert_source/privkey.pem"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Found Let's Encrypt format certificates (cert.pem + privkey.pem)"
-        else
-            # Look for other common certificate formats
-            for cert_pattern in "${cert_patterns[@]}"; do
-                local cert_file
-                if [[ "$cert_pattern" == *"*"* ]]; then
-                    # Handle wildcard patterns
-                    cert_file=$(find "$cert_source" -maxdepth 1 -name "$cert_pattern" -type f | head -1)
-                else
-                    cert_file="$cert_source/$cert_pattern"
-                fi
-                
-                if [[ -f "$cert_file" ]]; then
-                    source_cert="$cert_file"
-                    
-                    # Find corresponding key file
-                    local cert_basename=$(basename "$cert_file")
-                    local cert_name="${cert_basename%.*}"
-                    
-                    for key_pattern in "${key_patterns[@]}"; do
-                        local key_file
-                        if [[ "$key_pattern" == *"*"* ]]; then
-                            # Handle wildcard patterns
-                            key_file=$(find "$cert_source" -maxdepth 1 -name "$key_pattern" -type f | head -1)
-                        else
-                            key_file="$cert_source/$key_pattern"
-                        fi
-                        
-                        if [[ -f "$key_file" ]]; then
-                            source_key="$key_file"
-                            break
-                        fi
-                        
-                        # Also try with same basename as certificate
-                        local key_with_cert_name="$cert_source/${cert_name}.${key_pattern#*.}"
-                        if [[ -f "$key_with_cert_name" ]]; then
-                            source_key="$key_with_cert_name"
-                            break
-                        fi
-                    done
-                    
-                    if [[ -n "$source_key" ]]; then
-                        break
-                    fi
-                fi
-            done
-            
-            if [[ -z "$source_cert" || -z "$source_key" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "Cannot find certificate and key files in directory: $cert_source"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "Supported formats:"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Let's Encrypt: fullchain.pem + privkey.pem"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • Standard: *.crt + *.key"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "  • PEM format: *.pem files"
-                return 1
-            fi
-        fi
-    else
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate source not found: $cert_source"
-        return 1
-    fi
-    
-    # Validate source files exist
-    if [[ ! -f "$source_cert" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Certificate file not found: $source_cert"
-        return 1
-    fi
-    
-    if [[ ! -f "$source_key" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Private key file not found: $source_key"
-        return 1
-    fi
-    
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Using certificate: $(basename "$source_cert")"
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "Using private key: $(basename "$source_key")"
-    
-    # Validate source certificate format (support both PEM and DER formats)
-    if ! openssl x509 -in "$source_cert" -noout -text >/dev/null 2>&1; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid certificate format: $source_cert"
-        return 1
-    fi
-    
-    # Validate source key format (support different key formats)
-    local key_valid=false
-    # Try RSA format first
-    if openssl rsa -in "$source_key" -check -noout >/dev/null 2>&1; then
-        key_valid=true
-    # Try generic private key format (for EC keys, etc.)
-    elif openssl pkey -in "$source_key" -check -noout >/dev/null 2>&1; then
-        key_valid=true
-    fi
-    
-    if [[ "$key_valid" != "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Invalid private key format: $source_key"
-        return 1
-    fi
-    
-    # Backup existing certificates if not forced
+    # Backup existing certificates if they exist and not forced
     if [[ "$force" != "true" ]] && [[ -f "$MILOU_SSL_CERT_FILE" || -f "$MILOU_SSL_KEY_FILE" ]]; then
         ssl_backup_certificates "$quiet"
     fi
     
-    # Copy certificates to SSL directory
-    if ! cp "$source_cert" "$MILOU_SSL_CERT_FILE"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to copy certificate file"
+    # Create OpenSSL configuration
+    if ! ssl_create_openssl_config "$domain" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to create OpenSSL configuration"
         return 1
     fi
     
-    if ! cp "$source_key" "$MILOU_SSL_KEY_FILE"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to copy private key file"
+    # Generate private key
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating RSA private key ($MILOU_SSL_DEFAULT_KEY_SIZE bits)"
+    if ! openssl genrsa -out "$MILOU_SSL_KEY_FILE" "$MILOU_SSL_DEFAULT_KEY_SIZE" >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to generate private key"
         return 1
     fi
     
+    # Generate certificate
     # Set secure permissions
     chmod 644 "$MILOU_SSL_CERT_FILE" 2>/dev/null || true
     chmod 600 "$MILOU_SSL_KEY_FILE" 2>/dev/null || true
@@ -1044,33 +1178,266 @@ ssl_setup_existing() {
     fi
 }
 
-# =============================================================================
-# LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
-# =============================================================================
+# Enhanced helper function for setup integration
+ssl_interactive_setup() {
+    local domain="${1:-localhost}"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" == "true" ]] && return 0
+    
+    echo
+    echo -e "${BOLD}${BLUE}🔒 SSL Certificate Configuration${NC}"
+    echo "========================================"
+    echo
+    echo "Milou requires SSL certificates for secure operation."
+    echo -e "Domain: ${BOLD}$domain${NC}"
+    echo
+    
+    # Check if certificates already exist
+    if ssl_is_enabled; then
+        echo -e "${GREEN}✓ SSL certificates found${NC}"
+        if ssl_validate "$domain" "true"; then
+            echo -e "${GREEN}✓ Certificates are valid${NC}"
+            echo
+            if milou_confirm "Keep existing certificates?" "Y"; then
+                return 0
+            fi
+        else
+            echo -e "${YELLOW}⚠ Certificates may be invalid or expired${NC}"
+            echo
+        fi
+    else
+        echo -e "${YELLOW}⚠ No SSL certificates found${NC}"
+        echo
+    fi
+    
+    # Get SSL mode from user
+    local ssl_mode
+    ssl_mode=$(ssl_select_mode_interactive "$domain" "auto" "$quiet")
+    
+    # Execute SSL setup
+    ssl_setup "$domain" "$ssl_mode" "" "false" "$quiet"
+    return $?
+}
 
-# Legacy aliases (will be removed after full refactoring)
-milou_ssl_init() { ssl_init "$@"; }
-milou_ssl_setup() { ssl_setup "$@"; }
-milou_ssl_status() { ssl_status "$@"; }
-milou_ssl_validate() { ssl_validate "$@"; }
-milou_ssl_generate_self_signed_certificate() { ssl_generate_self_signed "$@"; }
-milou_ssl_generate_letsencrypt_certificate() { ssl_generate_letsencrypt "$@"; }
-milou_ssl_validate_certificates() { ssl_validate "$@"; }
-milou_ssl_show_info() { ssl_status "$@"; }
-milou_ssl_check_expiration() { ssl_check_expiration "$@"; }
-milou_ssl_validate_certificate_domain() { ssl_validate_certificate_domain "$@"; }
-milou_ssl_validate_cert_key_pair() { ssl_validate_cert_key_pair "$@"; }
-milou_ssl_is_enabled() { ssl_is_enabled "$@"; }
-milou_ssl_get_path() { ssl_get_path "$@"; }
-milou_ssl_can_use_letsencrypt() { ssl_can_use_letsencrypt "$@"; }
-milou_ssl_install_certbot() { ssl_install_certbot "$@"; }
-milou_ssl_backup_certificates() { ssl_backup_certificates "$@"; }
+# Add missing Let's Encrypt function implementations
+ssl_generate_letsencrypt_enhanced() {
+    local domain="$1"
+    local force="${2:-false}"
+    local quiet="${3:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Enhanced Let's Encrypt setup for: $domain"
+    
+    # Pre-flight checks
+    if ! ssl_verify_domain_for_letsencrypt "$domain" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Domain verification failed for Let's Encrypt"
+        return 1
+    fi
+    
+    # Attempt certificate generation with multiple methods
+    if ssl_attempt_letsencrypt_certificate "$domain" "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Let's Encrypt certificate obtained"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Let's Encrypt certificate generation failed"
+        ssl_show_letsencrypt_troubleshooting "$domain"
+        return 1
+    fi
+}
+
+ssl_verify_domain_for_letsencrypt() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Verifying domain for Let's Encrypt: $domain"
+    
+    # Basic domain format check
+    if ! ssl_can_use_letsencrypt "$domain"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Domain not suitable for Let's Encrypt: $domain"
+        return 1
+    fi
+    
+    # DNS resolution check
+    if command -v nslookup >/dev/null 2>&1; then
+        if ! nslookup "$domain" >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "DNS resolution failed for domain: $domain"
+            return 1
+        fi
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Domain verification passed"
+    return 0
+}
+
+ssl_attempt_letsencrypt_certificate() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting Let's Encrypt certificate generation"
+    
+    # Install certbot if needed
+    if ! ssl_install_certbot "$quiet"; then
+        return 1
+    fi
+    
+    # Try different acquisition methods
+    local methods=("standalone" "webroot" "nginx")
+    
+    for method in "${methods[@]}"; do
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "Trying method: $method"
+        
+        case "$method" in
+            "standalone")
+                if ssl_letsencrypt_standalone "$domain" "$quiet"; then
+                    return 0
+                fi
+                ;;
+            "webroot")
+                if ssl_letsencrypt_webroot "$domain" "$quiet"; then
+                    return 0
+                fi
+                ;;
+            "nginx")
+                if ssl_letsencrypt_nginx "$domain" "$quiet"; then
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    
+    return 1
+}
+
+ssl_letsencrypt_standalone() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    local email="${ADMIN_EMAIL:-admin@${domain}}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting standalone Let's Encrypt certificate"
+    
+    # Check port 80 availability
+    if ! ssl_check_port_80_status "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Port 80 not available for standalone mode"
+        return 1
+    fi
+    
+    # Attempt certificate generation
+    if certbot certonly --standalone --non-interactive --agree-tos \
+        --email "$email" -d "$domain" >/dev/null 2>&1; then
+        
+        # Copy certificates to our SSL directory
+        if ssl_copy_letsencrypt_certificates "$domain" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Standalone Let's Encrypt certificate obtained"
+            return 0
+        fi
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "Standalone Let's Encrypt failed"
+    return 1
+}
+
+ssl_letsencrypt_webroot() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    local email="${ADMIN_EMAIL:-admin@${domain}}"
+    local webroot_path="/tmp/letsencrypt-webroot"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting webroot Let's Encrypt certificate"
+    
+    # Create webroot directory
+    mkdir -p "$webroot_path"
+    
+    # Attempt certificate generation
+    if certbot certonly --webroot -w "$webroot_path" --non-interactive \
+        --agree-tos --email "$email" -d "$domain" >/dev/null 2>&1; then
+        
+        # Copy certificates to our SSL directory
+        if ssl_copy_letsencrypt_certificates "$domain" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Webroot Let's Encrypt certificate obtained"
+            rm -rf "$webroot_path"
+            return 0
+        fi
+    fi
+    
+    rm -rf "$webroot_path"
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "Webroot Let's Encrypt failed"
+    return 1
+}
+
+ssl_letsencrypt_nginx() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    local email="${ADMIN_EMAIL:-admin@${domain}}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting nginx Let's Encrypt certificate"
+    
+    # Stop nginx if running
+    local nginx_was_running=false
+    if systemctl is-active nginx >/dev/null 2>&1; then
+        nginx_was_running=true
+        systemctl stop nginx >/dev/null 2>&1
+    fi
+    
+    # Use standalone mode since nginx is stopped
+    local result=1
+    if ssl_letsencrypt_standalone "$domain" "$quiet"; then
+        result=0
+    fi
+    
+    # Restart nginx if it was running
+    if [[ "$nginx_was_running" == "true" ]]; then
+        systemctl start nginx >/dev/null 2>&1
+    fi
+    
+    return $result
+}
+
+ssl_copy_letsencrypt_certificates() {
+    local domain="$1"
+    local quiet="${2:-false}"
+    
+    local letsencrypt_dir="/etc/letsencrypt/live/$domain"
+    
+    if [[ ! -d "$letsencrypt_dir" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Let's Encrypt directory not found: $letsencrypt_dir"
+        return 1
+    fi
+    
+    # Copy fullchain and private key
+    if [[ -f "$letsencrypt_dir/fullchain.pem" && -f "$letsencrypt_dir/privkey.pem" ]]; then
+        cp "$letsencrypt_dir/fullchain.pem" "$MILOU_SSL_CERT_FILE"
+        cp "$letsencrypt_dir/privkey.pem" "$MILOU_SSL_KEY_FILE"
+        
+        # Set secure permissions
+        chmod 644 "$MILOU_SSL_CERT_FILE"
+        chmod 600 "$MILOU_SSL_KEY_FILE"
+        
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Let's Encrypt certificates copied"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Let's Encrypt certificate files not found"
+        return 1
+    fi
+}
+
+# Setup existing certificates - ENHANCED IMPLEMENTATION  
+ssl_setup_existing() {
+    local domain="$1"
+    local cert_source="$2"
+    local force="$3"
+    local quiet="$4"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "Setting up existing SSL certificates"
+    
+    # Use the enhanced version
+    ssl_setup_existing_enhanced "$domain" "$cert_source" "$force" "$quiet"
+}
 
 # =============================================================================
 # EXPORT ALL FUNCTIONS
 # =============================================================================
 
-# Core SSL operations (new clean API)
+# Core SSL operations
 export -f ssl_init
 export -f ssl_setup
 export -f ssl_status
@@ -1080,9 +1447,22 @@ export -f ssl_generate_letsencrypt
 export -f ssl_setup_existing
 export -f ssl_cleanup
 
+# Enhanced SSL functions
+export -f ssl_detect_script_dir
+export -f ssl_select_mode_interactive
+export -f ssl_setup_existing_enhanced
+export -f ssl_generate_letsencrypt_enhanced
+export -f ssl_verify_domain_for_letsencrypt
+export -f ssl_attempt_letsencrypt_certificate
+export -f ssl_letsencrypt_standalone
+export -f ssl_letsencrypt_webroot
+export -f ssl_letsencrypt_nginx
+export -f ssl_interactive_setup
+
 # SSL utility functions
 export -f ssl_is_enabled
 export -f ssl_get_path
+export -f ssl_validate_key_file
 export -f ssl_validate_cert_key_pair
 export -f ssl_check_expiration
 export -f ssl_validate_certificate_domain
@@ -1094,23 +1474,11 @@ export -f ssl_backup_certificates
 # Let's Encrypt functions
 export -f ssl_can_use_letsencrypt
 export -f ssl_install_certbot
+export -f ssl_check_port_80_status
+export -f ssl_generate_letsencrypt_standalone
+export -f ssl_generate_letsencrypt_with_nginx_stop
+export -f ssl_show_letsencrypt_troubleshooting
+export -f ssl_copy_letsencrypt_certificates
 
-# Legacy aliases (for backwards compatibility during transition)
-export -f milou_ssl_init
-export -f milou_ssl_setup
-export -f milou_ssl_status
-export -f milou_ssl_validate
-export -f milou_ssl_generate_self_signed_certificate
-export -f milou_ssl_generate_letsencrypt_certificate
-export -f milou_ssl_validate_certificates
-export -f milou_ssl_show_info
-export -f milou_ssl_check_expiration
-export -f milou_ssl_validate_certificate_domain
-export -f milou_ssl_validate_cert_key_pair
-export -f milou_ssl_is_enabled
-export -f milou_ssl_get_path
-export -f milou_ssl_can_use_letsencrypt
-export -f milou_ssl_install_certbot
-export -f milou_ssl_backup_certificates
+milou_log "DEBUG" "SSL module loaded successfully"
 
-milou_log "DEBUG" "SSL module loaded successfully" 

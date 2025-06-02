@@ -39,8 +39,13 @@ fi
 # SSL CONSTANTS AND CONFIGURATION
 # =============================================================================
 
+# Ensure SCRIPT_DIR is set before using it
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
 # Single source of truth for SSL paths - CONSOLIDATED
-declare -g MILOU_SSL_DIR="${SCRIPT_DIR:-$(pwd)}/ssl"
+declare -g MILOU_SSL_DIR="${SCRIPT_DIR}/ssl"
 declare -g MILOU_SSL_CERT_FILE="${MILOU_SSL_DIR}/milou.crt"
 declare -g MILOU_SSL_KEY_FILE="${MILOU_SSL_DIR}/milou.key"
 declare -g MILOU_SSL_INFO_FILE="${MILOU_SSL_DIR}/.ssl_info"

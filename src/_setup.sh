@@ -1561,6 +1561,12 @@ setup_copy_existing_certificates() {
     local cert_source="$2"
     local ssl_dir="${SCRIPT_DIR:-$(pwd)}/ssl"
     
+    # Normalize cert_source path to remove trailing slashes and fix double slash issue
+    cert_source="${cert_source%/}"
+    
+    # Expand tilde if present
+    cert_source="${cert_source/#\~/$HOME}"
+    
     milou_log "INFO" "📂 Copying certificates from: $cert_source"
     
     # Create SSL directory

@@ -170,6 +170,12 @@ docker_login_github() {
         return 1
     fi
     
+    # Check if already authenticated with this token
+    if [[ "${GITHUB_AUTHENTICATED:-}" == "true" && "${GITHUB_AUTHENTICATED_TOKEN:-}" == "$github_token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Already authenticated with this GitHub token"
+        return 0
+    fi
+    
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Authenticating with GitHub Container Registry..."
     
     # Validate token format first if requested
@@ -271,6 +277,10 @@ docker_login_github() {
         fi
     fi
     
+    # Store authentication state with token to avoid re-authentication
+    export GITHUB_AUTHENTICATED="true"
+    export GITHUB_AUTHENTICATED_TOKEN="$github_token"
+    
     return 0
 }
 
@@ -293,22 +303,68 @@ docker_init() {
     DOCKER_ENV_FILE="$env_file"
     DOCKER_COMPOSE_FILE="$compose_file"
     
-    # Validate files exist
+    # Validate files exist with better error handling
     if [[ ! -f "$DOCKER_ENV_FILE" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Environment file not found: $DOCKER_ENV_FILE"
-        return 1
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Environment file not found: $DOCKER_ENV_FILE"
+        
+        # Try alternative locations for .env file
+        local alt_env_files=(
+            "${SCRIPT_DIR}/../.env"
+            "$(pwd)/.env"
+            "${HOME}/.milou/.env"
+        )
+        
+        local found_env=false
+        for alt_env in "${alt_env_files[@]}"; do
+            if [[ -f "$alt_env" ]]; then
+                DOCKER_ENV_FILE="$alt_env"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using alternative environment file: $DOCKER_ENV_FILE"
+                found_env=true
+                break
+            fi
+        done
+        
+        if [[ "$found_env" != "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No environment file found - proceeding with defaults"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
+            # Don't fail hard - just continue with empty env
+            DOCKER_ENV_FILE=""
+        fi
     fi
     
     if [[ ! -f "$DOCKER_COMPOSE_FILE" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Compose file not found: $DOCKER_COMPOSE_FILE"
-        return 1
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Compose file not found: $DOCKER_COMPOSE_FILE"
+        
+        # Try alternative locations for docker-compose file
+        local alt_compose_files=(
+            "${SCRIPT_DIR}/../docker-compose.yml"
+            "${SCRIPT_DIR}/../static/docker-compose.yml"
+            "$(pwd)/docker-compose.yml"
+            "$(pwd)/static/docker-compose.yml"
+        )
+        
+        local found_compose=false
+        for alt_compose in "${alt_compose_files[@]}"; do
+            if [[ -f "$alt_compose" ]]; then
+                DOCKER_COMPOSE_FILE="$alt_compose"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using alternative compose file: $DOCKER_COMPOSE_FILE"
+                found_compose=true
+                break
+            fi
+        done
+        
+        if [[ "$found_compose" != "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "No docker-compose.yml file found"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
+            return 1
+        fi
     fi
     
-    # Load environment to check for GitHub token
+    # Load environment to check for GitHub token (only if we have an env file)
     local github_token="${GITHUB_TOKEN:-}"
-    if [[ -f "$DOCKER_ENV_FILE" ]]; then
+    if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
         # Source the environment file to get GITHUB_TOKEN
-        source "$DOCKER_ENV_FILE"
+        source "$DOCKER_ENV_FILE" 2>/dev/null || true
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
     
@@ -331,16 +387,27 @@ docker_init() {
         fi
     fi
     
-    # Test Docker Compose configuration
-    if ! docker compose --env-file "$DOCKER_ENV_FILE" -f "$DOCKER_COMPOSE_FILE" config --quiet 2>/dev/null; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose configuration is invalid"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your environment file: $DOCKER_ENV_FILE"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your compose file: $DOCKER_COMPOSE_FILE"
-        return 1
+    # Test Docker Compose configuration (only if we have both files)
+    if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_COMPOSE_FILE" ]]; then
+        local docker_compose_cmd="docker compose"
+        [[ -n "$DOCKER_ENV_FILE" ]] && docker_compose_cmd="$docker_compose_cmd --env-file $DOCKER_ENV_FILE"
+        docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
+        
+        if ! $docker_compose_cmd config --quiet 2>/dev/null; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker Compose configuration validation failed"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your environment file: $DOCKER_ENV_FILE"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your compose file: $DOCKER_COMPOSE_FILE"
+            # Don't fail hard for configuration issues in update context
+            if [[ "$skip_auth" != "true" ]]; then
+                return 1
+            fi
+        fi
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Skipping Docker Compose validation due to missing files"
     fi
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker environment initialized successfully"
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Environment file: $DOCKER_ENV_FILE"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Environment file: ${DOCKER_ENV_FILE:-'none'}"
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Compose file: $DOCKER_COMPOSE_FILE"
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "  Project name: $DOCKER_PROJECT_NAME"
     
@@ -349,13 +416,23 @@ docker_init() {
 
 # Docker Compose wrapper with proper environment - SINGLE AUTHORITATIVE IMPLEMENTATION
 docker_compose() {
-    if [[ -z "$DOCKER_ENV_FILE" || -z "$DOCKER_COMPOSE_FILE" ]]; then
+    if [[ -z "$DOCKER_COMPOSE_FILE" ]]; then
         milou_log "ERROR" "Docker environment not initialized. Call docker_init first."
         return 1
     fi
     
     # Execute docker compose with proper environment
-    docker compose --env-file "$DOCKER_ENV_FILE" -f "$DOCKER_COMPOSE_FILE" "$@"
+    local docker_compose_cmd="docker compose"
+    
+    # Only add env file if it exists and is not empty
+    if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
+        docker_compose_cmd="$docker_compose_cmd --env-file $DOCKER_ENV_FILE"
+    fi
+    
+    docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
+    
+    # Execute the command
+    $docker_compose_cmd "$@"
 }
 
 # Master Docker execution function - consolidates all Docker operations

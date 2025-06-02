@@ -249,7 +249,7 @@ display_system_versions() {
     local cli_version="${SCRIPT_VERSION:-${MILOU_VERSION:-unknown}}"
     echo -e "   ${BOLD}Milou CLI:${NC}         v$cli_version"
     echo -e "   ${BOLD}Target Version:${NC}    $target_version"
-    echo -e "   ${BOLD}GitHub Token:${NC}      ${github_token:+✓ Provided}${github_token:-❌ Missing}"
+    echo -e "   ${BOLD}GitHub Token:${NC}      ${github_token:+✓ }${github_token:-❌ Missing}"
     echo
 
     # Get current running versions
@@ -483,6 +483,56 @@ ensure_dependency_services() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔧 Ensuring dependency services are running..."
     
+    # Check if we have a proper docker environment before proceeding
+    local env_file="${SCRIPT_DIR}/.env"
+    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
+    
+    # Try alternative locations if main files don't exist
+    if [[ ! -f "$env_file" ]]; then
+        local alt_env_files=(
+            "${SCRIPT_DIR}/../.env"
+            "$(pwd)/.env"
+            "${HOME}/.milou/.env"
+        )
+        
+        for alt_env in "${alt_env_files[@]}"; do
+            if [[ -f "$alt_env" ]]; then
+                env_file="$alt_env"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using environment file: $env_file"
+                break
+            fi
+        done
+        
+        # If still no .env file found, warn but continue
+        if [[ ! -f "$env_file" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No .env file found - dependency services may not be configured properly"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
+            return 1
+        fi
+    fi
+    
+    # Check for compose file
+    if [[ ! -f "$compose_file" ]]; then
+        local alt_compose_files=(
+            "${SCRIPT_DIR}/../docker-compose.yml"
+            "$(pwd)/docker-compose.yml"
+        )
+        
+        for alt_compose in "${alt_compose_files[@]}"; do
+            if [[ -f "$alt_compose" ]]; then
+                compose_file="$alt_compose"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using compose file: $compose_file"
+                break
+            fi
+        done
+        
+        if [[ ! -f "$compose_file" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No docker-compose.yml file found"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
+            return 1
+        fi
+    fi
+    
     local deps_started=0
     
     for dep_service in "${DEPENDENCY_SERVICES[@]}"; do
@@ -498,6 +548,14 @@ ensure_dependency_services() {
         milou_log "INFO" "      🚀 Starting $dep_service..."
         
         if command -v docker_execute >/dev/null 2>&1; then
+            # Initialize docker context with proper files and skip auth for dependency services
+            if command -v docker_init >/dev/null 2>&1; then
+                if ! docker_init "$env_file" "$compose_file" "true" "true"; then
+                    milou_log "ERROR" "      ❌ Failed to initialize Docker context for $dep_service"
+                    return 1
+                fi
+            fi
+            
             if docker_execute "up" "$dep_service" "false" "-d"; then
                 ((deps_started++))
                 milou_log "SUCCESS" "      ✅ $dep_service started successfully"
@@ -506,8 +564,19 @@ ensure_dependency_services() {
                 return 1
             fi
         else
-            milou_log "ERROR" "      ❌ Docker execution function not available"
-            return 1
+            # Fallback to direct docker compose call
+            if command -v docker >/dev/null 2>&1; then
+                if docker compose --env-file "$env_file" -f "$compose_file" up -d "$dep_service" 2>/dev/null; then
+                    ((deps_started++))
+                    milou_log "SUCCESS" "      ✅ $dep_service started successfully (fallback)"
+                else
+                    milou_log "ERROR" "      ❌ Failed to start $dep_service (fallback method also failed)"
+                    return 1
+                fi
+            else
+                milou_log "ERROR" "      ❌ Docker not available"
+                return 1
+            fi
         fi
     done
     
@@ -529,24 +598,60 @@ milou_update_system() {
     local backup_before_update="${2:-true}"
     local target_version="${3:-latest}"
     local specific_services="${4:-}"
-    local github_token="${GITHUB_TOKEN:-}"
     
     milou_log "STEP" "🔄 Updating Milou System - Fixed Version"
+    
+    # Load GitHub token from multiple sources (like other components do)
+    local github_token="${GITHUB_TOKEN:-}"
+    
+    # Try to load from .env file if it exists
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ -f "$env_file" ]]; then
+        # Source the environment file to get GITHUB_TOKEN
+        source "$env_file" 2>/dev/null || true
+        github_token="${GITHUB_TOKEN:-$github_token}"
+    fi
+    
+    # Also check other common .env locations
+    local alt_env_files=(
+        "${SCRIPT_DIR}/../.env"
+        "$(pwd)/.env"
+        "${HOME}/.milou/.env"
+    )
+    
+    for alt_env in "${alt_env_files[@]}"; do
+        if [[ -z "$github_token" && -f "$alt_env" ]]; then
+            source "$alt_env" 2>/dev/null || true
+            github_token="${GITHUB_TOKEN:-$github_token}"
+            [[ -n "$github_token" ]] && milou_log "DEBUG" "Token loaded from: $alt_env"
+        fi
+    done
     
     # Validate GitHub token early
     if [[ -z "$github_token" ]]; then
         milou_log "WARN" "⚠️  No GitHub token provided - will use local fallbacks only"
         milou_log "INFO" "   💡 Use: ./milou.sh update --token YOUR_TOKEN for full functionality"
     else
-        # Authenticate with GitHub
-        milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
-        if command -v docker_login_github >/dev/null 2>&1; then
-            if docker_login_github "$github_token" "false" "false"; then
-                milou_log "SUCCESS" "✅ GitHub authentication successful"
-                export GITHUB_AUTHENTICATED="true"
-            else
-                milou_log "ERROR" "❌ GitHub authentication failed"
+        # Validate token format and permissions before proceeding
+        milou_log "INFO" "🔐 Validating GitHub token for update operations..."
+        
+        # Use the new validation function for build/push operations
+        if command -v validate_token_for_build_push >/dev/null 2>&1; then
+            if ! validate_token_for_build_push "$github_token" "false"; then
+                milou_log "ERROR" "❌ GitHub token validation failed"
                 return 1
+            fi
+        else
+            # Fallback to basic authentication
+            milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
+            if command -v docker_login_github >/dev/null 2>&1; then
+                if docker_login_github "$github_token" "false" "true"; then
+                    milou_log "SUCCESS" "✅ GitHub authentication successful"
+                    export GITHUB_AUTHENTICATED="true"
+                else
+                    milou_log "ERROR" "❌ GitHub authentication failed"
+                    return 1
+                fi
             fi
         fi
     fi
@@ -686,7 +791,39 @@ _update_env_file_service_version() {
     local target_version="$2"
     local env_file="${SCRIPT_DIR}/.env"
     
-    [[ ! -f "$env_file" ]] && return 1
+    # Try to find an existing .env file in alternative locations
+    if [[ ! -f "$env_file" ]]; then
+        local alt_env_files=(
+            "${SCRIPT_DIR}/../.env"
+            "$(pwd)/.env"
+            "${HOME}/.milou/.env"
+        )
+        
+        for alt_env in "${alt_env_files[@]}"; do
+            if [[ -f "$alt_env" ]]; then
+                env_file="$alt_env"
+                milou_log "DEBUG" "Using environment file: $env_file"
+                break
+            fi
+        done
+        
+        # If no .env file found, create a minimal one
+        if [[ ! -f "$env_file" ]]; then
+            milou_log "WARN" "⚠️  No .env file found - creating minimal configuration"
+            env_file="${SCRIPT_DIR}/.env"
+            mkdir -p "$(dirname "$env_file")"
+            cat > "$env_file" << 'EOF'
+# Milou Environment Configuration
+# Auto-generated during update process
+
+# GitHub Registry Configuration
+GITHUB_REGISTRY=ghcr.io/milou-sh/milou
+
+# Service Version Tags (auto-updated)
+EOF
+            milou_log "INFO" "📝 Created new .env file at: $env_file"
+        fi
+    fi
     
     local tag_name=""
     case "$service" in
@@ -695,19 +832,26 @@ _update_env_file_service_version() {
         "frontend") tag_name="MILOU_FRONTEND_TAG" ;;
         "engine") tag_name="MILOU_ENGINE_TAG" ;;
         "nginx") tag_name="MILOU_NGINX_TAG" ;;
-        *) return 1 ;;
+        *) 
+            milou_log "WARN" "Unknown service for .env update: $service"
+            return 1 
+            ;;
     esac
     
     local clean_version
     clean_version=$(echo "$target_version" | tr -d '\n\r' | sed 's/[[:space:]]*$//')
     
     local temp_file="${env_file}.tmp"
-    if grep -q "^${tag_name}=" "$env_file"; then
+    if grep -q "^${tag_name}=" "$env_file" 2>/dev/null; then
+        # Update existing entry
         grep -v "^${tag_name}=" "$env_file" > "$temp_file"
         echo "${tag_name}=${clean_version}" >> "$temp_file"
         mv "$temp_file" "$env_file"
+        milou_log "DEBUG" "Updated $tag_name=$clean_version in $env_file"
     else
+        # Add new entry
         echo "${tag_name}=${clean_version}" >> "$env_file"
+        milou_log "DEBUG" "Added $tag_name=$clean_version to $env_file"
     fi
     
     return 0

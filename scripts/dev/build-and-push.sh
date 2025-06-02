@@ -291,6 +291,101 @@ save_token_to_env() {
 }
 
 # =============================================================================
+# HELPER: GITHUB API BUG LOGGING FOR PRIVATE PACKAGES
+# =============================================================================
+log_github_bug_for_private_package() {
+    local service="$1"
+    local image_id="$2"
+    local package_name_url_encoded="$3" # e.g., myrepo%2Fmyservice
+    local token="$4"
+    local org="$5"
+
+    local package_visibility="unknown"
+    # Check org endpoint first
+    local visibility_url_org="https://api.github.com/orgs/$org/packages/container/$package_name_url_encoded"
+    local visibility_response_org
+    visibility_response_org=$(timeout 10 curl -s -H "Authorization: Bearer $token" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$visibility_url_org" 2>/dev/null)
+    package_visibility=$(echo "$visibility_response_org" | jq -r '.visibility // "unknown"' 2>/dev/null)
+
+    if [[ "$package_visibility" == "unknown" || "$package_visibility" == "null" ]]; then
+        # Check user endpoint if org failed or gave no visibility
+        local visibility_url_user="https://api.github.com/user/packages/container/$package_name_url_encoded"
+        local visibility_response_user
+        visibility_response_user=$(timeout 10 curl -s -H "Authorization: Bearer $token" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$visibility_url_user" 2>/dev/null)
+        package_visibility=$(echo "$visibility_response_user" | jq -r '.visibility // "unknown"' 2>/dev/null)
+    fi
+
+    if [[ "$package_visibility" == "private" ]]; then
+        log "ERROR" "  🐛 GitHub API BUG: Image version $image_id for $service (private package) cannot be deleted due to download count restriction."
+        log "ERROR" "     GitHub is incorrectly applying 5000+ download restriction to PRIVATE packages!"
+        log "ERROR" "     Workaround: Delete via GitHub web interface or contact GitHub Support."
+    else
+        log "WARN" "  ⚠️  Cannot delete image version $image_id for $service (public package with 5000+ downloads, or other restriction)."
+        log "WARN" "     GitHub restricts deletion of popular public packages. Visibility determined as: $package_visibility"
+    fi
+}
+
+# =============================================================================
+# HELPER: DELETE ENTIRE GHCR PACKAGE
+# =============================================================================
+delete_ghcr_package() {
+    local service="$1"
+    local token="$2"
+    local org="$3"
+    local repo="$4"
+
+    log "INFO" "  Attempting to delete ENTIRE PACKAGE: $repo/$service for org $org (or user if org fails)"
+
+    local package_name_url_encoded="$repo%2F$service"
+    local delete_urls=(
+        "https://api.github.com/orgs/$org/packages/container/$package_name_url_encoded"
+        "https://api.github.com/user/packages/container/$package_name_url_encoded"
+    )
+    local deleted_successfully=false
+
+    for delete_url in "${delete_urls[@]}"; do
+        log "DEBUG" "    Trying package delete URL: $delete_url"
+        local delete_response
+        delete_response=$(timeout 30 curl -s -w "%{http_code}" -X DELETE \
+                            -H "Authorization: Bearer $token" \
+                            -H "Accept: application/vnd.github.v3+json" \
+                            "$delete_url" 2>/dev/null)
+        
+        local http_code="${delete_response: -3}"
+        local response_body="${delete_response%???}"
+
+        if [[ "$http_code" == "204" ]]; then
+            log "SUCCESS" "      ✅ Package $repo/$service deleted successfully via $delete_url"
+            deleted_successfully=true
+            break
+        elif [[ "$http_code" == "404" ]]; then
+            log "DEBUG" "    Package not found at $delete_url (HTTP $http_code). This may be normal if trying org vs user path."
+        elif [[ "$http_code" == "403" ]]; then
+            local error_msg_pkg
+            error_msg_pkg=$(echo "$response_body" | jq -r '.message // "Permission denied - no message"')
+            log "ERROR" "    ❌ Permission denied for package $repo/$service via $delete_url (HTTP $http_code): $error_msg_pkg"
+            log "ERROR" "       Ensure token has 'delete:packages' scope and necessary org/repo permissions."
+            # This is a hard failure for this attempt, but loop might try user endpoint.
+        else # Other errors
+            local error_msg_pkg
+            error_msg_pkg=$(echo "$response_body" | jq -r '.message // "Unknown error"')
+            log "ERROR" "    ❌ Failed to delete package $repo/$service via $delete_url (HTTP $http_code): $error_msg_pkg"
+        fi
+    done
+
+    if [[ "$deleted_successfully" == "true" ]]; then
+        return 0
+    else
+        log "ERROR" "  Failed to delete ENTIRE PACKAGE $repo/$service from all attempted endpoints."
+        return 1
+    fi
+}
+
+# =============================================================================
 # ADVANCED IMAGE MANAGEMENT AND REGISTRY OPERATIONS
 # =============================================================================
 list_ghcr_images() {
@@ -418,8 +513,9 @@ delete_ghcr_images() {
     echo "                        🗑️ IMAGE DELETION PREVIEW                            "
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    local total_images_found=0
-    declare -A service_data
+    local total_images_found_preview=0
+    declare -A service_data # Stores API URL and base64 encoded response
+    declare -A service_initial_image_counts # Stores initial image count for each service
 
     # First pass: collect and display all images
     for service in "${services_to_clean[@]}"; do
@@ -462,7 +558,8 @@ delete_ghcr_images() {
         if echo "$response" | jq -e '. | length > 0' >/dev/null 2>&1; then
             local service_images_found
             service_images_found=$(echo "$response" | jq '. | length' 2>/dev/null || echo "0")
-            total_images_found=$((total_images_found + service_images_found))
+            total_images_found_preview=$((total_images_found_preview + service_images_found))
+            service_initial_image_counts["$service"]="$service_images_found"
 
             echo "$response" | jq -r '.[] |
                 if ((.metadata.container.tags // []) | length) > 0 then
@@ -481,31 +578,33 @@ delete_ghcr_images() {
             service_data["$service"]="$working_url|$encoded_response"
         else
             echo "  📭 No images found"
+            service_initial_image_counts["$service"]="0"
         fi
     done
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📊 TOTAL: $total_images_found images found across all services"
+    echo "📊 TOTAL: $total_images_found_preview images found across all services for preview"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    if [[ $total_images_found -eq 0 ]]; then
+    if [[ $total_images_found_preview -eq 0 ]]; then
         log "INFO" "ℹ️ No images found to delete"
         set -euo pipefail
         return 0
     fi
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "INFO" "🧪 [DRY RUN] Would delete all $total_images_found images above"
+        log "INFO" "🧪 [DRY RUN] Would proceed with deletion process for $total_images_found_preview images."
         set -euo pipefail
         return 0
     fi
 
     echo ""
     if [[ "$FORCE_DELETE" != "true" && "$NON_INTERACTIVE" != "true" ]]; then
-        echo "⚠️  This will PERMANENTLY DELETE all $total_images_found images shown above!"
+        echo "⚠️  This will PERMANENTLY DELETE images shown above!"
+        echo "    If a service has only tagged versions remaining, the script will attempt to delete the ENTIRE PACKAGE for that service."
         echo ""
-        read -p "Do you want to delete ALL these images? (type 'DELETE ALL' to confirm): " confirmation
+        read -p "Do you want to delete these images (and potentially packages)? (type 'DELETE ALL' to confirm): " confirmation
         if [[ "$confirmation" != "DELETE ALL" ]]; then
             log "INFO" "Operation cancelled by user"
             set -euo pipefail
@@ -519,29 +618,39 @@ delete_ghcr_images() {
         echo ""
     fi
 
-    local total_deleted=0
-    local total_errors=0
+    local total_versions_deleted_successfully=0
+    local total_versions_failed_individual_deletion=0
+    local total_packages_attempted_deletion=0
+    local total_packages_deleted_successfully=0
+    local total_package_deletion_failures=0
+    
+    declare -A service_needs_package_delete # service_name -> true
+    declare -A images_in_service_encountering_last_tag_error # service_name -> count
 
     for service in "${!service_data[@]}"; do
-        log "INFO" "🗑️ Deleting images for $service..."
+        log "INFO" "🗑️ Processing image versions for service: $service..."
         local service_info="${service_data[$service]}"
         local working_url="${service_info%|*}"
         local encoded_response="${service_info#*|}"
         local response
         response=$(echo "$encoded_response" | base64 -d)
 
-        local package_name="$REPO_NAME%2F$service"
+        local package_name_url_encoded="$REPO_NAME%2F$service" # For bug logger and package deleter
         local temp_file
         temp_file=$(mktemp)
         echo "$response" | jq -r '.[] | .id' 2>/dev/null > "$temp_file"
+
+        local versions_deleted_this_service=0
+        local versions_failed_this_service=0 # Individual failures for this service before package attempt
+        local last_tag_errors_this_service=0
 
         while IFS= read -r image_id; do
             if [[ -n "$image_id" ]]; then
                 local delete_url=""
                 if [[ "$working_url" == *"/user/"* ]]; then
-                    delete_url="https://api.github.com/user/packages/container/$package_name/versions/$image_id"
+                    delete_url="https://api.github.com/user/packages/container/$package_name_url_encoded/versions/$image_id"
                 else
-                    delete_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name/versions/$image_id"
+                    delete_url="https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name_url_encoded/versions/$image_id"
                 fi
 
                 local delete_response
@@ -554,60 +663,110 @@ delete_ghcr_images() {
                 local response_body="${delete_response%???}"
 
                 if [[ "$http_code" == "204" ]]; then
-                    log "SUCCESS" "  ✅ Deleted image: $image_id"
-                    total_deleted=$((total_deleted + 1))
+                    log "SUCCESS" "  ✅ Deleted image version: $image_id for $service"
+                    versions_deleted_this_service=$((versions_deleted_this_service + 1))
                 else
                     local error_msg=""
                     if [[ -n "$response_body" ]] && echo "$response_body" | jq -e '.message' >/dev/null 2>&1; then
                         error_msg=$(echo "$response_body" | jq -r '.message' 2>/dev/null)
-                        if [[ "$error_msg" == *"5000 downloads"* ]]; then
-                            local package_visibility
-                            package_visibility=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-                                                     -H "Accept: application/vnd.github.v3+json" \
-                                                     "https://api.github.com/orgs/$GITHUB_ORG/packages/container/$package_name" 2>/dev/null | \
-                                                     jq -r '.visibility // "unknown"' 2>/dev/null)
-                            if [[ "$package_visibility" == "private" ]]; then
-                                log "ERROR" "  🐛 GitHub API BUG: Image $image_id cannot be deleted"
-                                log "ERROR" "     GitHub is incorrectly applying 5000+ download restriction to PRIVATE packages!"
-                                log "ERROR" "     Workaround: Delete via GitHub web interface or contact GitHub Support"
-                            else
-                                log "WARN" "  ⚠️  Cannot delete image: $image_id (too popular - 5000+ downloads)"
-                                log "WARN" "     GitHub restricts deletion of popular public packages"
-                            fi
+                        if [[ "$error_msg" == *"You cannot delete the last tagged version"* ]]; then
+                            log "WARN" "  ⚠️ Image version $image_id for $service is a last tagged version. Marking $service for potential package deletion."
+                            service_needs_package_delete["$service"]=true
+                            last_tag_errors_this_service=$((last_tag_errors_this_service + 1))
+                            # This is not counted as an immediate version failure for overall stats yet
+                        elif [[ "$error_msg" == *"5000 downloads"* ]]; then
+                            log_github_bug_for_private_package "$service" "$image_id" "$package_name_url_encoded" "$GITHUB_TOKEN" "$GITHUB_ORG"
+                            versions_failed_this_service=$((versions_failed_this_service + 1))
                         elif [[ "$error_msg" == *"does not exist"* || "$error_msg" == *"not found"* ]]; then
-                            log "WARN" "  ⚠️  Image already deleted: $image_id"
+                            log "WARN" "  ⚠️  Image version already deleted or not found: $image_id for $service"
                         elif [[ "$error_msg" == *"permission"* || "$error_msg" == *"access"* ]]; then
-                            log "ERROR" "  ❌ Permission denied for image: $image_id"
-                            log "ERROR" "     Check if your token has 'delete:packages' scope"
+                            log "ERROR" "  ❌ Permission denied for image version: $image_id for $service"
+                            log "ERROR" "     Check if your token has 'delete:packages' scope. Message: $error_msg"
+                            versions_failed_this_service=$((versions_failed_this_service + 1))
                         else
-                            log "ERROR" "  ❌ Failed to delete image: $image_id - $error_msg"
+                            log "ERROR" "  ❌ Failed to delete image version: $image_id for $service - $error_msg"
+                            versions_failed_this_service=$((versions_failed_this_service + 1))
                         fi
                     else
-                        log "ERROR" "  ❌ Failed to delete image: $image_id (HTTP $http_code)"
+                        log "ERROR" "  ❌ Failed to delete image version: $image_id for $service (HTTP $http_code)"
                         log "ERROR" "     Raw response: $response_body"
+                        versions_failed_this_service=$((versions_failed_this_service + 1))
                     fi
                     log "DEBUG" "Delete URL: $delete_url"
-                    total_errors=$((total_errors + 1))
                 fi
             fi
         done < "$temp_file"
 
         rm -f "$temp_file"
+        total_versions_deleted_successfully=$((total_versions_deleted_successfully + versions_deleted_this_service))
+        total_versions_failed_individual_deletion=$((total_versions_failed_individual_deletion + versions_failed_this_service))
+        if [[ -n "${service_needs_package_delete[$service]}" ]]; then
+            images_in_service_encountering_last_tag_error["$service"]=$last_tag_errors_this_service
+        fi
     done
+
+    # Second phase: Attempt package deletions if needed
+    if [[ ${#service_needs_package_delete[@]} -gt 0 ]]; then
+        log "INFO" ""
+        log "INFO" "🔄 Some services require package deletion due to 'last tagged version' errors."
+        for service_to_delete_pkg_for in "${!service_needs_package_delete[@]}"; do
+            total_packages_attempted_deletion=$((total_packages_attempted_deletion + 1))
+            log "INFO" "Attempting to delete ENTIRE PACKAGE for service '$service_to_delete_pkg_for'..."
+            if delete_ghcr_package "$service_to_delete_pkg_for" "$GITHUB_TOKEN" "$GITHUB_ORG" "$REPO_NAME"; then
+                log "SUCCESS" "✅ Successfully deleted ENTIRE PACKAGE for service: $service_to_delete_pkg_for"
+                total_packages_deleted_successfully=$((total_packages_deleted_successfully + 1))
+                # Note: Versions previously failed for this service due to "last tag" are now resolved.
+                # Other individual failures might also be resolved if the package is gone.
+                # For simplicity, we won't try to adjust total_versions_failed_individual_deletion downwards here,
+                # but the user should understand package deletion supersedes earlier individual errors for that package.
+            else
+                log "ERROR" "❌ Failed to delete ENTIRE PACKAGE for service: $service_to_delete_pkg_for"
+                total_package_deletion_failures=$((total_package_deletion_failures + 1))
+                # The 'last_tag_errors_this_service' for this service are now confirmed *unresolved* failures.
+                # Add them to the individual failure count as these versions remain.
+                local unresolved_last_tag_errors=${images_in_service_encountering_last_tag_error[$service_to_delete_pkg_for]:-0}
+                if [[ $unresolved_last_tag_errors -gt 0 ]]; then
+                    log "INFO" "  $unresolved_last_tag_errors image versions for $service_to_delete_pkg_for remain due to failed package deletion after 'last tag' error."
+                    total_versions_failed_individual_deletion=$((total_versions_failed_individual_deletion + unresolved_last_tag_errors))
+                fi
+            fi
+        done
+    fi
 
     echo ""
     log "INFO" "🗑️ Deletion Summary:"
-    log "INFO" "   📊 Total images processed: $total_images_found"
-    log "INFO" "   ✅ Successfully deleted: $total_deleted"
-    log "INFO" "   ❌ Failed to delete: $total_errors"
+    log "INFO" "   📊 Total distinct image versions found initially: $total_images_found_preview"
+    log "INFO" "   ✅ Successfully deleted individual image versions: $total_versions_deleted_successfully"
+    if [[ $total_packages_attempted_deletion -gt 0 ]]; then
+        log "INFO" "   📦 Attempted to delete $total_packages_attempted_deletion entire package(s)."
+        log "INFO" "     ✅ Successfully deleted $total_packages_deleted_successfully entire package(s)."
+        if [[ $total_package_deletion_failures -gt 0 ]]; then
+            log "INFO" "     ❌ Failed to delete $total_package_deletion_failures entire package(s)."
+        fi
+    fi
+    log "INFO" "   ❌ Unresolved failed image version deletions: $total_versions_failed_individual_deletion"
+    log "INFO" "      (This includes versions that couldn't be individually deleted and whose package also failed deletion if attempted)"
 
     set -euo pipefail
 
-    if [[ $total_errors -eq 0 ]]; then
-        log "SUCCESS" "✅ All images deleted successfully!"
-        return 0
+    local final_unresolved_errors=$((total_versions_failed_individual_deletion + total_package_deletion_failures))
+
+    if [[ $final_unresolved_errors -eq 0 ]]; then
+        # Check if all initially found images are accounted for by individual deletions or package deletions
+        # This is complex to perfectly reconcile here, so we focus on errors.
+        log "SUCCESS" "✅ All deletion operations attempted. Please verify registry for final state."
+        if [[ $total_versions_deleted_successfully -gt 0 || $total_packages_deleted_successfully -gt 0 ]]; then
+             return 0 # Success if any deletion happened and no unresolved errors
+        elif [[ $total_images_found_preview -eq 0 ]]; then
+             return 0 # Success if there was nothing to delete
+        else
+             # No deletions and no errors, but images were there? Could be dry run or all skipped.
+             # This path should ideally not be hit if images were present and not dry_run.
+             log "WARN" "No items were deleted, but no errors reported. Check logs."
+             return 0 # Consider it non-failure if no errors.
+        fi
     else
-        log "WARN" "⚠️ Image deletion completed with some errors"
+        log "WARN" "⚠️ Deletion process completed with $final_unresolved_errors unresolved error(s)."
         return 1
     fi
 }
@@ -809,89 +968,89 @@ show_help() {
     cat << EOF
 ${BOLD}${BLUE}🐳 Milou Docker Build & Push System v3.2${NC}
 
-${BOLD}USAGE:${NC}
+${BOLD}${BLUE}USAGE:${NC}
   $0 [OPTIONS]
 
-${BOLD}CORE OPTIONS:${NC}
-  --service SERVICE         Build specific service (${AVAILABLE_SERVICES[*]})
-  --version VERSION         Tag with version (e.g., 1.0.0, latest)
-  --all                     Build all services
-  --push                    Push to registry after building
-  --force                   Force rebuild even if image exists
-  --dry-run                 Show what would be done without executing
+${BOLD}${BLUE}CORE OPTIONS:${NC}
+  ${CYAN}--service SERVICE${NC}         Build specific service (${AVAILABLE_SERVICES[*]})
+  ${CYAN}--version VERSION${NC}         Tag with version (e.g., 1.0.0, latest)
+  ${CYAN}--all${NC}                     Build all services
+  ${CYAN}--push${NC}                    Push to registry after building
+  ${CYAN}--force${NC}                   Force rebuild even if image exists
+  ${CYAN}--dry-run${NC}                 Show what would be done without executing
 
-${BOLD}AUTHENTICATION:${NC}
-  --token TOKEN             GitHub Personal Access Token
-  --save-token              Save provided token to .env file
-  --non-interactive         Run without user prompts
+${BOLD}${BLUE}AUTHENTICATION:${NC}
+  ${CYAN}--token TOKEN${NC}             GitHub Personal Access Token
+  ${CYAN}--save-token${NC}              Save provided token to .env file
+  ${CYAN}--non-interactive${NC}         Run without user prompts
 
-${BOLD}BUILD OPTIONS:${NC}
-  --no-diff-check           Skip checking for source code differences
-  --no-cache                Disable build cache
-  --cache-from IMAGE        Use external cache source
-  --cache-to DEST           Export cache to destination
-  --build-arg KEY=VALUE     Pass build arguments (comma-separated)
-  --target STAGE            Build specific stage
-  --platform PLATFORMS      Target platforms (default: linux/amd64)
-  --no-parallel             Disable parallel builds (by default, parallel is ON)
-  --timeout SECONDS         Build timeout (default: 1800)
+${BOLD}${BLUE}BUILD OPTIONS:${NC}
+  ${CYAN}--no-diff-check${NC}           Skip checking for source code differences
+  ${CYAN}--no-cache${NC}                Disable build cache
+  ${CYAN}--cache-from IMAGE${NC}        Use external cache source
+  ${CYAN}--cache-to DEST${NC}           Export cache to destination
+  ${CYAN}--build-arg KEY=VALUE${NC}     Pass build arguments (comma-separated)
+  ${CYAN}--target STAGE${NC}            Build specific stage
+  ${CYAN}--platform PLATFORMS${NC}      Target platforms (default: linux/amd64)
+  ${CYAN}--no-parallel${NC}             Disable parallel builds (by default, parallel is ON)
+  ${CYAN}--timeout SECONDS${NC}         Build timeout (default: 1800)
 
-${BOLD}IMAGE MANAGEMENT:${NC}
-  --list-images             List all images in registry with details
-  --delete-images           Show all images and ask to delete them all
-  --force-delete            Skip confirmation prompts for deletion
-  --prune                   Prune local Docker resources after build
-  --cleanup                 Clean up Docker resources after completion
+${BOLD}${BLUE}IMAGE MANAGEMENT:${NC}
+  ${CYAN}--list-images${NC}             List all images in registry with details
+  ${CYAN}--delete-images${NC}           Show all images and ask to delete them all
+  ${CYAN}--force-delete${NC}            Skip confirmation prompts for deletion
+  ${CYAN}--prune${NC}                   Prune local Docker resources after build
+  ${CYAN}--cleanup${NC}                 Clean up Docker resources after completion
 
-${BOLD}OUTPUT OPTIONS:${NC}
-  --verbose                 Enable detailed logging
-  --quiet                   Suppress non-essential output
-  --no-progress             Disable build progress display
+${BOLD}${BLUE}OUTPUT OPTIONS:${NC}
+  ${CYAN}--verbose${NC}                 Enable detailed logging
+  ${CYAN}--quiet${NC}                   Suppress non-essential output
+  ${CYAN}--no-progress${NC}             Disable build progress display
 
-${BOLD}REGISTRY OPTIONS:${NC}
-  --registry URL            Registry URL (default: ghcr.io)
-  --org ORG                 GitHub organization (default: milou-sh)
-  --repo REPO               Repository name (default: milou)
+${BOLD}${BLUE}REGISTRY OPTIONS:${NC}
+  ${CYAN}--registry URL${NC}            Registry URL (default: ghcr.io)
+  ${CYAN}--org ORG${NC}                 GitHub organization (default: milou-sh)
+  ${CYAN}--repo REPO${NC}               Repository name (default: milou)
 
-${BOLD}ADVANCED OPTIONS:${NC}
-  --secrets KEY=VALUE       Build secrets (comma-separated)
-  --ssh SSH_AGENT           SSH agent socket or keys
-  --test                    Run comprehensive system tests
-  --test-api                Quick API connectivity test
+${BOLD}${BLUE}ADVANCED OPTIONS:${NC}
+  ${CYAN}--secrets KEY=VALUE${NC}       Build secrets (comma-separated)
+  ${CYAN}--ssh SSH_AGENT${NC}           SSH agent socket or keys
+  ${CYAN}--test${NC}                    Run comprehensive system tests
+  ${CYAN}--test-api${NC}                Quick API connectivity test
 
-${BOLD}PROJECT PATH OPTIONS:${NC}
-  --path PATH               Location of the 'milou_fresh' directory (default: ../milou_fresh)
+${BOLD}${BLUE}PROJECT PATH OPTIONS:${NC}
+  ${CYAN}--path PATH${NC}               Location of the 'milou_fresh' directory (default: ../milou_fresh)
 
-${BOLD}EXAMPLES:${NC}
-  # Test the script setup
-  $0 --test
+${BOLD}${BLUE}EXAMPLES:${NC}
+  ${GREEN}# Test the script setup${NC}
+  $0 ${CYAN}--test${NC}
 
-  # Quick API test with token
-  $0 --test-api --token ghp_xxx
+  ${GREEN}# Quick API test with token${NC}
+  $0 ${CYAN}--test-api --token ghp_xxx${NC}
 
-  # Build and push specific service
-  $0 --service backend --version 1.0.0 --push --token ghp_xxx
+  ${GREEN}# Build and push specific service${NC}
+  $0 ${CYAN}--service backend --version 1.0.0 --push --token ghp_xxx${NC}
 
-  # Build all services with parallel execution (default)
-  $0 --all --version 1.2.0 --push --parallel
+  ${GREEN}# Build all services with parallel execution (default)${NC}
+  $0 ${CYAN}--all --version 1.2.0 --push --parallel${NC}
 
-  # Build on a custom project path
-  $0 --all --path /home/user/repos/milou_fresh --version 2.0.0
+  ${GREEN}# Build on a custom project path${NC}
+  $0 ${CYAN}--all --path /home/user/repos/milou_fresh --version 2.0.0${NC}
 
-  # List images in registry
-  $0 --list-images --service frontend
+  ${GREEN}# List images in registry${NC}
+  $0 ${CYAN}--list-images --service frontend${NC}
 
-  # Show all images and delete them (with confirmation)
-  $0 --delete-images --token ghp_xxx
+  ${GREEN}# Show all images and delete them (with confirmation)${NC}
+  $0 ${CYAN}--delete-images --token ghp_xxx${NC}
 
-  # Disable parallel builds (force serial)
-  $0 --all --no-parallel --version 1.3.0 --push --token ghp_xxx
+  ${GREEN}# Disable parallel builds (force serial)${NC}
+  $0 ${CYAN}--all --no-parallel --version 1.3.0 --push --token ghp_xxx${NC}
 
-${BOLD}TOKEN SETUP:${NC}
+${BOLD}${BLUE}TOKEN SETUP:${NC}
   Create a token at: https://github.com/settings/tokens
   Required scopes: read:packages, write:packages, delete:packages
 
-${BOLD}NOTES:${NC}
+${BOLD}${BLUE}NOTES:${NC}
   - For deleting images, your token needs 'delete:packages' scope
   - Images older than 30 days or untagged images will be deleted
   - Use --dry-run to see what would happen without making changes
@@ -1519,7 +1678,7 @@ execute_build_process() {
                 # Process all finished children
                 for pid in "${!pid_to_service[@]}"; do
                     if ! kill -0 "$pid" 2>/dev/null; then
-                        # This PID has exited; find status in child’s output
+                        # This PID has exited; find status in child's output
                         unset pid_to_service["$pid"]
                         running=$((running - 1))
                     fi
@@ -1538,28 +1697,28 @@ execute_build_process() {
             done
         done
 
-        # Because we printed “SUCCESS::service” or “FAILED::service” in each subshell,
+        # Because we printed "SUCCESS::service" or "FAILED::service" in each subshell,
         # we need to collect them now. Easiest is to read the entire stdout and parse.
         # However, because the subshells may have interleaved output, a safer approach is:
         # store results in a temp file instead. We will change to that approach:
 
-        # (Better approach: echo results to a temp file inside build_service’s subshell.)
+        # (Better approach: echo results to a temp file inside build_service's subshell.)
         # But for simplicity here, we rely on the final sentinel status already recorded
         # by build_service in the global arrays. So skip additional parsing.
         #
         # Note: The above solution assumes that build_service itself calls
-        # “successful_services+=(...)” or “failed_services+=(...)” within each subshell,
-        # but that won’t reflect into the parent shell. So instead, let's use a temp file
+        # "successful_services+=(...) or "failed_services+=(...) within each subshell,
+        # but that won't reflect into the parent shell. So instead, let's use a temp file
         # approach:
 
         # -- ALTERNATE IMPLEMENTATION NOTE: In reality, capturing per-service success/failure
         # is trickier in background subshells. A robust approach is to have each subshell
-        # write a line to a known temp file (e.g. “service:0” or “service:1”). Then after all
+        # write a line to a known temp file (e.g. "service:0" or "service:1"). Then after all
         # jobs finish, read that temp file and populate successful_services / failed_services.
         #
         # For brevity, we leave that detail as a known implementation step: each build_service
-        # invocation should append to /tmp/milou_build_results.$$  (“$service:0” means success,
-        # “$service:1” means failure). Then parse that file here. If you want the exact code,
+        # invocation should append to /tmp/milou_build_results.$$  (service:0 means success,
+        # service:1 means failure). Then parse that file here. If you want the exact code,
         # see the commented-out block further below.
         :
     fi

@@ -310,137 +310,19 @@ log_next_steps() {
 }
 
 # =============================================================================
-# SECURE RANDOM GENERATION (Consolidated from 3+ implementations)
+# LEGACY COMPATIBILITY WRAPPERS
 # =============================================================================
 
-# Generate secure random strings - SINGLE AUTHORITATIVE IMPLEMENTATION
-generate_secure_random() {
-    local length="${1:-32}"
-    local format="${2:-safe}"  # safe, alphanumeric, hex, numeric
-    local exclude_ambiguous="${3:-true}"
-    
-    local chars=""
-    case "$format" in
-        safe)
-            # Safe characters for passwords (excluding ambiguous ones)
-            if [[ "$exclude_ambiguous" == "true" ]]; then
-                chars="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*()_+-="
-            else
-                chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-="
-            fi
-            ;;
-        alphanumeric)
-            # Only letters and numbers
-            if [[ "$exclude_ambiguous" == "true" ]]; then
-                chars="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
-            else
-                chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-            fi
-            ;;
-        hex)
-            # Hexadecimal characters
-            chars="0123456789abcdef"
-            ;;
-        numeric)
-            # Only numbers
-            if [[ "$exclude_ambiguous" == "true" ]]; then
-                chars="23456789"
-            else
-                chars="0123456789"
-            fi
-            ;;
-        alpha)
-            # Only letters
-            chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-            ;;
-        *)
-            milou_log "ERROR" "Unknown format: $format. Use: safe, alphanumeric, hex, numeric, alpha"
-            return 1
-            ;;
-    esac
-    
-    local result=""
-    
-    # Method 1: Try OpenSSL first (most secure)
-    if command -v openssl >/dev/null 2>&1; then
-        case "$format" in
-            hex) 
-                result=$(openssl rand -hex "$((length / 2))" 2>/dev/null | cut -c1-"$length")
-                ;;
-            *)
-                # For non-hex formats, generate base64 and filter
-                local base64_length=$((length * 3))  # Generate extra to account for filtering
-                local base64_output
-                base64_output=$(openssl rand -base64 "$base64_length" 2>/dev/null | tr -d "=+/\n")
-                if [[ -n "$base64_output" ]]; then
-                    result=""
-                    for ((i=0; i<${#base64_output} && ${#result}<length; i++)); do
-                        local char="${base64_output:$i:1}"
-                        if [[ "$chars" == *"$char"* ]]; then
-                            result+="$char"
-                        fi
-                    done
-                fi
-                ;;
-        esac
-    fi
-    
-    # Method 2: Try /dev/urandom if OpenSSL failed
-    if [[ -z "$result" && -c /dev/urandom ]]; then
-        if command -v tr >/dev/null 2>&1; then
-            local random_bytes
-            random_bytes=$(head -c "$((length * 4))" /dev/urandom 2>/dev/null | tr -dc "$chars" | head -c "$length")
-            if [[ ${#random_bytes} -eq $length ]]; then
-                result="$random_bytes"
-            fi
-        fi
-    fi
-    
-    # Method 3: Fallback to BASH $RANDOM (less secure but always available)
-    if [[ -z "$result" ]]; then
-        milou_log "DEBUG" "Using fallback random generation method"
-        result=""
-        for ((i=0; i<length; i++)); do
-            result+="${chars:$((RANDOM % ${#chars})):1}"
-        done
-    fi
-    
-    # Validate result length
-    if [[ ${#result} -ne $length ]]; then
-        # Ensure exact length by padding or truncating
-        if [[ ${#result} -lt $length ]]; then
-            # Pad with additional characters
-            while [[ ${#result} -lt $length ]]; do
-                result+="${chars:$((RANDOM % ${#chars})):1}"
-            done
-        fi
-        result="${result:0:$length}"
-    fi
-    
-    echo "$result"
-}
+# NOTE: generate_secure_random is now provided by _security.sh module
+# This legacy function has been removed to eliminate duplication
 
-# Legacy alias for backwards compatibility (will be removed after refactoring)
+# Legacy alias for backwards compatibility
 milou_generate_secure_random() {
     generate_secure_random "$@"
 }
 
-# Generate UUID
-generate_uuid() {
-    if command -v uuidgen >/dev/null 2>&1; then
-        uuidgen
-    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid
-    else
-        # Fallback UUID generation
-        printf '%08x-%04x-%04x-%04x-%012x\n' \
-            $((RANDOM * RANDOM)) \
-            $((RANDOM)) \
-            $((RANDOM | 0x4000)) \
-            $((RANDOM | 0x8000)) \
-            $((RANDOM * RANDOM * RANDOM))
-    fi
-}
+# NOTE: generate_uuid is now provided by _security.sh module
+# This legacy function has been removed to eliminate duplication
 
 # =============================================================================
 # INPUT VALIDATION (Consolidated from multiple files)
@@ -892,10 +774,9 @@ _safe_export() {
 # Core logging
 _safe_export milou_log
 
-# Random generation (consolidated)
-_safe_export generate_secure_random
+# Random generation (now provided by security module)
+# generate_secure_random and generate_uuid are exported by _security.sh
 _safe_export milou_generate_secure_random
-_safe_export generate_uuid
 
 # Validation (consolidated)
 _safe_export validate_email

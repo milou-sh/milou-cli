@@ -40,9 +40,9 @@ fi
 # =============================================================================
 
 # Configuration file paths and settings
-declare -g MILOU_CONFIG_FILE="${SCRIPT_DIR:-$(pwd)}/.env"
-declare -g MILOU_CONFIG_TEMPLATE="${SCRIPT_DIR:-$(pwd)}/.env.example"
-declare -g MILOU_CONFIG_BACKUP_DIR="${SCRIPT_DIR:-$(pwd)}/backups"
+declare -g MILOU_CONFIG_FILE="$(get_env_file_path)"
+declare -g MILOU_CONFIG_TEMPLATE="${SCRIPT_DIR}/.env.example"
+declare -g MILOU_CONFIG_BACKUP_DIR="$(get_backup_dir_path)"
 
 # Configuration defaults
 declare -g MILOU_DEFAULT_DOMAIN="localhost"
@@ -153,39 +153,23 @@ config_generate() {
     fi
 }
 
-# Generate secure credentials set - SINGLE AUTHORITATIVE IMPLEMENTATION
+# Generate secure credentials set - delegates to security module
 config_generate_credentials() {
     local quiet="${1:-false}"
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Generating secure credential set"
     
-    # Use centralized random generation from core module
-    local postgres_user="milou_user_$(generate_secure_random 8 "alphanumeric")"
-    local postgres_password="$(generate_secure_random 32 "safe")"
-    local postgres_db="milou_database"
-    local redis_password="$(generate_secure_random 32 "safe")"
-    local rabbitmq_user="milou_rabbit_$(generate_secure_random 6 "alphanumeric")"
-    local rabbitmq_password="$(generate_secure_random 32 "safe")"
-    local session_secret="$(generate_secure_random 64 "safe")"
-    local encryption_key="$(generate_secure_random 64 "hex")"
-    local jwt_secret="$(generate_secure_random 32 "safe")"
-    local admin_password="$(generate_secure_random 16 "safe")"
-    local api_key="$(generate_secure_random 40 "safe")"
+    # Ensure security module is loaded
+    if [[ "${MILOU_SECURITY_LOADED:-}" != "true" ]]; then
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        source "${script_dir}/_security.sh" || {
+            echo "ERROR: Cannot load security module" >&2
+            return 1
+        }
+    fi
     
-    # Return credentials as associative array data
-    cat << EOF
-POSTGRES_USER=$postgres_user
-POSTGRES_PASSWORD=$postgres_password
-POSTGRES_DB=$postgres_db
-REDIS_PASSWORD=$redis_password
-RABBITMQ_DEFAULT_USER=$rabbitmq_user
-RABBITMQ_DEFAULT_PASS=$rabbitmq_password
-SESSION_SECRET=$session_secret
-ENCRYPTION_KEY=$encryption_key
-JWT_SECRET=$jwt_secret
-ADMIN_PASSWORD=$admin_password
-API_KEY=$api_key
-EOF
+    # Delegate to security module
+    generate_all_credentials "milou"
 }
 
 # Find available port automatically

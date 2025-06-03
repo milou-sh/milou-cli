@@ -70,7 +70,13 @@ function cleanup() {
 # =============================================================================
 
 function load_core_modules() {
-    # Direct module loading - no complex tracking needed
+    # Load global state first (critical for all operations)
+    source "${SRC_DIR}/_globals.sh" || exit 1
+    
+    # Load security module (required for credentials)
+    source "${SRC_DIR}/_security.sh" || exit 1
+    
+    # Load core modules
     source "${SRC_DIR}/_core.sh" || exit 1
     source "${SRC_DIR}/_state.sh" || exit 1  
     source "${SRC_DIR}/_validation.sh" || exit 1

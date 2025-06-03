@@ -146,12 +146,15 @@ milou_admin_reset_password() {
     
     # Generate new password if not provided
     if [[ -z "$new_password" ]]; then
-        if command -v milou_generate_secure_random >/dev/null 2>&1; then
-            new_password=$(milou_generate_secure_random 16)
-        else
-            # Fallback password generation
-            new_password=$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | base64 | head -c 16)
+        # Use security module for password generation
+        if [[ "${MILOU_SECURITY_LOADED:-}" != "true" ]]; then
+            local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            source "${script_dir}/_security.sh" || {
+                echo "ERROR: Cannot load security module" >&2
+                return 1
+            }
         fi
+        new_password=$(generate_secure_random 16 "safe")
         milou_log "INFO" "🎲 Generated new secure password"
     fi
     
@@ -212,11 +215,15 @@ milou_admin_create_user() {
     
     # Generate password if not provided
     if [[ -z "$password" ]]; then
-        if command -v milou_generate_secure_random >/dev/null 2>&1; then
-            password=$(milou_generate_secure_random 16)
-        else
-            password=$(openssl rand -base64 16 2>/dev/null || date +%s | sha256sum | base64 | head -c 16)
+        # Use security module for password generation
+        if [[ "${MILOU_SECURITY_LOADED:-}" != "true" ]]; then
+            local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            source "${script_dir}/_security.sh" || {
+                echo "ERROR: Cannot load security module" >&2
+                return 1
+            }
         fi
+        password=$(generate_secure_random 16 "safe")
         milou_log "DEBUG" "Generated secure password for admin user"
     fi
     

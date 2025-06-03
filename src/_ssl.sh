@@ -1410,54 +1410,60 @@ ssl_setup_existing() {
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Scanning for certificates in: $cert_source"
     
-    # Pattern 1: Let's Encrypt format (fullchain.pem + privkey.pem)
-    if [[ -f "$cert_source/fullchain.pem" && -f "$cert_source/privkey.pem" ]]; then
+    # Helper function to check if file exists and is readable (handles broken symlinks)
+    is_valid_file() {
+        [[ -f "$1" && -r "$1" ]]
+    }
+    
+    # Pattern 1: Let's Encrypt format (fullchain.pem + privkey.pem) - HIGHEST PRIORITY
+    if is_valid_file "$cert_source/fullchain.pem" && is_valid_file "$cert_source/privkey.pem"; then
         cert_file="$cert_source/fullchain.pem"
         key_file="$cert_source/privkey.pem"
         found_format="Let's Encrypt"
     
     # Pattern 2: Standard PEM format variations
-    elif [[ -f "$cert_source/certificate.pem" && -f "$cert_source/private-key.pem" ]]; then
+    elif is_valid_file "$cert_source/certificate.pem" && is_valid_file "$cert_source/private-key.pem"; then
         cert_file="$cert_source/certificate.pem"
         key_file="$cert_source/private-key.pem"
         found_format="Standard PEM"
-    elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/privkey.pem" ]]; then
-        cert_file="$cert_source/cert.pem"
-        key_file="$cert_source/privkey.pem"
-        found_format="PEM (cert.pem/privkey.pem)"
-    elif [[ -f "$cert_source/cert.pem" && -f "$cert_source/key.pem" ]]; then
+    elif is_valid_file "$cert_source/cert.pem" && is_valid_file "$cert_source/key.pem"; then
         cert_file="$cert_source/cert.pem"
         key_file="$cert_source/key.pem"
         found_format="PEM (cert.pem/key.pem)"
+    # Note: Removed cert.pem + privkey.pem pattern as it conflicts with Let's Encrypt and is less reliable
     
     # Pattern 3: Standard CRT format variations  
-    elif [[ -f "$cert_source/certificate.crt" && -f "$cert_source/private-key.key" ]]; then
+    elif is_valid_file "$cert_source/certificate.crt" && is_valid_file "$cert_source/private-key.key"; then
         cert_file="$cert_source/certificate.crt"
         key_file="$cert_source/private-key.key"
         found_format="Standard CRT/KEY"
-    elif [[ -f "$cert_source/$domain.crt" && -f "$cert_source/$domain.key" ]]; then
+    elif is_valid_file "$cert_source/$domain.crt" && is_valid_file "$cert_source/$domain.key"; then
         cert_file="$cert_source/$domain.crt"
         key_file="$cert_source/$domain.key"
         found_format="Domain-named CRT/KEY"
-    elif [[ -f "$cert_source/server.crt" && -f "$cert_source/server.key" ]]; then
+    elif is_valid_file "$cert_source/server.crt" && is_valid_file "$cert_source/server.key"; then
         cert_file="$cert_source/server.crt"
         key_file="$cert_source/server.key"
         found_format="Server CRT/KEY"
     
-    # Pattern 4: Generic auto-detection
+    # Pattern 4: Generic auto-detection (only for valid, readable files)
     else
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Attempting auto-detection of certificate files"
         
-        # Find certificate files (excluding keys)
+        # Find certificate files (excluding keys) - only valid, readable files
         local cert_candidates=()
         while IFS= read -r -d '' file; do
-            cert_candidates+=("$file")
+            if is_valid_file "$file"; then
+                cert_candidates+=("$file")
+            fi
         done < <(find "$cert_source" -maxdepth 1 -name "*.crt" -o -name "*.pem" | grep -v -E "(key|private)" | head -5 | tr '\n' '\0')
         
-        # Find key files
+        # Find key files - only valid, readable files
         local key_candidates=()
         while IFS= read -r -d '' file; do
-            key_candidates+=("$file")
+            if is_valid_file "$file"; then
+                key_candidates+=("$file")
+            fi
         done < <(find "$cert_source" -maxdepth 1 -name "*.key" -o -name "*private*.pem" -o -name "*privkey*.pem" | head -5 | tr '\n' '\0')
         
         if [[ ${#cert_candidates[@]} -gt 0 && ${#key_candidates[@]} -gt 0 ]]; then
@@ -1468,9 +1474,24 @@ ssl_setup_existing() {
         fi
     fi
     
-    # Validate that we found certificate files
+    # Enhanced validation with better error messages for broken symlinks
     if [[ -z "$cert_file" || -z "$key_file" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Could not find valid certificate files in: $cert_source"
+        
+        # Check for broken symlinks and provide helpful error message
+        local broken_symlinks=()
+        while IFS= read -r -d '' file; do
+            if [[ -L "$file" && ! -e "$file" ]]; then
+                broken_symlinks+=("$(basename "$file")")
+            fi
+        done < <(find "$cert_source" -maxdepth 1 -name "*.crt" -o -name "*.key" -o -name "*.pem" | tr '\n' '\0')
+        
+        if [[ ${#broken_symlinks[@]} -gt 0 ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Found broken symbolic links: ${broken_symlinks[*]}"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 These appear to be Let's Encrypt symlinks pointing to missing files"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "   Try: 1) Regenerating certificates, or 2) Using a different directory"
+        fi
+        
         [[ "$quiet" != "true" ]] && milou_log "INFO" "Expected certificate file patterns:"
         [[ "$quiet" != "true" ]] && milou_log "INFO" "  • fullchain.pem + privkey.pem (Let's Encrypt)"
         [[ "$quiet" != "true" ]] && milou_log "INFO" "  • certificate.pem + private-key.pem"

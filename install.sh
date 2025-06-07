@@ -111,16 +111,24 @@ success() {
 install_dependency() {
     local dep="$1"
 
-    if [[ "$INTERACTIVE" == "false" ]] || [[ "$QUIET" == "true" ]]; then
-        error "Missing required dependency: $dep. In non-interactive mode, please install it manually."
+    # In quiet mode, never install dependencies automatically.
+    if [[ "$QUIET" == "true" ]]; then
+        error "Missing required dependency: '$dep'. In quiet mode, please install it manually."
         return 1
     fi
 
-    local choice
-    choice=$(prompt_user "Dependency '$dep' is missing. Would you like this script to try and install it? (Y/n)" "y")
-    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
-        error "Installation of '$dep' skipped by user."
-        return 1
+    # In non-interactive mode (e.g. curl|bash), we cannot prompt.
+    # We will log what we're doing and proceed automatically.
+    if [[ "$INTERACTIVE" == "false" ]]; then
+        log "Non-interactive mode detected. Attempting to auto-install missing dependency: '$dep'"
+    else
+        # In interactive mode, we ask the user for permission.
+        local choice
+        choice=$(prompt_user "Dependency '$dep' is missing. Would you like this script to try and install it? (Y/n)" "y")
+        if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+            error "Installation of '$dep' skipped by user."
+            return 1
+        fi
     fi
 
     log "Attempting to install $dep..."
@@ -342,7 +350,7 @@ show_help() {
 
 # Check prerequisites
 check_prerequisites() {
-    for cmd in git curl; do
+    for cmd in curl tar; do
         if ! command -v "$cmd" &> /dev/null; then
             if ! install_dependency "$cmd"; then
                 # If installation fails or is skipped, use the original handle_error to prompt for manual intervention/retry
@@ -427,8 +435,8 @@ install_milou() {
     
     log "Downloading from GitHub ($BRANCH branch)..."
     
-    if ! git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
-        handle_error "Failed to download repository"
+    if ! curl -fsSL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$parent_dir" --strip-components=1; then
+        handle_error "Failed to download and extract repository archive"
         return 1
     fi
     

@@ -107,74 +107,6 @@ success() {
     echo -e "${GREEN}$*${NC}"
 }
 
-# Install missing dependency
-install_dependency() {
-    local dep="$1"
-
-    # In quiet mode, never install dependencies automatically.
-    if [[ "$QUIET" == "true" ]]; then
-        error "Missing required dependency: '$dep'. In quiet mode, please install it manually."
-        return 1
-    fi
-
-    # In non-interactive mode (e.g. curl|bash), we cannot prompt.
-    # We will log what we're doing and proceed automatically.
-    if [[ "$INTERACTIVE" == "false" ]]; then
-        log "Non-interactive mode detected. Attempting to auto-install missing dependency: '$dep'"
-    else
-        # In interactive mode, we ask the user for permission.
-        local choice
-        choice=$(prompt_user "Dependency '$dep' is missing. Would you like this script to try and install it? (Y/n)" "y")
-        if [[ ! "$choice" =~ ^[Yy]$ ]]; then
-            error "Installation of '$dep' skipped by user."
-            return 1
-        fi
-    fi
-
-    log "Attempting to install $dep..."
-    local install_cmd=""
-
-    # Check for sudo permissions
-    local sudo_cmd=""
-    if [[ $EUID -ne 0 ]]; then
-        if ! command -v sudo >/dev/null 2>&1; then
-            error "'sudo' is required to install dependencies as a non-root user. Please install sudo or run as root."
-            return 1
-        fi
-        sudo_cmd="sudo"
-    fi
-
-    if command -v apt-get >/dev/null 2>&1; then
-        install_cmd="$sudo_cmd apt-get update -y && $sudo_cmd apt-get install -y $dep"
-    elif command -v dnf >/dev/null 2>&1; then
-        install_cmd="$sudo_cmd dnf install -y $dep"
-    elif command -v yum >/dev/null 2>&1; then
-        install_cmd="$sudo_cmd yum install -y $dep"
-    elif command -v pacman >/dev/null 2>&1; then
-        install_cmd="$sudo_cmd pacman -S --noconfirm $dep"
-    elif command -v zypper >/dev/null 2>&1; then
-        install_cmd="$sudo_cmd zypper install -y $dep"
-    else
-        error "Could not detect a supported package manager (apt, dnf, yum, pacman, zypper). Please install '$dep' manually."
-        return 1
-    fi
-
-    log "Running command: $install_cmd"
-    if ! eval "$install_cmd"; then
-        error "Failed to install '$dep'. Please try installing it manually."
-        return 1
-    fi
-
-    # Verify installation
-    if ! command -v "$dep" &> /dev/null; then
-        error "Installation of '$dep' completed, but the command is still not found. Please check your PATH."
-        return 1
-    fi
-
-    success "'$dep' was installed successfully."
-    return 0
-}
-
 # Show minimal logo
 show_minimal_logo() {
     [[ "$QUIET" == "true" ]] && return
@@ -352,11 +284,8 @@ show_help() {
 check_prerequisites() {
     for cmd in curl tar; do
         if ! command -v "$cmd" &> /dev/null; then
-            if ! install_dependency "$cmd"; then
-                # If installation fails or is skipped, use the original handle_error to prompt for manual intervention/retry
-                handle_error "Missing required dependency: $cmd"
-                return 1
-            fi
+            handle_error "Missing required dependency: $cmd. Please install it and try again."
+            return 1
         fi
     done
     return 0
@@ -435,7 +364,11 @@ install_milou() {
     
     log "Downloading from GitHub ($BRANCH branch)..."
     
-    if ! curl -fsSL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$parent_dir" --strip-components=1; then
+    # Create the installation directory first
+    mkdir -p "$INSTALL_DIR"
+    
+    # Download and extract the tarball in one go
+    if ! curl -fsSL "$REPO_URL/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$INSTALL_DIR" --strip-components=1; then
         handle_error "Failed to download and extract repository archive"
         return 1
     fi

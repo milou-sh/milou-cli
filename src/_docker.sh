@@ -964,4 +964,48 @@ export -f service_update_zero_downtime
 # Export new build and push operations functions
 export -f validate_token_for_build_push
 
+# New function to clean up Docker environment
+docker_cleanup_environment() {
+    local prune="${1:-containers}"
+    
+    if [[ -z "$MILOU_DOCKER_COMPOSE_CLIENT" ]]; then
+        log_error "Docker Compose client is not initialized"
+        return 1
+    fi
+    
+    # Stop and remove containers
+    log_info "Stopping and removing containers..."
+    if ! $MILOU_DOCKER_COMPOSE_CLIENT down --remove-orphans; then
+        log_warning "Could not stop all containers, but proceeding with cleanup."
+    fi
+    
+    # Remove network if it exists
+    log_info "Removing Docker network..."
+    if docker network inspect "milou_default" >/dev/null 2>&1; then
+        if ! docker network rm "milou_default"; then
+            log_warning "Could not remove network 'milou_default'."
+        fi
+    fi
+
+    # Prune volumes
+    if [[ "$prune" == "volumes" ]]; then
+        log_info "Pruning Docker volumes..."
+        if ! docker volume prune -f; then
+            log_warning "Could not prune Docker volumes."
+        fi
+    fi
+    
+    log_success "Docker environment cleanup complete."
+    return 0
+}
+
+#
+# Verifies that Docker and Docker Compose are available.
+#
+# @return 0 if validation is successful, 1 otherwise.
+#
+function docker_validate_environment() {
+    # ... existing code ...
+}
+
 milou_log "DEBUG" "Docker module loaded successfully" 

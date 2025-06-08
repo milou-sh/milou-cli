@@ -261,113 +261,66 @@ setup_run() {
     # Enhanced setup header with progress tracking
     setup_show_header 1 7 "Starting Setup"
     
-    # Step 1: System Analysis with user-friendly display
-    setup_announce_step 1 "System Analysis" "Understanding your current environment" 
-    if ! setup_analyze_system; then
-        setup_show_error "System analysis failed" "Unable to detect system requirements" \
-            "Check system permissions" \
-            "Ensure Docker is accessible" \
-            "Contact support if issues persist"
+    # Ensure cleanup is performed before starting setup
+    log_step "🧹 Pre-setup Cleanup" "Ensuring a clean environment before installation."
+    if ! docker_cleanup_environment "all"; then
+        log_error "Setup cannot proceed due to cleanup failure."
         return 1
     fi
-    
-    # Display analysis results in user-friendly format
-    setup_show_analysis "$SETUP_IS_FRESH_SERVER" "$SETUP_NEEDS_DEPS" "$SETUP_NEEDS_USER" "false"
-    
-    # Step 2: Prerequisites Assessment
-    setup_announce_step 2 "Prerequisites Assessment" "Checking what needs to be installed" 
 
-    # For fresh systems or when we know we need deps, missing prerequisites are expected
-    if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]] || [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
-        # On fresh systems, we expect prerequisites to be missing
-        if ! setup_assess_prerequisites; then
-            milou_log "INFO" "✓ Missing prerequisites detected (expected for fresh installation)"
-            milou_log "INFO" "✓ Missing prerequisites will be installed during setup"
-        else
-            milou_log "SUCCESS" "✓ All prerequisites already satisfied"
-        fi
-    else
-        # On existing systems, missing prerequisites are unexpected
-        if ! setup_assess_prerequisites; then
-            setup_show_error "Prerequisites assessment failed" "Could not determine system prerequisites" \
-                "Check system permissions" \
-                "Ensure Docker is accessible" \
-                "Contact support if issues persist"
-            return 1
-        fi
+    # STEP 1: Introduction
+    log_section "🚀 Welcome to the Milou Setup Wizard"
+    echo -e "${DIM}This wizard will guide you through installing and configuring Milou.${NC}"
+    echo -e "${DIM}It should only take a few minutes.${NC}"
+    echo
+    
+    # Check if this is a re-run
+    local is_rerun="false"
+    if [[ -f "${MILOU_ENV_FILE}" ]]; then
+        is_rerun="true"
+        log_info "Existing .env file found. This is a re-configuration."
     fi
     
-    # Step 3: Setup Mode Determination
-    setup_announce_step 3 "Setup Mode Selection" "Choosing the best setup approach" 
-    if ! setup_determine_mode "$mode"; then
-        setup_show_error "Setup mode determination failed" "Could not determine optimal setup approach" \
-            "Try running with specific mode: ./milou.sh setup --interactive" \
-            "Check system requirements" \
-            "Review setup documentation"
+    # Preserve existing credentials if this is a re-run
+    local preserve_creds="false"
+    if [[ "$is_rerun" == "true" ]]; then
+        if confirm "Do you want to preserve your existing admin credentials?" "Y"; then
+            preserve_creds="true"
+        fi
+        echo
+    fi
+    
+    # STEP 2: System Validation
+    if ! _setup_validate_system; then
+        log_error "System validation failed. Please address the issues above."
         return 1
     fi
     
-    # Step 4: Dependencies Installation (if needed)
-    if [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
-        setup_announce_step 4 "Dependencies Installation" "Installing Docker and required tools" 
-        if ! setup_install_dependencies; then
-            setup_show_error "Dependencies installation failed" "Could not install required system components" \
-                "Check internet connectivity" \
-                "Verify system package manager is working" \
-                "Try manual Docker installation" \
-                "Run with sudo if permission issues"
-            return 1
-        fi
-        milou_log "SUCCESS" "All dependencies installed successfully"
-    else
-        setup_announce_step 4 "Dependencies Check" "Verifying existing installation" 
-        milou_log "SUCCESS" "All required dependencies are already available"
-    fi
+    log_success "System validation passed. Ready to configure."
+    echo
     
-    # Step 5: User Management (if needed)
-    if [[ "$SETUP_NEEDS_USER" == "true" ]]; then
-        setup_announce_step 5 "User Setup" "Creating dedicated user account" 
-        if ! setup_manage_user; then
-            setup_show_error "User management failed" "Could not set up user account properly" \
-                "Check if running with appropriate permissions" \
-                "Verify system supports user creation" \
-                "Try running as root/sudo"
-            return 1
-        fi
-        milou_log "SUCCESS" "User account configured successfully"
-    else
-        setup_announce_step 5 "User Verification" "Confirming user configuration" 
-        milou_log "SUCCESS" "User configuration is already optimal"
-    fi
-    
-    # Step 6: Configuration Generation
-    setup_announce_step 6 "Configuration Setup" "Creating your personalized settings" 
-    if ! setup_generate_configuration "$preserve_creds"; then
-        setup_show_error "Configuration generation failed" "Could not create system configuration" \
-            "Check file permissions in installation directory" \
-            "Verify disk space availability" \
-            "Try running setup again" \
-            "Contact support with error details"
-        return 1
-    fi
-    milou_log "SUCCESS" "Configuration generated successfully"
-    
-    # Step 7: Final Validation and Service Startup
-    setup_announce_step 7 "Service Deployment" "Starting and validating your Milou system" 
-    if ! setup_validate_and_start_services; then
-        setup_show_error "Service startup failed" "Could not start all required services" \
-            "Check Docker service status" \
-            "Verify port availability" \
-            "Review service logs: ./milou.sh logs" \
-            "Try restarting: ./milou.sh restart"
+    # STEP 3: Interactive Configuration
+    if ! _setup_interactive_configuration "$preserve_creds"; then
+        log_error "Configuration was cancelled or failed."
         return 1
     fi
     
-    # Enhanced completion display
-    log_progress 7 7 "Setup Complete!"
-    setup_display_completion_report
+    # STEP 4: GitHub Token and Deployment
+    if ! _setup_handle_github_and_deployment; then
+        log_error "Deployment failed."
+        return 1
+    fi
+
+    # STEP 5: Finalization and Credentials
+    if ! _setup_finalize_and_display_credentials "$preserve_creds"; then
+        log_error "Finalization step failed."
+        return 1
+    fi
     
-    milou_log "SUCCESS" "✓ Milou setup completed successfully!"
+    milou_log "SUCCESS" "🎉 Milou setup completed successfully! 🎉"
+    echo -e "${BOLD}${GREEN}You can now access your instance at: https://${MILOU_DOMAIN}${NC}"
+    echo
+    
     return 0
 }
 
@@ -1234,15 +1187,9 @@ setup_generate_configuration_interactive() {
         
         case "$version_choice" in
             1) 
-                # Use latest stable - try to detect or fall back to default
-                local github_token="${GITHUB_TOKEN:-}"
-                if [[ -n "$github_token" ]]; then
-                    version_tag=$(config_detect_latest_stable_version "$github_token" "true" "milou-sh" "milou" 2>/dev/null) || version_tag="1.0.0"
-                else
-                    version_tag="1.0.0"
-                fi
-                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable ($version_tag)${NC}"
-                echo -e "   ${DIM}This is the most reliable option for production use.${NC}"
+                version_tag="stable"
+                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable${NC}"
+                echo -e "   ${DIM}The most reliable version will be fetched during deployment.${NC}"
                 break
                 ;;
             2) 
@@ -1260,8 +1207,8 @@ setup_generate_configuration_interactive() {
                     version_tag="$custom_version"
                     echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom version: ${BOLD}$version_tag${NC}"
                 else
-                    echo -e "   ${RED}${CROSSMARK} No version entered, using default${NC}"
-                    version_tag="1.0.0"
+                    echo -e "   ${RED}${CROSSMARK} No version entered, defaulting to stable${NC}"
+                    version_tag="stable"
                 fi
                 break
                 ;;

@@ -43,7 +43,7 @@ INTERACTIVE=true
 
 # Check if running in interactive mode
 check_interactive_mode() {
-    if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
+    if [[ ! -t 1 ]]; then # Check only stdout to allow for piping
         INTERACTIVE=false
     fi
 }
@@ -60,10 +60,10 @@ prompt_user() {
     fi
     
     if [[ -n "$default" ]]; then
-        read -p "$prompt [$default]: " response
+        read -p "$prompt [$default]: " response < /dev/tty
         echo "${response:-$default}"
     else
-        read -p "$prompt: " response
+        read -p "$prompt: " response < /dev/tty
         echo "$response"
     fi
 }
@@ -145,7 +145,7 @@ prompt_installation_directory() {
         local dir_choice
         while true; do
             echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
-            read -r dir_choice
+            read -r dir_choice < /dev/tty
             if [[ -z "$dir_choice" ]]; then
                 dir_choice="1"
             fi
@@ -195,7 +195,7 @@ prompt_installation_directory() {
         local dir_choice
         while true; do
             echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-2${NC}] (recommended: ${BOLD}1${NC}): "
-            read -r dir_choice
+            read -r dir_choice < /dev/tty
             if [[ -z "$dir_choice" ]]; then
                 dir_choice="1"
             fi

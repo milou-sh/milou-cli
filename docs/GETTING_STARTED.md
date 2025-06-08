@@ -1,99 +1,66 @@
-# Getting Started with Milou
+# Getting Started with Milou CLI
 
-## Installation
+This guide provides a quick overview of how to install and use the Milou CLI. For a more detailed guide, please refer to the main documentation.
 
-### Quick Install
+## Quick Installation
+
+You can install the Milou CLI with a single command:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/milou-sh/milou-cli/main/install.sh | bash
 ```
 
-### Manual Install
-```bash
-git clone https://github.com/milou-sh/milou-cli.git
-cd milou-cli
-chmod +x milou.sh
-./milou.sh setup
-```
+For a system-wide installation, it is recommended to run this command with `sudo`.
 
-## First Setup
+## First-Time Setup
 
-1. Run setup:
+After installation, run the setup wizard:
+
 ```bash
 milou setup
 ```
 
-2. Answer 3 questions:
-   - **Domain**: `localhost` (or your domain)
-   - **Email**: Your email address
-   - **SSL**: Choose `generate` for self-signed certificates
+The interactive wizard will guide you through the following steps:
 
-3. Wait for services to start (~2 minutes)
+1.  **System Analysis:** The CLI checks your system for dependencies like Docker.
+2.  **Domain Configuration:** You'll be asked to provide a domain name (e.g., `localhost` or `milou.yourcompany.com`).
+3.  **Admin Email:** Provide an email for SSL certificates and notifications.
+4.  **SSL Mode:** Choose between generating self-signed certificates, using your own, or no SSL.
+5.  **Version Selection:** Select the version of Milou to install.
+6.  **GitHub Authentication:** Provide a GitHub Personal Access Token with `read:packages` scope to pull the required Docker images.
+7.  **Deployment:** The CLI will pull the images and start all the services.
+8.  **Completion:** Your admin credentials will be displayed.
 
-4. Open your browser to `https://localhost`
+## Common Commands
 
-## Daily Commands
+Here are some of the most common commands you'll use:
 
 ```bash
-milou status    # Check if everything is running
-milou start     # Start all services
-milou stop      # Stop all services  
-milou restart   # Restart services
-milou logs      # View service logs
-milou backup    # Create backup
+milou status          # Check the status of all services
+milou start           # Start all services
+milou stop            # Stop all services
+milou restart         # Restart all services
+milou logs [service]  # View service logs
+milou update          # Update Milou to the latest version
+milou backup          # Create a backup of your data
+milou restore <file>  # Restore from a backup
+milou help            # Show contextual help
 ```
 
 ## Configuration
 
-All settings are in `.env` file:
-
-```bash
-# Basic settings
-DOMAIN=localhost
-ADMIN_EMAIL=admin@localhost
-SSL_MODE=generate
-
-# Database (auto-generated)
-DB_USER=milou_user
-DB_PASSWORD=randomly_generated_password
-```
-
-## Backup & Restore
-
-### Create Backup
-```bash
-milou backup
-# Creates: backups/milou_backup_YYYYMMDD_HHMMSS.tar.gz
-```
-
-### List Backups
-```bash
-milou backup --list
-```
-
-### Restore Backup
-```bash
-milou restore backups/milou_backup_20241201_143022.tar.gz
-```
+Your instance's configuration is stored in the `.env` file in the installation directory. You can manually edit this file to change settings, but it's recommended to use the CLI commands when possible.
 
 ## Troubleshooting
 
-### Services won't start
-```bash
-milou status     # Check service status
-milou logs       # Check for errors
-```
+If you encounter any issues, here are a few things to try:
 
-### Can't access website
-1. Check if services are running: `milou status`
-2. Check SSL certificates: `ls ssl/`
-3. Try restarting: `milou restart`
+-   **Check the logs:** `milou logs` or `milou logs <service_name>`
+-   **Check the status:** `milou status` will give you a good overview of the system state.
+-   **Restart the services:** `milou restart` can sometimes resolve issues.
+-   **Run the setup again:** `milou setup` can be used to re-configure or repair an existing installation.
 
-### Reset everything
-```bash
-milou stop
-rm -rf ssl/ .env
-milou setup
-```
+For more detailed troubleshooting, please refer to the main documentation.
 
 ## File Structure
 

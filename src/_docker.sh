@@ -60,28 +60,83 @@ docker_handle_startup_error() {
     
     [[ "$quiet" == "true" ]] && return 0
     
-    # Check for manifest unknown errors (most common issue)
-    if echo "$error_output" | grep -q "manifest unknown\|manifest not found"; then
+    # Check for authentication/credential errors first (most common after fresh setup)
+    if echo "$error_output" | grep -q "password authentication failed\|authentication failed\|Access denied\|Invalid authentication"; then
+        echo
+        milou_log "ERROR" "❌ Database Authentication Failed"
+        echo -e "${DIM}The backend service cannot connect to the database with current credentials.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}🔍 ROOT CAUSE:${NC}"
+        echo -e "   ${BLUE}•${NC} You likely deleted the milou-cli directory and set it up again"
+        echo -e "   ${BLUE}•${NC} Fresh setup created NEW database credentials in .env"
+        echo -e "   ${BLUE}•${NC} But old database volume still contains PREVIOUS credentials"
+        echo -e "   ${BLUE}•${NC} New backend tries to connect with new creds to old database = FAIL"
+        echo
+        
+        # Offer automatic resolution
+        if detect_credential_mismatch "true"; then
+            echo -e "${CYAN}${BOLD}🛠️  QUICK FIX:${NC}"
+            echo -e "   Run: ${BOLD}./milou.sh setup --fix-credentials${NC}"
+            echo -e "   Or we can fix it now..."
+            echo
+            
+            # Try to resolve automatically
+            if resolve_credential_mismatch "true" "$quiet"; then
+                echo
+                milou_log "SUCCESS" "🎉 Credential mismatch resolved! Try starting services again:"
+                echo -e "   ${CYAN}./milou.sh start${NC}"
+                echo
+                return 0
+            fi
+        fi
+        
+        echo -e "${YELLOW}${BOLD}🔧 MANUAL FIX:${NC}"
+        echo -e "   ${GREEN}✓${NC} Clean old volumes: ${CYAN}docker volume prune -f${NC}"
+        echo -e "   ${GREEN}✓${NC} Or run full cleanup: ${CYAN}./milou.sh setup --fresh-install${NC}"
+        echo -e "   ${GREEN}✓${NC} Then restart setup: ${CYAN}./milou.sh setup${NC}"
+        echo
+        return 0
+    fi
+    
+    # Check for manifest unknown errors (image not found)
+    if echo "$error_output" | grep -q "manifest unknown\|manifest not found\|pull access denied"; then
         echo
         milou_log "ERROR" "❌ Docker Image Not Found"
-        echo -e "${DIM}The requested Docker image could not be found.${NC}"
+        echo -e "${DIM}The requested Docker image could not be found or accessed.${NC}"
         echo
-        echo -e "${YELLOW}${BOLD}✓ Most Common Causes:${NC}"
-        echo -e "   ${BLUE}1.${NC} Empty or invalid version tags in .env file"
-        echo -e "   ${BLUE}2.${NC} Missing GitHub authentication for private images"
-        echo -e "   ${BLUE}3.${NC} Network connectivity issues"
-        echo -e "   ${BLUE}4.${NC} Invalid version tag specified"
+        
+        # Check for mixed versions and provide guidance
+        if handle_mixed_versions "true"; then
+            echo -e "${YELLOW}${BOLD}🔀 MIXED VERSIONS DETECTED:${NC}"
+            echo -e "   ${BLUE}•${NC} Some services use different version tags"
+            echo -e "   ${BLUE}•${NC} One or more images may not exist for specified versions"
+            echo
+            echo -e "${YELLOW}${BOLD}✅ SOLUTIONS:${NC}"
+            echo -e "   ${GREEN}✓${NC} Use a consistent version: ${CYAN}./milou.sh setup${NC} and pick same version for all"
+            echo -e "   ${GREEN}✓${NC} Or check available versions: ${CYAN}./milou.sh update --list-versions${NC}"
+            echo -e "   ${GREEN}✓${NC} Update to latest: ${CYAN}./milou.sh update --version latest${NC}"
+            echo
+        else
+            echo -e "${YELLOW}${BOLD}✓ Most Common Causes:${NC}"
+            echo -e "   ${BLUE}1.${NC} Invalid version tag specified in .env"
+            echo -e "   ${BLUE}2.${NC} Missing GitHub authentication for private images"
+            echo -e "   ${BLUE}3.${NC} Network connectivity issues"
+            echo -e "   ${BLUE}4.${NC} Version doesn't exist in registry"
+            echo
+            echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+            echo -e "   ${GREEN}✓${NC} Check version tags in .env file"
+            echo -e "   ${GREEN}✓${NC} Ensure GITHUB_TOKEN is set with 'read:packages' scope"
+            echo -e "   ${GREEN}✓${NC} Try with 'latest' version: ${CYAN}./milou.sh update --version latest${NC}"
+            echo -e "   ${GREEN}✓${NC} Check available versions: ${CYAN}./milou.sh update --list-versions${NC}"
+            echo
+        fi
+        return 0
+    fi
+    
+    # Check for authentication errors (GitHub token issues)
+    if echo "$error_output" | grep -q "unauthorized\|authentication.*required\|login.*required\|403.*Forbidden"; then
         echo
-        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
-        echo -e "   ${GREEN}✓${NC} Check your .env file for empty MILOU_*_TAG variables"
-        echo -e "   ${GREEN}✓${NC} Ensure GITHUB_TOKEN is set with 'read:packages' scope"
-        echo -e "   ${GREEN}✓${NC} Verify network connectivity to ghcr.io"
-        echo -e "   ${GREEN}✓${NC} Try running setup again: ${CYAN}./milou.sh setup${NC}"
-        echo
-    # Check for authentication errors
-    elif echo "$error_output" | grep -q "unauthorized\|authentication\|login"; then
-        echo
-        milou_log "ERROR" "❌ Authentication Failed"
+        milou_log "ERROR" "❌ GitHub Authentication Failed"
         echo -e "${DIM}Cannot authenticate with GitHub Container Registry.${NC}"
         echo
         echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
@@ -90,8 +145,11 @@ docker_handle_startup_error() {
         echo -e "   ${GREEN}✓${NC} Add to .env file: ${CYAN}GITHUB_TOKEN=ghp_your_token_here${NC}"
         echo -e "   ${GREEN}✓${NC} Restart setup: ${CYAN}./milou.sh setup${NC}"
         echo
+        return 0
+    fi
+    
     # Check for network errors
-    elif echo "$error_output" | grep -q "network\|connection\|timeout\|dns"; then
+    if echo "$error_output" | grep -q "network\|connection\|timeout\|dns\|no route to host"; then
         echo
         milou_log "ERROR" "❌ Network Error"
         echo -e "${DIM}Network connection issues detected.${NC}"
@@ -102,19 +160,26 @@ docker_handle_startup_error() {
         echo -e "   ${GREEN}✓${NC} Check firewall settings"
         echo -e "   ${GREEN}✓${NC} Try again in a few minutes"
         echo
+        return 0
+    fi
+    
     # Check for port conflicts
-    elif echo "$error_output" | grep -q "port.*already.*use\|address already in use"; then
+    if echo "$error_output" | grep -q "port.*already.*use\|address already in use\|bind.*address already in use"; then
         echo
         milou_log "ERROR" "❌ Port Conflict Detected"
         echo -e "${DIM}Required ports are already in use by other services.${NC}"
         echo
         echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
         echo -e "   ${GREEN}✓${NC} Stop conflicting services"
-        echo -e "   ${GREEN}✓${NC} Check what's using ports: ${CYAN}netstat -tlnp${NC}"
+        echo -e "   ${GREEN}✓${NC} Check what's using ports: ${CYAN}netstat -tlnp | grep -E ':(80|443|5432|6379|5672)'${NC}"
+        echo -e "   ${GREEN}✓${NC} Change ports in .env file if needed"
         echo -e "   ${GREEN}✓${NC} Run setup again: ${CYAN}./milou.sh setup${NC}"
         echo
+        return 0
+    fi
+    
     # Check for disk space issues
-    elif echo "$error_output" | grep -q "no space\|disk.*full\|insufficient storage"; then
+    if echo "$error_output" | grep -q "no space\|disk.*full\|insufficient storage\|device.*space"; then
         echo
         milou_log "ERROR" "❌ Insufficient Disk Space"
         echo -e "${DIM}Not enough disk space to download and run Docker images.${NC}"
@@ -123,24 +188,26 @@ docker_handle_startup_error() {
         echo -e "   ${GREEN}✓${NC} Free up disk space: ${CYAN}df -h${NC}"
         echo -e "   ${GREEN}✓${NC} Clean Docker: ${CYAN}docker system prune -f${NC}"
         echo -e "   ${GREEN}✓${NC} Remove old images: ${CYAN}docker image prune -a${NC}"
+        echo -e "   ${GREEN}✓${NC} Clean old volumes: ${CYAN}docker volume prune -f${NC}"
         echo
-    else
-        # Generic error handling
-        echo
-        milou_log "ERROR" "❌ Service Startup Failed"
-        if [[ -n "$service" ]]; then
-            echo -e "${DIM}Service '$service' could not be started.${NC}"
-        else
-            echo -e "${DIM}One or more services could not be started.${NC}"
-        fi
-        echo
-        echo -e "${YELLOW}${BOLD}✓ Troubleshooting Steps:${NC}"
-        echo -e "   ${GREEN}✓${NC} Check logs: ${CYAN}./milou.sh logs${NC}"
-        echo -e "   ${GREEN}✓${NC} Verify configuration: ${CYAN}docker compose config${NC}"
-        echo -e "   ${GREEN}✓${NC} Check Docker status: ${CYAN}docker info${NC}"
-        echo -e "   ${GREEN}✓${NC} Restart setup: ${CYAN}./milou.sh setup${NC}"
-        echo
+        return 0
     fi
+    
+    # Generic error handling for other cases
+    echo
+    milou_log "ERROR" "❌ Service Startup Failed"
+    if [[ -n "$service" ]]; then
+        echo -e "${DIM}Service '$service' could not be started.${NC}"
+    else
+        echo -e "${DIM}One or more services could not be started.${NC}"
+    fi
+    echo
+    echo -e "${YELLOW}${BOLD}✓ Troubleshooting Steps:${NC}"
+    echo -e "   ${GREEN}✓${NC} Check for credential mismatch: ${CYAN}./milou.sh setup --fix-credentials${NC}"
+    echo -e "   ${GREEN}✓${NC} Check logs: ${CYAN}./milou.sh logs${NC}"
+    echo -e "   ${GREEN}✓${NC} Verify configuration: ${CYAN}docker compose config${NC}"
+    echo -e "   ${GREEN}✓${NC} Fresh restart: ${CYAN}./milou.sh setup --fresh-install${NC}"
+    echo
     
     # Show a snippet of the actual error for debugging
     if [[ ${#error_output} -gt 0 ]]; then
@@ -654,6 +721,23 @@ service_start_with_validation() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
     
+    # Check for credential mismatches before starting (prevents authentication failures)
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Checking for potential credential mismatches..."
+    if detect_credential_mismatch "$quiet"; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "🔧 Credential mismatch detected - offering automatic resolution"
+        
+        # Try to resolve automatically in interactive mode
+        if resolve_credential_mismatch "true" "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credential mismatch resolved - proceeding with startup"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Credential mismatch not resolved - startup may fail"
+            [[ "$quiet" != "true" ]] && echo ""
+            [[ "$quiet" != "true" ]] && echo "💡 MANUAL FIX: Run './milou.sh setup --fix-credentials' or clean volumes manually"
+            [[ "$quiet" != "true" ]] && echo ""
+            # Continue anyway - user might want to handle it manually
+        fi
+    fi
+    
     # NETWORK CREATION: Ensure required networks exist (like in update process)
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔗 Ensuring required networks exist..."
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Networks will be created by Docker Compose"
@@ -955,10 +1039,17 @@ validate_token_for_build_push() {
 # DOCKER ENVIRONMENT MANAGEMENT FUNCTIONS
 # =============================================================================
 
-# New function to clean up Docker environment
+# Enhanced Docker environment cleanup with intelligent credential mismatch detection
 docker_cleanup_environment() {
-    local mode="${1:-safe}" # Modes: safe (containers/networks only), full (includes volumes)
+    local mode="${1:-safe}" # Modes: safe (containers/networks only), full (includes volumes), credential_fix (specific to credential issues)
     local quiet="${2:-false}"
+    local reason="${3:-manual}"  # Reason: manual, credential_mismatch, fresh_install, etc.
+
+    # Special handling for credential mismatch scenarios
+    if [[ "$mode" == "credential_fix" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔧 Performing targeted cleanup for credential mismatch resolution"
+        mode="full"  # Credential fixes need volume cleanup
+    fi
 
     # Check if we have proper environment file before using docker-compose
     local use_compose=false
@@ -979,8 +1070,11 @@ docker_cleanup_environment() {
         local down_args=("--remove-orphans")
         
         if [[ "$mode" == "full" ]]; then
-            # This is the dangerous operation that removes data volumes associated with the project.
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Performing full cleanup, which will delete service data volumes."
+            if [[ "$reason" == "credential_mismatch" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing database volumes to resolve credential mismatch (data will be lost)"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Performing full cleanup, which will delete service data volumes."
+            fi
             down_args+=("--volumes")
         else
             [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing safe cleanup of containers and networks. Data volumes will be preserved."
@@ -991,7 +1085,11 @@ docker_cleanup_environment() {
         fi
     else
         # Use direct Docker commands when no valid compose configuration
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing direct Docker cleanup of Milou resources."
+        if [[ "$reason" == "credential_mismatch" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing direct Docker cleanup to resolve credential mismatch."
+        else
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing direct Docker cleanup of Milou resources."
+        fi
         
         # Stop and remove containers by name pattern
         local containers
@@ -1018,7 +1116,11 @@ docker_cleanup_environment() {
         
         # Handle volumes based on mode
         if [[ "$mode" == "full" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing Milou data volumes (this will delete all data!)"
+            if [[ "$reason" == "credential_mismatch" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing database volumes to fix credential mismatch (this resolves authentication failures)"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing Milou data volumes (this will delete all data!)"
+            fi
             local volumes
             if volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
                 for volume in $volumes; do
@@ -1031,7 +1133,11 @@ docker_cleanup_environment() {
         fi
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker environment cleanup completed."
+    if [[ "$reason" == "credential_mismatch" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credential mismatch cleanup completed - fresh database will use new credentials"
+    else
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker environment cleanup completed."
+    fi
     return 0
 }
 
@@ -1064,6 +1170,183 @@ docker_validate_environment() {
 }
 
 # =============================================================================
+# DATABASE CREDENTIAL MANAGEMENT
+# =============================================================================
+
+# Detect if database credentials in .env don't match existing database
+detect_credential_mismatch() {
+    local quiet="${1:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔍 Checking for credential mismatches..."
+    
+    # Check if database container exists and has data
+    local db_container_exists=false
+    local db_volume_exists=false
+    
+    # Check for existing database container
+    if docker ps -a --filter "name=milou-database" --format "{{.Names}}" | grep -q "milou-database"; then
+        db_container_exists=true
+    fi
+    
+    # Check for existing database volume (most important indicator)
+    if docker volume ls --format "{{.Name}}" | grep -E "(milou.*pgdata|milou.*postgres|static.*pgdata)" >/dev/null 2>&1; then
+        db_volume_exists=true
+    fi
+    
+    # If no existing database artifacts, no mismatch possible
+    if [[ "$db_container_exists" == "false" && "$db_volume_exists" == "false" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ No existing database found - no credential mismatch possible"
+        return 1  # No mismatch
+    fi
+    
+    # Load current .env credentials
+    local current_db_user=""
+    local current_db_password=""
+    
+    if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" 2>/dev/null || true
+        current_db_user="${POSTGRES_USER:-${DB_USER:-}}"
+        current_db_password="${POSTGRES_PASSWORD:-${DB_PASSWORD:-}}"
+    fi
+    
+    # If we have database artifacts but no current credentials, likely a mismatch
+    if [[ -z "$current_db_user" || -z "$current_db_password" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Database artifacts found but no credentials in .env - possible mismatch"
+        return 0  # Likely mismatch
+    fi
+    
+    # Try to start database and test connection
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Testing database connection with current credentials..."
+    
+    # Temporarily start just the database container to test
+    local test_result=0
+    if docker compose --env-file "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" -f "${DOCKER_COMPOSE_FILE}" up -d db 2>/dev/null; then
+        # Wait a few seconds for database to initialize
+        sleep 5
+        
+        # Try to connect with current credentials
+        if docker exec milou-database psql -U "$current_db_user" -d "${POSTGRES_DB:-${DB_NAME:-milou_database}}" -c "SELECT 1;" >/dev/null 2>&1; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Database connection successful - no credential mismatch"
+            test_result=1  # No mismatch
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "❌ Database connection failed - credential mismatch detected"
+            test_result=0  # Mismatch detected
+        fi
+        
+        # Stop the test database
+        docker stop milou-database >/dev/null 2>&1 || true
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not start database for testing - assuming mismatch"
+        test_result=0  # Assume mismatch if can't start
+    fi
+    
+    return $test_result
+}
+
+# Resolve credential mismatch by cleaning old volumes
+resolve_credential_mismatch() {
+    local interactive="${1:-true}"
+    local quiet="${2:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "WARN" "🔧 Credential mismatch detected - database has old credentials"
+    [[ "$quiet" != "true" ]] && echo ""
+    [[ "$quiet" != "true" ]] && echo "🔍 WHAT HAPPENED:"
+    [[ "$quiet" != "true" ]] && echo "   • Fresh setup created new database credentials in .env"
+    [[ "$quiet" != "true" ]] && echo "   • But old database volume contains previous credentials"
+    [[ "$quiet" != "true" ]] && echo "   • New backend can't connect to old database"
+    [[ "$quiet" != "true" ]] && echo ""
+    [[ "$quiet" != "true" ]] && echo "🛠️  SOLUTION:"
+    [[ "$quiet" != "true" ]] && echo "   • Clean old database volume to use new credentials"
+    [[ "$quiet" != "true" ]] && echo "   • This will remove old database data (if any)"
+    [[ "$quiet" != "true" ]] && echo "   • Fresh database will be created with new credentials"
+    [[ "$quiet" != "true" ]] && echo ""
+    
+    local should_clean=false
+    
+    if [[ "$interactive" == "true" ]]; then
+        local choice
+        echo -n "🤔 Clean old database volume and use new credentials? (Y/n): "
+        read -r choice
+        
+        case "$choice" in
+            [Yy]*|"")
+                should_clean=true
+                ;;
+            *)
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "Operation cancelled by user"
+                return 1
+                ;;
+        esac
+    else
+        # Non-interactive mode - clean automatically
+        should_clean=true
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "Non-interactive mode - automatically cleaning old volumes"
+    fi
+    
+    if [[ "$should_clean" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🧹 Cleaning old database volumes to resolve credential mismatch..."
+        
+        # Use the enhanced cleanup function with credential-specific mode
+        if docker_cleanup_environment "credential_fix" "$quiet" "credential_mismatch"; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Old database volumes cleaned - new credentials will be used"
+            return 0
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to clean old database volumes"
+            return 1
+        fi
+    fi
+    
+    return 1
+}
+
+# Enhanced function to handle mixed version scenarios
+handle_mixed_versions() {
+    local quiet="${1:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔍 Checking for mixed version scenarios..."
+    
+    # Load current version settings
+    local backend_version=""
+    local frontend_version=""
+    local database_version=""
+    local engine_version=""
+    local nginx_version=""
+    
+    if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" 2>/dev/null || true
+        backend_version="${MILOU_BACKEND_TAG:-${MILOU_VERSION:-latest}}"
+        frontend_version="${MILOU_FRONTEND_TAG:-${MILOU_VERSION:-latest}}"
+        database_version="${MILOU_DATABASE_TAG:-${MILOU_VERSION:-latest}}"
+        engine_version="${MILOU_ENGINE_TAG:-${MILOU_VERSION:-latest}}"
+        nginx_version="${MILOU_NGINX_TAG:-${MILOU_VERSION:-latest}}"
+    fi
+    
+    # Check if versions are mixed
+    local versions=("$backend_version" "$frontend_version" "$database_version" "$engine_version" "$nginx_version")
+    local unique_versions=()
+    
+    for version in "${versions[@]}"; do
+        if [[ ! " ${unique_versions[*]} " =~ " ${version} " ]]; then
+            unique_versions+=("$version")
+        fi
+    done
+    
+    if [[ ${#unique_versions[@]} -gt 1 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔀 Mixed versions detected:"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "   Backend: $backend_version"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "   Frontend: $frontend_version"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "   Database: $database_version"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "   Engine: $engine_version"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "   Nginx: $nginx_version"
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 This is normal and supported - services will use their respective versions"
+        return 0
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ All services using consistent version: ${unique_versions[0]}"
+        return 1
+    fi
+}
+
+# =============================================================================
 # EXPORT CONSOLIDATED FUNCTIONS
 # =============================================================================
 
@@ -1082,6 +1365,11 @@ export -f service_stop_gracefully
 export -f service_restart_safely
 export -f service_update_zero_downtime
 export -f validate_token_for_build_push
+
+# New credential management functions
+export -f detect_credential_mismatch
+export -f resolve_credential_mismatch
+export -f handle_mixed_versions
 
 # Legacy compatibility
 export -f milou_docker_compose

@@ -2119,6 +2119,7 @@ handle_setup_modular() {
     local skip_validation="false"
     local preserve_creds="auto"
     local clean="false"
+    local fix_credentials="false"
     local github_token=""
     
     # Parse command line options
@@ -2130,6 +2131,11 @@ handle_setup_modular() {
                 ;;
             --clean)
                 clean="true"
+                shift
+                ;;
+            --fix-credentials|--fix-creds)
+                fix_credentials="true"
+                mode="repair"  # Use repair mode for credential fixes
                 shift
                 ;;
             --repair)
@@ -2185,6 +2191,55 @@ handle_setup_modular() {
     if [[ -n "$github_token" ]]; then
         export GITHUB_TOKEN="$github_token"
         milou_log "INFO" "✓ GitHub token provided via command line"
+    fi
+    
+    # Handle credential fix first
+    if [[ "$fix_credentials" == "true" ]]; then
+        milou_log "STEP" "🔧 Fixing Credential Mismatch"
+        echo ""
+        echo "🔍 CREDENTIAL MISMATCH FIX"
+        echo "==========================="
+        echo ""
+        echo "This will detect and fix database credential mismatches."
+        echo "Common after deleting milou-cli directory and setting up again."
+        echo ""
+        
+        # Source Docker module to access credential functions
+        source "${SCRIPT_DIR}/src/_docker.sh" || {
+            milou_log "ERROR" "Failed to load Docker module"
+            return 1
+        }
+        
+        # Initialize Docker environment
+        if ! docker_init "" "" "false" "true"; then
+            milou_log "ERROR" "Failed to initialize Docker environment"
+            return 1
+        fi
+        
+        # Detect and resolve credential mismatch
+        if detect_credential_mismatch "false"; then
+            milou_log "INFO" "🔧 Credential mismatch detected - resolving automatically"
+            if resolve_credential_mismatch "false" "false"; then
+                milou_log "SUCCESS" "✅ Credential mismatch resolved successfully!"
+                echo ""
+                echo "🎉 FIXED! You can now start services:"
+                echo "   ./milou.sh start"
+                echo ""
+                return 0
+            else
+                milou_log "ERROR" "❌ Failed to resolve credential mismatch"
+                return 1
+            fi
+        else
+            milou_log "SUCCESS" "✅ No credential mismatch detected - system looks good!"
+            echo ""
+            echo "💡 Your system appears to be healthy. If you're still having issues:"
+            echo "   • Check logs: ./milou.sh logs"
+            echo "   • Try starting: ./milou.sh start"
+            echo "   • Run full setup: ./milou.sh setup"
+            echo ""
+            return 0
+        fi
     fi
     
     # Handle clean install first
@@ -2249,6 +2304,7 @@ show_setup_help() {
     echo ""
     echo "INSTALLATION OPTIONS:"
     echo "  --clean               Clean install - DELETE ALL EXISTING DATA"
+    echo "  --fix-credentials     Fix database credential mismatches (common after fresh setup)"
     echo "  --force, -f           Skip confirmation prompts"
     echo "  --dev, --development  Development mode setup"
     echo ""
@@ -2261,6 +2317,7 @@ show_setup_help() {
     echo "  ./milou.sh setup                                # Smart setup (preserves credentials automatically)"
     echo "  ./milou.sh setup --automated                    # Automated setup using environment variables"
     echo "  ./milou.sh setup --preserve-creds               # Explicitly preserve existing credentials"
+    echo "  ./milou.sh setup --fix-credentials              # Fix database credential mismatches"
     echo "  ./milou.sh setup --force-new-creds              # Generate new credentials (⚠️  affects data)"
     echo "  ./milou.sh setup --clean                        # Clean install (⚠️  deletes all data)"
     echo ""

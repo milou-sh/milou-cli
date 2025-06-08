@@ -143,7 +143,7 @@ prompt_installation_directory() {
         
         local dir_choice
         while true; do
-            echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+            echo -ne "${BOLD}${GREEN}Choose installation location${NC} [${CYAN}1-2${NC}] (recommended: ${BOLD}1${NC}): "
             read -r dir_choice < /dev/tty
             if [[ -z "$dir_choice" ]]; then
                 dir_choice="1"
@@ -156,13 +156,6 @@ prompt_installation_directory() {
                     break
                     ;;
                 2) 
-                    local username
-                    username=$(getent passwd 2>/dev/null | awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' || echo "milou")
-                    INSTALL_DIR="/home/$username/milou-cli"
-                    echo -e "   ${YELLOW}${CHECKMARK} User installation!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
-                    break
-                    ;;
-                3) 
                     echo -e "   ${BLUE}${CHECKMARK} Custom location selected!${NC}"
                     local custom_dir
                     custom_dir=$(prompt_user "Installation directory" "/opt/milou-cli")
@@ -176,7 +169,7 @@ prompt_installation_directory() {
                     break
                     ;;
                 *) 
-                    echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                    echo -e "   ${RED}${CROSSMARK} Please choose 1 or 2${NC}"
                     echo
                     ;;
             esac

@@ -435,13 +435,12 @@ setup_shell_integration() {
 show_completion() {
     [[ "$QUIET" == "true" ]] && return
     success "Milou CLI installed to $INSTALL_DIR"
-    echo "Run: cd $INSTALL_DIR && ./milou.sh setup"
 }
 
 # Ready to start message
 start_setup() {
     if [[ "$AUTO_START" == "true" ]]; then
-        [[ "$QUIET" != "true" ]] && echo "Ready to configure your system"
+        [[ "$QUIET" != "true" ]] 
         
         local choice
         choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")

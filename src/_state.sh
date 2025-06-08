@@ -78,49 +78,55 @@ detect_installation_state() {
     local state="$STATE_UNKNOWN"
     
     # Check for configuration file
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for configuration files..."
     local has_config=false
     if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
         has_config=true
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found configuration file"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found configuration file"
     fi
     
     # Check for Docker containers (with proper error handling)
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker containers..."
     local has_containers=false
     local running_containers=0
     
-    if command -v docker >/dev/null 2>&1; then
-        # Check if Docker daemon is accessible
-        if docker info >/dev/null 2>&1; then
-            local container_count=0
-            
-            # Use safer command execution to avoid pipefail issues
-            local containers_output
-            if containers_output=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null); then
-                container_count=$(echo "$containers_output" | grep -c . 2>/dev/null || echo "0")
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local container_count=0
+        
+        # Use safer command execution
+        local containers_output
+        if containers_output=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null); then
+            local filtered_containers
+            if filtered_containers=$(echo "$containers_output" | grep -v "^$" 2>/dev/null); then
+                container_count=$(echo "$filtered_containers" | grep -c . 2>/dev/null || echo "0")
                 container_count=${container_count//[^0-9]/}  # Remove any non-numeric characters
             fi
+        fi
+        
+        if [[ $container_count -gt 0 ]]; then
+            has_containers=true
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $container_count Milou containers"
             
-            if [[ $container_count -gt 0 ]]; then
-                has_containers=true
-                
-                # Count running containers safely
-                local running_output
-                if running_output=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null); then
-                    running_containers=$(echo "$running_output" | grep -c . 2>/dev/null || echo "0")
+            # Count running containers
+            local running_output
+            if running_output=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null); then
+                local filtered_running
+                if filtered_running=$(echo "$running_output" | grep -v "^$" 2>/dev/null); then
+                    running_containers=$(echo "$filtered_running" | grep -c . 2>/dev/null || echo "0")
                     running_containers=${running_containers//[^0-9]/}  # Remove any non-numeric characters
                 fi
-                
-                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found $container_count containers ($running_containers running)"
             fi
-        else
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker daemon not accessible"
+            
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $running_containers running containers"
         fi
     else
         [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker command not available"
     fi
     
-    # Check for Docker volumes (with proper error handling)
+    # Check for data volumes (with proper error handling)
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker volumes..."
     local has_volumes=false
+    
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         local volume_count=0
         
@@ -136,13 +142,15 @@ detect_installation_state() {
         
         if [[ $volume_count -gt 0 ]]; then
             has_volumes=true
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found $volume_count data volumes"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $volume_count data volumes"
         fi
     fi
     
     # Determine state based on component presence
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Analyzing installation state based on components found..."
     if [[ "$has_config" == "true" && "$has_containers" == "true" && $running_containers -gt 0 ]]; then
         # Has config, containers, and running services
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers + running services, validating health..."
         if _validate_running_installation "$quiet"; then
             state="$STATE_RUNNING"
         else
@@ -150,9 +158,11 @@ detect_installation_state() {
         fi
     elif [[ "$has_config" == "true" && "$has_containers" == "true" && $running_containers -eq 0 ]]; then
         # Has config and containers but nothing running
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers but no running services"
         state="$STATE_INSTALLED_STOPPED"
     elif [[ "$has_config" == "true" && "$has_containers" == "false" ]]; then
         # Has config but no containers - could be partial failed setup
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config only, checking for partial setup..."
         if _is_partial_failed_setup "$quiet"; then
             state="$STATE_PARTIAL_FAILED"
         else
@@ -160,22 +170,39 @@ detect_installation_state() {
         fi
     elif [[ "$has_config" == "false" && "$has_containers" == "true" ]]; then
         # Has containers but no config
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: containers only, no config"
         state="$STATE_CONTAINERS_ONLY"
     elif [[ "$has_config" == "false" && "$has_containers" == "false" && "$has_volumes" == "true" ]]; then
         # Only has volumes (partial cleanup) - BUT this might just be leftover from previous install
         # Check if these volumes actually have meaningful data before calling it "broken"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking if volumes contain meaningful data..."
         local volume_has_data=false
         
         # Get Milou-related volumes and check if they contain significant data
         local milou_volumes
         if milou_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
             for volume in $milou_volumes; do
-                # Check if volume has actual data (more than just empty directories)
+                # Use much faster docker volume inspect instead of spawning containers
                 local volume_info
-                if volume_info=$(docker run --rm -v "$volume:/data" alpine sh -c "find /data -type f | wc -l" 2>/dev/null); then
-                    if [[ "$volume_info" -gt 0 ]]; then
+                if volume_info=$(docker volume inspect "$volume" --format "{{.CreatedAt}}" 2>/dev/null); then
+                    # Check if volume was created recently (within last 7 days)
+                    local created_date
+                    if created_date=$(date -d "${volume_info%.*}" +%s 2>/dev/null); then
+                        local current_date=$(date +%s)
+                        local days_old=$(( (current_date - created_date) / 86400 ))
+                        
+                        # If volume is older than 1 day, assume it has meaningful data
+                        if [[ $days_old -gt 1 ]]; then
+                            volume_has_data=true
+                            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume is ${days_old} days old, treating as containing data"
+                            break
+                        else
+                            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume is recent (${days_old} days old), checking if empty..."
+                        fi
+                    else
+                        # Fallback: assume volume has data if we can't parse date
                         volume_has_data=true
-                        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Volume $volume contains $volume_info files"
+                        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume date unparseable, assuming contains data"
                         break
                     fi
                 fi
@@ -185,13 +212,15 @@ detect_installation_state() {
         if [[ "$volume_has_data" == "true" ]]; then
             # Volumes contain data - this is a broken installation that should be repaired
             state="$STATE_BROKEN"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found volumes with data, state = broken"
         else
             # Volumes are empty or contain no meaningful data - treat as fresh
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found empty volumes, treating as fresh installation"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found empty/recent volumes, treating as fresh installation"
             state="$STATE_FRESH"
         fi
     else
         # No Milou components found
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No Milou components found"
         state="$STATE_FRESH"
     fi
     
@@ -199,7 +228,7 @@ detect_installation_state() {
     _STATE_CACHE="$state"
     _STATE_CACHE_TIME=$(date +%s)
     
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Detected installation state: $state"
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "System analysis complete - detected state: $state"
     echo "$state"
     return 0
 }

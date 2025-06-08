@@ -944,7 +944,81 @@ validate_token_for_build_push() {
 }
 
 # =============================================================================
+# DOCKER ENVIRONMENT MANAGEMENT FUNCTIONS
+# =============================================================================
+
+# New function to clean up Docker environment
+docker_cleanup_environment() {
+    local mode="${1:-safe}" # Modes: safe (containers/networks only), full (includes volumes)
+    local quiet="${2:-false}"
+
+    local down_args=("--remove-orphans")
+    
+    if [[ "$mode" == "full" ]]; then
+        # This is the dangerous operation that removes data volumes associated with the project.
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Performing full cleanup, which will delete service data volumes."
+        down_args+=("--volumes")
+    else
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing safe cleanup of containers and networks. Data volumes will be preserved."
+    fi
+    
+    if ! docker_execute "down" "" "$quiet" "${down_args[@]}"; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not perform cleanup cleanly, but proceeding."
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker environment cleanup completed."
+    return 0
+}
+
+# New function to validate Docker environment
+docker_validate_environment() {
+    local quiet="${1:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Validating Docker environment..."
+    
+    # Check if Docker is available
+    if ! command -v docker >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker is not installed or not available in PATH"
+        return 1
+    fi
+    
+    # Check if Docker daemon is running
+    if ! docker info >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker daemon is not running"
+        return 1
+    fi
+    
+    # Check if Docker Compose is available
+    if ! docker compose version >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose is not available"
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker environment validation passed"
+    return 0
+}
+
+# =============================================================================
 # EXPORT CONSOLIDATED FUNCTIONS
 # =============================================================================
+
+# Export all key Docker functions for use by other modules
+export -f docker_login_github
+export -f docker_init
+export -f docker_compose
+export -f docker_execute
+export -f docker_handle_startup_error
+export -f docker_cleanup_environment
+export -f docker_validate_environment
+export -f health_check_service
+export -f health_check_all
+export -f service_start_with_validation
+export -f service_stop_gracefully
+export -f service_restart_safely
+export -f service_update_zero_downtime
+export -f validate_token_for_build_push
+
+# Legacy compatibility
+export -f milou_docker_compose
 
 milou_log "DEBUG" "Docker module loaded successfully" 

@@ -954,6 +954,8 @@ export -f docker_execute
 export -f milou_docker_compose
 export -f health_check_service
 export -f health_check_all
+export -f docker_validate_environment
+export -f docker_cleanup_environment
 
 # Export service lifecycle management functions
 export -f service_start_with_validation
@@ -963,7 +965,6 @@ export -f service_update_zero_downtime
 
 # Export new build and push operations functions
 export -f validate_token_for_build_push
-export -f docker_cleanup_environment
 
 # New function to clean up Docker environment
 docker_cleanup_environment() {

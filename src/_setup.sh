@@ -144,7 +144,6 @@ setup_show_success() {
     
     log_section "✓ Access Your System" "Your Milou installation is now accessible"
     echo -e "   ${BOLD}Web Interface:${NC} ${CYAN}https://$domain${NC}"
-    echo -e "   ${BOLD}Admin Panel:${NC}   ${CYAN}https://$domain/admin${NC}"
     echo
     
     log_section "✓ Your Admin Credentials" "Keep these credentials safe!"
@@ -383,7 +382,6 @@ setup_run() {
     fi
     
     milou_log "SUCCESS" "🎉 Milou setup completed successfully! 🎉"
-    echo -e "${BOLD}${GREEN}You can now access your instance at: https://${MILOU_DOMAIN}${NC}"
     echo
     
     return 0
@@ -423,13 +421,13 @@ _setup_validate_system() {
         fi
     fi
     
-    # Install dependencies if needed (on fresh systems)
+    # Install dependencies if needed (on fresh systems) - USE INTERACTIVE VERSION
     if [[ "$needs_docker_install" == "true" ]]; then
-        log_info "🔧 Installing required dependencies first..."
+        log_info "🔧 Dependencies are required for Milou to function"
         
-        # Install dependencies automatically for fresh systems
-        if ! setup_install_dependencies_automated; then
-            log_error "Failed to install required dependencies"
+        # Use interactive installation to ask user permission
+        if ! setup_install_dependencies_interactive; then
+            log_error "Dependencies installation was cancelled or failed"
             ((errors++))
         else
             log_success "Dependencies installed successfully"

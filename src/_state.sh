@@ -73,20 +73,20 @@ detect_installation_state() {
         fi
     fi
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detecting installation state..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detecting installation state..." >&2
     
     local state="$STATE_UNKNOWN"
     
     # Check for configuration file
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for configuration files..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for configuration files..." >&2
     local has_config=false
     if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
         has_config=true
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found configuration file"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found configuration file" >&2
     fi
     
     # Check for Docker containers (with proper error handling)
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker containers..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker containers..." >&2
     local has_containers=false
     local running_containers=0
     
@@ -105,26 +105,24 @@ detect_installation_state() {
         
         if [[ $container_count -gt 0 ]]; then
             has_containers=true
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $container_count Milou containers"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $container_count Milou containers" >&2
             
             # Count running containers
             local running_output
             if running_output=$(docker ps --filter "name=milou-" --format "{{.Names}}" 2>/dev/null); then
-                local filtered_running
-                if filtered_running=$(echo "$running_output" | grep -v "^$" 2>/dev/null); then
-                    running_containers=$(echo "$filtered_running" | grep -c . 2>/dev/null || echo "0")
-                    running_containers=${running_containers//[^0-9]/}  # Remove any non-numeric characters
-                fi
+                running_containers=$(echo "$running_output" | grep -c . 2>/dev/null || echo "0")
+                running_containers=${running_containers//[^0-9]/}
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $running_containers running containers" >&2
             fi
-            
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $running_containers running containers"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No Milou containers found" >&2
         fi
     else
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker command not available"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker not available for container checking" >&2
     fi
     
     # Check for data volumes (with proper error handling)
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker volumes..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking for Docker volumes..." >&2
     local has_volumes=false
     
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
@@ -142,15 +140,19 @@ detect_installation_state() {
         
         if [[ $volume_count -gt 0 ]]; then
             has_volumes=true
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $volume_count data volumes"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found $volume_count Milou volumes" >&2
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No Milou volumes found" >&2
         fi
+    else
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker not available for volume checking" >&2
     fi
     
     # Determine state based on component presence
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Analyzing installation state based on components found..."
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Analyzing installation state based on components found..." >&2
     if [[ "$has_config" == "true" && "$has_containers" == "true" && $running_containers -gt 0 ]]; then
         # Has config, containers, and running services
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers + running services, validating health..."
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers + running services, validating health..." >&2
         if _validate_running_installation "$quiet"; then
             state="$STATE_RUNNING"
         else
@@ -158,51 +160,40 @@ detect_installation_state() {
         fi
     elif [[ "$has_config" == "true" && "$has_containers" == "true" && $running_containers -eq 0 ]]; then
         # Has config and containers but nothing running
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers but no running services"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config + containers but no running services" >&2
         state="$STATE_INSTALLED_STOPPED"
     elif [[ "$has_config" == "true" && "$has_containers" == "false" ]]; then
         # Has config but no containers - could be partial failed setup
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config only, checking for partial setup..."
-        if _is_partial_failed_setup "$quiet"; then
-            state="$STATE_PARTIAL_FAILED"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: config only, no containers" >&2
+        if _is_config_complete "$quiet"; then
+            state="$STATE_INCOMPLETE"
         else
-            state="$STATE_CONFIGURED_ONLY"
+            state="$STATE_BROKEN"
         fi
-    elif [[ "$has_config" == "false" && "$has_containers" == "true" ]]; then
-        # Has containers but no config
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: containers only, no config"
-        state="$STATE_CONTAINERS_ONLY"
+    elif [[ "$has_config" == "false" && "$has_containers" == "true" && $running_containers -gt 0 ]]; then
+        # Has running containers but no config - unusual state
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: running containers but no config file" >&2
+        state="$STATE_BROKEN"
+    elif [[ "$has_config" == "false" && "$has_containers" == "true" && $running_containers -eq 0 ]]; then
+        # Has stopped containers but no config
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found: stopped containers but no config file" >&2
+        state="$STATE_BROKEN"
     elif [[ "$has_config" == "false" && "$has_containers" == "false" && "$has_volumes" == "true" ]]; then
         # Only has volumes (partial cleanup) - BUT this might just be leftover from previous install
         # Check if these volumes actually have meaningful data before calling it "broken"
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking if volumes contain meaningful data..."
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Checking if volumes contain meaningful data..." >&2
         local volume_has_data=false
         
         # Get Milou-related volumes and check if they contain significant data
         local milou_volumes
         if milou_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
             for volume in $milou_volumes; do
-                # Use much faster docker volume inspect instead of spawning containers
-                local volume_info
-                if volume_info=$(docker volume inspect "$volume" --format "{{.CreatedAt}}" 2>/dev/null); then
-                    # Check if volume was created recently (within last 7 days)
-                    local created_date
-                    if created_date=$(date -d "${volume_info%.*}" +%s 2>/dev/null); then
-                        local current_date=$(date +%s)
-                        local days_old=$(( (current_date - created_date) / 86400 ))
-                        
-                        # If volume is older than 1 day, assume it has meaningful data
-                        if [[ $days_old -gt 1 ]]; then
-                            volume_has_data=true
-                            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume is ${days_old} days old, treating as containing data"
-                            break
-                        else
-                            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume is recent (${days_old} days old), checking if empty..."
-                        fi
-                    else
-                        # Fallback: assume volume has data if we can't parse date
+                # Use a faster method to check volume data - just check if volume has any files
+                local file_count
+                if file_count=$(docker run --rm -v "$volume:/data" alpine sh -c "find /data -type f 2>/dev/null | wc -l" 2>/dev/null); then
+                    if [[ "${file_count//[^0-9]/}" -gt 0 ]]; then
                         volume_has_data=true
-                        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume date unparseable, assuming contains data"
+                        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volume $volume contains data ($file_count files)" >&2
                         break
                     fi
                 fi
@@ -210,17 +201,15 @@ detect_installation_state() {
         fi
         
         if [[ "$volume_has_data" == "true" ]]; then
-            # Volumes contain data - this is a broken installation that should be repaired
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volumes contain data - classified as broken installation" >&2
             state="$STATE_BROKEN"
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found volumes with data, state = broken"
         else
-            # Volumes are empty or contain no meaningful data - treat as fresh
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found empty/recent volumes, treating as fresh installation"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Volumes are empty - classified as fresh installation" >&2
             state="$STATE_FRESH"
         fi
     else
         # No Milou components found
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No Milou components found"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No Milou components found" >&2
         state="$STATE_FRESH"
     fi
     
@@ -228,85 +217,59 @@ detect_installation_state() {
     _STATE_CACHE="$state"
     _STATE_CACHE_TIME=$(date +%s)
     
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "System analysis complete - detected state: $state"
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "System analysis complete - detected state: $state" >&2
     echo "$state"
     return 0
 }
 
-# Validate a running installation for health
+# Helper function to check if a running installation is healthy
 _validate_running_installation() {
     local quiet="${1:-false}"
     
-    # Check if Docker Compose is working
-    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Missing docker-compose.yml"
+    # Check if all critical services are running
+    local critical_services=("nginx" "dashboard")
+    
+    for service in "${critical_services[@]}"; do
+        if ! docker_compose ps --services --filter "status=running" 2>/dev/null | grep -q "^${service}$"; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Critical service not running: $service" >&2
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+# Helper function to check if configuration is complete
+_is_config_complete() {
+    local quiet="${1:-false}"
+    
+    # Check if .env file exists
+    if [[ ! -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No .env file found" >&2
         return 1
     fi
     
-    # Use consolidated validation if available
-    if command -v docker_execute >/dev/null 2>&1; then
-        # Initialize docker context
-        if command -v initialize_docker_context >/dev/null 2>&1; then
-            if ! initialize_docker_context "${SCRIPT_DIR:-$(pwd)}/.env" "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" "true"; then
-                [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker context initialization failed"
-                return 1
-            fi
-        fi
-        
-        # Validate configuration
-        if ! docker_execute "validate" "" "true"; then
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Compose configuration invalid"
+    # Check for essential configuration variables
+    local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
+    local required_vars=("GITHUB_TOKEN" "MILOU_DOMAIN" "DATABASE_URI")
+    
+    for var in "${required_vars[@]}"; do
+        if ! grep -q "^${var}=" "$env_file" 2>/dev/null; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Missing required variable: $var" >&2
             return 1
         fi
         
-        # Get service status using consolidated function
-        if ! compose_status=$(docker_execute "ps" "" "true" 2>/dev/null); then
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Failed to get service status"
+        # Check if variable has a value (not just empty)
+        local value
+        value=$(grep "^${var}=" "$env_file" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+        if [[ -z "$value" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Empty value for required variable: $var" >&2
             return 1
         fi
-    else
-        # Fallback to direct validation
-        if ! compose_status=$(docker compose --env-file "${SCRIPT_DIR:-$(pwd)}/.env" \
-                             -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" \
-                             ps 2>/dev/null); then
-            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Docker Compose configuration invalid"
-            return 1
-        fi
-    fi
+    done
     
-    # Check if critical services are healthy (with proper error handling)
-    local unhealthy_services=0
-    local services_output
-    
-    if command -v docker_execute >/dev/null 2>&1; then
-        # Use consolidated function for service status
-        if services_output=$(docker_execute "ps" "" "true" --format "{{.Name}}\t{{.Status}}" 2>/dev/null); then
-            while IFS=$'\t' read -r name status; do
-                if [[ -n "$name" && ! "$status" =~ (running|Up) ]]; then
-                    ((unhealthy_services++))
-                fi
-            done <<< "$services_output"
-        fi
-    else
-        # Fallback to direct docker compose call
-        if services_output=$(docker compose --env-file "${SCRIPT_DIR:-$(pwd)}/.env" \
-                            -f "${SCRIPT_DIR:-$(pwd)}/static/docker-compose.yml" \
-                            ps --format "{{.Name}}\t{{.Status}}" 2>/dev/null); then
-            while IFS=$'\t' read -r name status; do
-                if [[ -n "$name" && ! "$status" =~ (running|Up) ]]; then
-                    ((unhealthy_services++))
-                fi
-            done <<< "$services_output"
-        fi
-    fi
-    
-    if [[ $unhealthy_services -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "All services are healthy"
-        return 0
-    else
-        [[ "$quiet" != "true" ]] && milou_log "TRACE" "$unhealthy_services services are unhealthy"
-        return 1
-    fi
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Configuration file is complete" >&2
+    return 0
 }
 
 # Check if this is a partial failed setup
@@ -373,57 +336,46 @@ _is_partial_failed_setup() {
 # SMART SETUP MODE SELECTION
 # =============================================================================
 
-# Determine appropriate setup mode based on state
+# Determine appropriate setup mode based on current state
 smart_setup_mode() {
-    local installation_state="$1"
-    local force="${2:-false}"
+    local current_state="$1"
+    local force_mode="${2:-false}"
     local quiet="${3:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Determining setup mode for state: $installation_state"
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Determining setup mode for state: $current_state" >&2
     
-    local mode="$MODE_INSTALL"
+    local mode=""
     
-    case "$installation_state" in
+    case "$current_state" in
         "$STATE_FRESH")
-            mode="$MODE_INSTALL"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Fresh system detected - will perform clean installation"
-            ;;
-        "$STATE_RUNNING")
-            if [[ "$force" == "true" ]]; then
-                mode="$MODE_REINSTALL"
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Force flag detected - will reinstall over running system"
-            else
-                mode="$MODE_UPDATE_CHECK"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "Running system detected - will check for updates"
-            fi
+            mode="install"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Fresh installation detected - using install mode" >&2
             ;;
         "$STATE_INSTALLED_STOPPED")
-            mode="$MODE_RESUME"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Stopped system detected - will resume services"
+            mode="start"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Stopped installation detected - using start mode" >&2
             ;;
-        "$STATE_CONFIGURED_ONLY")
-            mode="$MODE_RESUME"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Configuration without containers - will create and start services"
+        "$STATE_RUNNING")
+            if [[ "$force_mode" == "true" ]]; then
+                mode="reinstall"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Running installation detected with force - using reinstall mode" >&2
+            else
+                mode="running"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Installation already running - using running mode" >&2
+            fi
             ;;
-        "$STATE_PARTIAL_FAILED")
-            mode="$MODE_INSTALL"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Partial failed setup detected - will restart fresh installation"
+        "$STATE_BROKEN"|"$STATE_INCOMPLETE"|"$STATE_PARTIAL_FAILED")
+            mode="repair"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Broken/incomplete installation detected - using repair mode" >&2
             ;;
-        "$STATE_CONTAINERS_ONLY")
-            mode="$MODE_RECONFIGURE"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "Containers without configuration - will reconfigure system"
-            ;;
-        "$STATE_BROKEN")
-            mode="$MODE_REPAIR"
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Broken installation detected - will attempt repair"
-            ;;
-        *)
-            mode="$MODE_INSTALL"
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Unknown state '$installation_state' - defaulting to fresh install"
+        "$STATE_UNKNOWN"|*)
+            # Unknown state - default to fresh install
+            mode="install"
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Unknown state '$current_state' - defaulting to fresh install" >&2
             ;;
     esac
     
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Selected setup mode: $mode"
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Selected setup mode: $mode" >&2
     echo "$mode"
     return 0
 }

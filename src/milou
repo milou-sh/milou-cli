@@ -262,13 +262,13 @@ function handle_smart_setup() {
     # Show analysis message BEFORE starting analysis
     echo -e "${CYAN}🔍 Analyzing your system...${NC}"
     
-    # Get current installation state (now with progress feedback)
+    # Get current installation state (quiet mode to avoid output corruption)
     local current_state
-    current_state=$(get_current_state "false")  # Changed from "true" to show progress
+    current_state=$(get_current_state "true")
     
-    # Determine setup mode based on state (with progress feedback)
+    # Determine setup mode based on state (quiet mode to avoid output corruption)
     local setup_mode
-    setup_mode=$(smart_setup_mode "$current_state" "$FORCE" "false")  # Changed from "true" to show progress
+    setup_mode=$(smart_setup_mode "$current_state" "$FORCE" "true")
     
     echo "Installation state: $(describe_installation_state "$current_state")"
     echo "Setup mode: $setup_mode"

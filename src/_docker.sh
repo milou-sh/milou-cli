@@ -963,6 +963,7 @@ export -f service_update_zero_downtime
 
 # Export new build and push operations functions
 export -f validate_token_for_build_push
+export -f docker_cleanup_environment
 
 # New function to clean up Docker environment
 docker_cleanup_environment() {
@@ -992,8 +993,38 @@ docker_cleanup_environment() {
 #
 # @return 0 if validation is successful, 1 otherwise.
 #
-function docker_validate_environment() {
-    # ... existing code ...
+docker_validate_environment() {
+    log_step "️️🔎" "Validating Docker Environment"
+    local error_count=0
+
+    if ! command -v docker &> /dev/null; then
+        log_error "Docker is not installed. Please install Docker to continue."
+        ((error_count++))
+    else
+        log_success "Docker is installed."
+    fi
+
+    if ! command -v docker-compose &> /dev/null; then
+        log_error "Docker Compose is not installed. Please install Docker Compose to continue."
+        ((error_count++))
+    else
+        log_success "Docker Compose is installed."
+    fi
+
+    if ! docker info &> /dev/null; then
+        log_error "The Docker daemon is not running. Please start Docker to continue."
+        ((error_count++))
+    else
+        log_success "Docker daemon is running."
+    fi
+
+    if [ "$error_count" -gt 0 ]; then
+        log_error "Docker environment validation failed with $error_count error(s)."
+        return 1
+    fi
+
+    log_success "Docker environment is ready."
+    return 0
 }
 
 milou_log "DEBUG" "Docker module loaded successfully" 

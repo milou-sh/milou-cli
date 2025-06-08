@@ -261,6 +261,9 @@ setup_run() {
     # Enhanced setup header with progress tracking
     setup_show_header 1 7 "Starting Setup"
     
+    # STEP 0: System Analysis (this sets the SETUP_IS_FRESH_SERVER flags)
+    setup_analyze_system
+    
     # Improved detection of installation state
     local has_env_file="false"
     local has_docker_resources="false"
@@ -395,30 +398,90 @@ _setup_validate_system() {
     log_step "🔍" "System Validation"
     
     local errors=0
+    local warnings=0
     
-    # Basic system dependency validation
-    if ! validate_system_dependencies "basic" "unknown" "false"; then
-        log_error "System dependencies validation failed"
-        ((errors++))
+    # For fresh installations, we need to install dependencies first before validation
+    # Check if this is a fresh server that needs dependencies
+    local needs_docker_install=false
+    if ! command -v docker >/dev/null 2>&1; then
+        needs_docker_install=true
+        log_info "Docker not detected - will be installed during dependencies step"
+    elif ! docker info >/dev/null 2>&1; then
+        log_warning "Docker is installed but daemon is not running"
+        if systemctl is-active --quiet docker 2>/dev/null || service docker status >/dev/null 2>&1; then
+            log_info "Attempting to start Docker daemon..."
+            if systemctl start docker 2>/dev/null || service docker start 2>/dev/null; then
+                log_success "Docker daemon started successfully"
+                sleep 2  # Give Docker a moment to fully start
+            else
+                log_warning "Could not start Docker daemon automatically"
+                ((warnings++))
+            fi
+        else
+            log_warning "Docker daemon is not running and service is not available"
+            ((warnings++))
+        fi
     fi
     
-    # Docker environment validation if available
-    if command -v docker >/dev/null 2>&1; then
-        if ! docker info >/dev/null 2>&1; then
-            log_error "Docker daemon is not running"
+    # Install dependencies if needed (on fresh systems)
+    if [[ "$needs_docker_install" == "true" ]]; then
+        log_info "🔧 Installing required dependencies first..."
+        
+        # Install dependencies automatically for fresh systems
+        if ! setup_install_dependencies_automated; then
+            log_error "Failed to install required dependencies"
             ((errors++))
+        else
+            log_success "Dependencies installed successfully"
+            
+            # Verify Docker is now working
+            if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                log_success "Docker is now available and running"
+            else
+                log_warning "Docker was installed but may need manual start"
+                ((warnings++))
+            fi
+        fi
+    fi
+    
+    # Now validate what we have
+    if command -v docker >/dev/null 2>&1; then
+        if docker info >/dev/null 2>&1; then
+            log_success "✓ Docker is available and running"
+            
+            # Test Docker Compose
+            if docker compose version >/dev/null 2>&1; then
+                log_success "✓ Docker Compose is available"
+            else
+                log_error "Docker Compose is not available"
+                ((errors++))
+            fi
+        else
+            log_warning "Docker is installed but daemon is not accessible"
+            ((warnings++))
         fi
     else
-        log_info "Docker not installed yet - will be installed during dependencies step"
+        if [[ "$needs_docker_install" == "true" ]]; then
+            log_error "Docker installation failed"
+            ((errors++))
+        else
+            log_error "Docker is not installed"
+            ((errors++))
+        fi
     fi
     
-    # Check system prerequisites
+    # Check system prerequisites (non-critical)
     if ! setup_assess_prerequisites; then
         log_info "Prerequisites assessment completed with notes"
     fi
     
+    # Report results
     if [[ $errors -eq 0 ]]; then
-        log_success "System validation completed successfully"
+        if [[ $warnings -eq 0 ]]; then
+            log_success "System validation completed successfully"
+        else
+            log_success "System validation completed with $warnings warning(s)"
+        fi
         return 0
     else
         log_error "System validation failed with $errors error(s)"
@@ -529,16 +592,28 @@ setup_detect_fresh_server() {
     local fresh_indicators=0
     local total_checks=6
     
-    # Check 1: No Docker containers
-    if [[ $(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+    # Check 1: No Docker containers (only if Docker is available)
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        if [[ $(docker ps -a --format "{{.Names}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ No existing Docker containers"
+        fi
+    else
+        # Docker not available = fresh system
         ((fresh_indicators++))
-        milou_log "DEBUG" "✓ No existing Docker containers"
+        milou_log "DEBUG" "✓ Docker not installed (fresh system)"
     fi
     
-    # Check 2: No Docker volumes
-    if [[ $(docker volume ls --format "{{.Name}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+    # Check 2: No Docker volumes (only if Docker is available)
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        if [[ $(docker volume ls --format "{{.Name}}" 2>/dev/null | wc -l) -eq 0 ]]; then
+            ((fresh_indicators++))
+            milou_log "DEBUG" "✓ No existing Docker volumes"
+        fi
+    else
+        # Docker not available = fresh system
         ((fresh_indicators++))
-        milou_log "DEBUG" "✓ No existing Docker volumes"
+        milou_log "DEBUG" "✓ Docker not installed (fresh system volumes)"
     fi
     
     # Check 3: No configuration files
@@ -599,22 +674,24 @@ setup_check_existing_installation() {
     local has_config=false
     local has_volumes=false
     
-    # Check for existing containers
-    if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q milou; then
-        has_containers=true
-        milou_log "DEBUG" "Found existing Milou containers"
+    # Check for existing containers (only if Docker is available)
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q milou; then
+            has_containers=true
+            milou_log "DEBUG" "Found existing Milou containers"
+        fi
+        
+        # Check for data volumes
+        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
+            has_volumes=true
+            milou_log "DEBUG" "Found existing data volumes"
+        fi
     fi
     
     # Check for configuration
     if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
         has_config=true
         milou_log "DEBUG" "Found existing configuration file"
-    fi
-    
-    # Check for data volumes
-    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
-        has_volumes=true
-        milou_log "DEBUG" "Found existing data volumes"
     fi
     
     # Return true if any component exists
@@ -627,8 +704,14 @@ setup_check_existing_installation() {
 
 # Check dependency installation status - SIMPLIFIED using unified validation
 setup_check_dependencies_status() {
-    # Use unified validation system instead of duplicating logic
-    validate_system_dependencies "basic" "unknown" "true"
+    # Check if Docker is available and working
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        milou_log "DEBUG" "All dependencies are available"
+        return 0
+    else
+        milou_log "DEBUG" "Dependencies need installation"
+        return 1
+    fi
 }
 
 # Check user management status
@@ -643,12 +726,16 @@ setup_check_user_status() {
             return 1
         fi
     else
-        # Check if current user has Docker access
-        if docker version >/dev/null 2>&1; then
+        # Check if current user has Docker access (if Docker is available)
+        if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
             milou_log "DEBUG" "Current user has Docker access"
             return 0
-        else
+        elif command -v docker >/dev/null 2>&1; then
             milou_log "DEBUG" "Current user needs Docker access"
+            return 1
+        else
+            # Docker not installed yet, assume user setup will be needed
+            milou_log "DEBUG" "Docker not available, user setup may be needed"
             return 1
         fi
     fi
@@ -676,12 +763,11 @@ setup_assess_prerequisites() {
     if [[ "$docker_missing" == "true" ]]; then
         if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]] || [[ "$SETUP_NEEDS_DEPS" == "true" ]]; then
             milou_log "INFO" "✓ Docker installation needed (will be installed automatically)"
-            return 1  # Return 1 to indicate missing deps, but this is expected
+            return 0  # Return 0 - this is expected for fresh systems
         else
             # On existing systems, missing Docker is an error
             milou_log "ERROR" "Docker is not installed"
             milou_log "INFO" "💡 Install Docker: https://docs.docker.com/get-docker/"
-            milou_log "ERROR" "System validation failed with 1 error(s)"
             return 1
         fi
     else

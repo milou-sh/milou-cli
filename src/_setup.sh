@@ -261,24 +261,79 @@ setup_run() {
     # Enhanced setup header with progress tracking
     setup_show_header 1 7 "Starting Setup"
     
-    # Check if this is a re-run and perform appropriate cleanup
-    local is_rerun="false"
+    # Improved detection of installation state
+    local has_env_file="false"
+    local has_docker_resources="false"
+    
     if [[ -f "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
-        is_rerun="true"
+        has_env_file="true"
     fi
     
-    if [[ "$is_rerun" == "true" ]]; then
+    # Check for any Docker resources (containers, volumes) that might need cleanup
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local container_count=0
+        local volume_count=0
+        
+        # Check for containers
+        if docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | grep -q milou; then
+            container_count=$(docker ps -a --filter "name=milou-" --format "{{.Names}}" 2>/dev/null | wc -l)
+        fi
+        
+        # Check for volumes
+        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" >/dev/null 2>&1; then
+            volume_count=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" | wc -l)
+        fi
+        
+        if [[ $container_count -gt 0 ]] || [[ $volume_count -gt 0 ]]; then
+            has_docker_resources="true"
+            milou_log "DEBUG" "Found existing Docker resources: $container_count containers, $volume_count volumes"
+        fi
+    fi
+    
+    # Determine cleanup strategy based on what we found
+    if [[ "$has_env_file" == "true" && "$has_docker_resources" == "true" ]]; then
+        # This is a re-configuration of existing installation
         log_step "🔧 Re-configuration" "Existing installation found. Stopping services to apply new settings."
         if ! docker_cleanup_environment "safe"; then # Safe mode preserves data
              log_warning "Could not stop all services cleanly, but proceeding."
         fi
         echo
-    else
-        log_step "🧹 Fresh Installation" "Ensuring a clean environment for first-time setup."
-        if ! docker_cleanup_environment "safe"; then
-            log_error "Setup cannot proceed due to cleanup failure."
-            return 1
+    elif [[ "$has_env_file" == "false" && "$has_docker_resources" == "true" ]]; then
+        # This is likely leftover from a previous broken installation
+        log_step "🧹 Cleanup" "Found leftover Docker resources from previous installation."
+        log_info "Cleaning up containers and networks (data volumes will be preserved)."
+        
+        # For cleanup without .env file, we need to use a more direct approach
+        if command -v docker >/dev/null 2>&1; then
+            # Stop and remove containers by name pattern
+            if docker ps -q --filter "name=milou-" | head -1 >/dev/null 2>&1; then
+                log_debug "Stopping Milou containers..."
+                docker stop $(docker ps -q --filter "name=milou-") 2>/dev/null || true
+            fi
+            if docker ps -aq --filter "name=milou-" | head -1 >/dev/null 2>&1; then
+                log_debug "Removing Milou containers..."
+                docker rm $(docker ps -aq --filter "name=milou-") 2>/dev/null || true
+            fi
+            
+            # Remove networks (but not volumes - preserve data)
+            local networks
+            if networks=$(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null); then
+                for network in $networks; do
+                    if [[ "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
+                        log_debug "Removing network: $network"
+                        docker network rm "$network" 2>/dev/null || true
+                    fi
+                done
+            fi
         fi
+        echo
+    elif [[ "$has_env_file" == "false" && "$has_docker_resources" == "false" ]]; then
+        # This is a truly fresh installation - no cleanup needed
+        log_step "🆕 Fresh Installation" "Clean system detected. Proceeding with fresh setup."
+        echo
+    else
+        # Edge case: has .env but no Docker resources
+        log_step "🔧 Configuration Recovery" "Configuration file found but no Docker resources."
         echo
     fi
 
@@ -290,7 +345,7 @@ setup_run() {
     
     # Preserve existing credentials if this is a re-run
     local preserve_creds="false"
-    if [[ "$is_rerun" == "true" ]]; then
+    if [[ "$has_env_file" == "true" ]]; then
         if confirm "Do you want to preserve your existing admin credentials?" "Y"; then
             preserve_creds="true"
         fi

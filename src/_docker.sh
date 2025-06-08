@@ -952,18 +952,75 @@ docker_cleanup_environment() {
     local mode="${1:-safe}" # Modes: safe (containers/networks only), full (includes volumes)
     local quiet="${2:-false}"
 
-    local down_args=("--remove-orphans")
-    
-    if [[ "$mode" == "full" ]]; then
-        # This is the dangerous operation that removes data volumes associated with the project.
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Performing full cleanup, which will delete service data volumes."
-        down_args+=("--volumes")
+    # Check if we have proper environment file before using docker-compose
+    local use_compose=false
+    if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" && -n "$DOCKER_COMPOSE_FILE" && -f "$DOCKER_COMPOSE_FILE" ]]; then
+        # Test if docker-compose config is valid before using it
+        if docker compose --env-file "$DOCKER_ENV_FILE" -f "$DOCKER_COMPOSE_FILE" config --quiet 2>/dev/null; then
+            use_compose=true
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using Docker Compose for cleanup"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker Compose config invalid, using direct Docker commands"
+        fi
     else
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing safe cleanup of containers and networks. Data volumes will be preserved."
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No valid environment file, using direct Docker commands for cleanup"
     fi
-    
-    if ! docker_execute "down" "" "$quiet" "${down_args[@]}"; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not perform cleanup cleanly, but proceeding."
+
+    if [[ "$use_compose" == "true" ]]; then
+        # Use docker-compose for cleanup when we have valid configuration
+        local down_args=("--remove-orphans")
+        
+        if [[ "$mode" == "full" ]]; then
+            # This is the dangerous operation that removes data volumes associated with the project.
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Performing full cleanup, which will delete service data volumes."
+            down_args+=("--volumes")
+        else
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing safe cleanup of containers and networks. Data volumes will be preserved."
+        fi
+        
+        if ! docker_execute "down" "" "$quiet" "${down_args[@]}"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not perform cleanup cleanly, but proceeding."
+        fi
+    else
+        # Use direct Docker commands when no valid compose configuration
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "Performing direct Docker cleanup of Milou resources."
+        
+        # Stop and remove containers by name pattern
+        local containers
+        if containers=$(docker ps -q --filter "name=milou-" 2>/dev/null) && [[ -n "$containers" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Stopping Milou containers..."
+            docker stop $containers 2>/dev/null || true
+        fi
+        
+        if containers=$(docker ps -aq --filter "name=milou-" 2>/dev/null) && [[ -n "$containers" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing Milou containers..."
+            docker rm $containers 2>/dev/null || true
+        fi
+        
+        # Remove networks (but be careful not to remove system networks)
+        local networks
+        if networks=$(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null); then
+            for network in $networks; do
+                if [[ "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing network: $network"
+                    docker network rm "$network" 2>/dev/null || true
+                fi
+            done
+        fi
+        
+        # Handle volumes based on mode
+        if [[ "$mode" == "full" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing Milou data volumes (this will delete all data!)"
+            local volumes
+            if volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
+                for volume in $volumes; do
+                    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing volume: $volume"
+                    docker volume rm "$volume" 2>/dev/null || true
+                done
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Preserving data volumes (safe mode)"
+        fi
     fi
     
     [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "Docker environment cleanup completed."

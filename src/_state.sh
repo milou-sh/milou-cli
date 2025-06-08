@@ -162,8 +162,34 @@ detect_installation_state() {
         # Has containers but no config
         state="$STATE_CONTAINERS_ONLY"
     elif [[ "$has_config" == "false" && "$has_containers" == "false" && "$has_volumes" == "true" ]]; then
-        # Only has volumes (partial cleanup)
-        state="$STATE_BROKEN"
+        # Only has volumes (partial cleanup) - BUT this might just be leftover from previous install
+        # Check if these volumes actually have meaningful data before calling it "broken"
+        local volume_has_data=false
+        
+        # Get Milou-related volumes and check if they contain significant data
+        local milou_volumes
+        if milou_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
+            for volume in $milou_volumes; do
+                # Check if volume has actual data (more than just empty directories)
+                local volume_info
+                if volume_info=$(docker run --rm -v "$volume:/data" alpine sh -c "find /data -type f | wc -l" 2>/dev/null); then
+                    if [[ "$volume_info" -gt 0 ]]; then
+                        volume_has_data=true
+                        [[ "$quiet" != "true" ]] && milou_log "TRACE" "Volume $volume contains $volume_info files"
+                        break
+                    fi
+                fi
+            done
+        fi
+        
+        if [[ "$volume_has_data" == "true" ]]; then
+            # Volumes contain data - this is a broken installation that should be repaired
+            state="$STATE_BROKEN"
+        else
+            # Volumes are empty or contain no meaningful data - treat as fresh
+            [[ "$quiet" != "true" ]] && milou_log "TRACE" "Found empty volumes, treating as fresh installation"
+            state="$STATE_FRESH"
+        fi
     else
         # No Milou components found
         state="$STATE_FRESH"

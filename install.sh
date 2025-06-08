@@ -136,11 +136,7 @@ prompt_installation_directory() {
         echo -e "      ${GREEN}${CHECKMARK}${NC} Standard system location"
         echo -e "      ${GREEN}${CHECKMARK}${NC} Recommended for production servers"
         echo
-        echo -e "${YELLOW}   2) ${BOLD}User directory${NC} ${DIM}($(eval echo ~$(whoami))/milou-cli)${NC}"
-        echo -e "      ${YELLOW}✓${NC} Single user access"
-        echo -e "      ${YELLOW}✓${NC} Easy to manage"
-        echo
-        echo -e "${BLUE}   3) ${BOLD}Custom location${NC} ${DIM}(specify your own path)${NC}"
+        echo -e "${BLUE}   2) ${BOLD}Custom location${NC} ${DIM}(specify your own path)${NC}"
         echo -e "      ${BLUE}✓${NC} Full control over location"
         echo -e "      ${BLUE}✓${NC} For advanced setups"
         echo

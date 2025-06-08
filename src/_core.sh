@@ -243,6 +243,31 @@ log_welcome() {
     echo -e "\n${BOLD}${PURPLE}${SPARKLES} Welcome!${NC} ${message}\n"
 }
 
+# Convenience alias functions for consistent API
+log_step() {
+    milou_log "STEP" "$@"
+}
+
+log_info() {
+    milou_log "INFO" "$@"
+}
+
+log_error() {
+    milou_log "ERROR" "$@"
+}
+
+log_success() {
+    milou_log "SUCCESS" "$@"
+}
+
+log_warning() {
+    milou_log "WARN" "$@"
+}
+
+log_debug() {
+    milou_log "DEBUG" "$@"
+}
+
 log_progress() {
     local step="$1"
     local total="$2"
@@ -891,6 +916,12 @@ _safe_export() {
 
 # Core logging
 _safe_export milou_log
+_safe_export log_step
+_safe_export log_info
+_safe_export log_error
+_safe_export log_success
+_safe_export log_warning
+_safe_export log_debug
 
 # Random generation (consolidated)
 _safe_export generate_secure_random

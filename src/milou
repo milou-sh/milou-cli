@@ -360,6 +360,17 @@ function handle_smart_setup() {
                     handle_setup_modular --preserve-creds "$@"
                 fi
                 ;;
+            "repair")
+                echo -e "${YELLOW}🛠️  Repairing Installation${NC}"
+                echo -e "${GREEN}🔒 Preserving your existing credentials during repair...${NC}"
+                echo ""
+                if command -v handle_setup_modular >/dev/null 2>&1; then
+                    handle_setup_modular --repair "$@"
+                else
+                    echo -e "${RED}ERROR: Setup module not properly loaded${NC}" >&2
+                    exit 1
+                fi
+                ;;
             "resume")
                 echo -e "${YELLOW}▶️  Resuming Services${NC}"
                 echo "Starting your existing Milou installation."

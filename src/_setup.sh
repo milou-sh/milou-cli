@@ -332,6 +332,92 @@ setup_run() {
 }
 
 # =============================================================================
+# SETUP ORCHESTRATION FUNCTIONS  
+# =============================================================================
+
+# System validation orchestrator
+_setup_validate_system() {
+    log_step "🔍" "System Validation"
+    
+    local errors=0
+    
+    # Basic system dependency validation
+    if ! validate_system_dependencies "basic" "unknown" "false"; then
+        log_error "System dependencies validation failed"
+        ((errors++))
+    fi
+    
+    # Docker environment validation if available
+    if command -v docker >/dev/null 2>&1; then
+        if ! docker info >/dev/null 2>&1; then
+            log_error "Docker daemon is not running"
+            ((errors++))
+        fi
+    else
+        log_info "Docker not installed yet - will be installed during dependencies step"
+    fi
+    
+    # Check system prerequisites
+    if ! setup_assess_prerequisites; then
+        log_info "Prerequisites assessment completed with notes"
+    fi
+    
+    if [[ $errors -eq 0 ]]; then
+        log_success "System validation completed successfully"
+        return 0
+    else
+        log_error "System validation failed with $errors error(s)"
+        return 1
+    fi
+}
+
+# Interactive configuration orchestrator  
+_setup_interactive_configuration() {
+    local preserve_creds="${1:-auto}"
+    
+    log_step "⚙️" "Interactive Configuration"
+    
+    # Use the existing setup_generate_configuration_interactive function
+    if setup_generate_configuration_interactive "$preserve_creds"; then
+        log_success "Interactive configuration completed"
+        return 0
+    else
+        log_error "Interactive configuration failed"
+        return 1
+    fi
+}
+
+# GitHub and deployment orchestrator
+_setup_handle_github_and_deployment() {
+    log_step "🚀" "GitHub Authentication & Deployment"
+    
+    # Validate and start services using existing function
+    if setup_validate_and_start_services; then
+        log_success "GitHub authentication and deployment completed"
+        return 0
+    else
+        log_error "GitHub authentication and deployment failed"
+        return 1
+    fi
+}
+
+# Finalization and credentials display orchestrator
+_setup_finalize_and_display_credentials() {
+    local preserve_creds="${1:-auto}"
+    
+    log_step "🎯" "Finalizing Setup"
+    
+    # Display completion report using existing function
+    if setup_display_completion_report; then
+        log_success "Setup finalization completed"
+        return 0
+    else
+        log_error "Setup finalization failed"
+        return 1
+    fi
+}
+
+# =============================================================================
 # SYSTEM ANALYSIS FUNCTIONS
 # =============================================================================
 
@@ -1984,6 +2070,11 @@ handle_setup_modular() {
                 clean="true"
                 shift
                 ;;
+            --repair)
+                mode="repair"
+                preserve_creds="true"  # Always preserve credentials in repair mode
+                shift
+                ;;
             --preserve-creds|--preserve-credentials)
                 preserve_creds="true"
                 shift
@@ -2084,6 +2175,7 @@ show_setup_help() {
     echo "  --interactive, -i      Interactive setup wizard (default)"
     echo "  --automated, --auto, -a Automated setup using environment variables"
     echo "  --smart, -s            Smart setup with minimal prompts"
+    echo "  --repair               Repair broken installation (preserves credentials)"
     echo ""
     echo "AUTHENTICATION:"
     echo "  --token TOKEN          GitHub Personal Access Token for private images"
@@ -2126,5 +2218,11 @@ show_setup_help() {
 # Main setup functions
 export -f handle_setup_modular
 export -f show_setup_help
+
+# Setup orchestration functions
+export -f _setup_validate_system
+export -f _setup_interactive_configuration
+export -f _setup_handle_github_and_deployment
+export -f _setup_finalize_and_display_credentials
 
 milou_log "DEBUG" "Setup module loaded successfully" 

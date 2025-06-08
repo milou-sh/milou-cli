@@ -966,36 +966,24 @@ export -f validate_token_for_build_push
 
 # New function to clean up Docker environment
 docker_cleanup_environment() {
-    local prune="${1:-containers}"
-    
-    if [[ -z "$MILOU_DOCKER_COMPOSE_CLIENT" ]]; then
-        log_error "Docker Compose client is not initialized"
-        return 1
-    fi
-    
-    # Stop and remove containers
-    log_info "Stopping and removing containers..."
-    if ! $MILOU_DOCKER_COMPOSE_CLIENT down --remove-orphans; then
-        log_warning "Could not stop all containers, but proceeding with cleanup."
-    fi
-    
-    # Remove network if it exists
-    log_info "Removing Docker network..."
-    if docker network inspect "milou_default" >/dev/null 2>&1; then
-        if ! docker network rm "milou_default"; then
-            log_warning "Could not remove network 'milou_default'."
-        fi
-    fi
+    local mode="${1:-safe}" # Modes: safe (containers/networks only), full (includes volumes)
+    local quiet="${2:-false}"
 
-    # Prune volumes
-    if [[ "$prune" == "volumes" ]]; then
-        log_info "Pruning Docker volumes..."
-        if ! docker volume prune -f; then
-            log_warning "Could not prune Docker volumes."
-        fi
+    local down_args=("--remove-orphans")
+    
+    if [[ "$mode" == "full" ]]; then
+        # This is the dangerous operation that removes data volumes associated with the project.
+        [[ "$quiet" != "true" ]] && log_warning "Performing full cleanup, which will delete service data volumes."
+        down_args+=("--volumes")
+    else
+        [[ "$quiet" != "true" ]] && log_info "Performing safe cleanup of containers and networks. Data volumes will be preserved."
     fi
     
-    log_success "Docker environment cleanup complete."
+    if ! docker_execute "down" "" "$quiet" "${down_args[@]}"; then
+        [[ "$quiet" != "true" ]] && log_warning "Could not perform cleanup cleanly, but proceeding."
+    fi
+    
+    [[ "$quiet" != "true" ]] && log_success "Docker environment cleanup complete."
     return 0
 }
 

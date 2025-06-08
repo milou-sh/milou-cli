@@ -261,11 +261,25 @@ setup_run() {
     # Enhanced setup header with progress tracking
     setup_show_header 1 7 "Starting Setup"
     
-    # Ensure cleanup is performed before starting setup
-    log_step "🧹 Pre-setup Cleanup" "Ensuring a clean environment before installation."
-    if ! docker_cleanup_environment "all"; then
-        log_error "Setup cannot proceed due to cleanup failure."
-        return 1
+    # Check if this is a re-run and perform appropriate cleanup
+    local is_rerun="false"
+    if [[ -f "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        is_rerun="true"
+    fi
+    
+    if [[ "$is_rerun" == "true" ]]; then
+        log_step "🔧 Re-configuration" "Existing installation found. Stopping services to apply new settings."
+        if ! docker_cleanup_environment "safe"; then # Safe mode preserves data
+             log_warning "Could not stop all services cleanly, but proceeding."
+        fi
+        echo
+    else
+        log_step "🧹 Fresh Installation" "Ensuring a clean environment for first-time setup."
+        if ! docker_cleanup_environment "safe"; then
+            log_error "Setup cannot proceed due to cleanup failure."
+            return 1
+        fi
+        echo
     fi
 
     # STEP 1: Introduction
@@ -273,13 +287,6 @@ setup_run() {
     echo -e "${DIM}This wizard will guide you through installing and configuring Milou.${NC}"
     echo -e "${DIM}It should only take a few minutes.${NC}"
     echo
-    
-    # Check if this is a re-run
-    local is_rerun="false"
-    if [[ -f "${MILOU_ENV_FILE}" ]]; then
-        is_rerun="true"
-        log_info "Existing .env file found. This is a re-configuration."
-    fi
     
     # Preserve existing credentials if this is a re-run
     local preserve_creds="false"

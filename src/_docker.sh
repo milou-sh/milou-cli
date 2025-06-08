@@ -665,29 +665,37 @@ service_start_with_validation() {
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
     
-    # Validate token permissions before attempting to start services
+    # Validate token permissions before attempting to start services (only if not already validated)
     if [[ -n "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token permissions..."
-        
-        # Use the validation function to check token format first
-        if ! validate_github_token "$github_token" "false"; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token format appears invalid, but attempting authentication anyway"
+        # Check if we've already validated this token in this session
+        if [[ "${GITHUB_TOKEN_VALIDATED:-}" == "true" && "${GITHUB_VALIDATED_TOKEN:-}" == "$github_token" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔐 GitHub token already validated in this session"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token permissions..."
+            
+            # Use the validation function to check token format first
+            if ! validate_github_token "$github_token" "false"; then
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token format appears invalid, but attempting authentication anyway"
+            fi
+            
+            # Test authentication and token permissions
+            if ! test_github_authentication "$github_token" "$quiet" "true"; then
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ GitHub token validation failed"
+                [[ "$quiet" != "true" ]] && echo ""
+                [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
+                [[ "$quiet" != "true" ]] && echo "   ✓ Ensure your token has 'read:packages' scope"
+                [[ "$quiet" != "true" ]] && echo "   ✓ Verify you have access to the milou-sh/milou repository"
+                [[ "$quiet" != "true" ]] && echo "   ✓ Check if the token has expired"
+                [[ "$quiet" != "true" ]] && echo "   ✓ Create a new token: https://github.com/settings/tokens"
+                [[ "$quiet" != "true" ]] && echo ""
+                return 1
+            fi
+            
+            # Mark token as validated for this session
+            export GITHUB_TOKEN_VALIDATED="true"
+            export GITHUB_VALIDATED_TOKEN="$github_token"
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ GitHub token validation successful"
         fi
-        
-        # Test authentication and token permissions
-        if ! test_github_authentication "$github_token" "$quiet" "true"; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ GitHub token validation failed"
-            [[ "$quiet" != "true" ]] && echo ""
-            [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
-            [[ "$quiet" != "true" ]] && echo "   ✓ Ensure your token has 'read:packages' scope"
-            [[ "$quiet" != "true" ]] && echo "   ✓ Verify you have access to the milou-sh/milou repository"
-            [[ "$quiet" != "true" ]] && echo "   ✓ Check if the token has expired"
-            [[ "$quiet" != "true" ]] && echo "   ✓ Create a new token: https://github.com/settings/tokens"
-            [[ "$quiet" != "true" ]] && echo ""
-            return 1
-        fi
-        
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ GitHub token validation successful"
     else
         [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token found - only public images will be accessible"
     fi

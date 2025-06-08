@@ -1840,6 +1840,10 @@ setup_start_services() {
                     if test_github_authentication "$github_token" "false" "true"; then
                         milou_log "SUCCESS" "✓ GitHub token validated and authenticated"
                         
+                        # Mark token as validated for this session to avoid duplicate checks
+                        export GITHUB_TOKEN_VALIDATED="true"
+                        export GITHUB_VALIDATED_TOKEN="$github_token"
+                        
                         # Update the .env file with the token
                         if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
                             if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
@@ -1918,6 +1922,9 @@ setup_start_services() {
                 # Test authentication silently for command-line tokens
                 if test_github_authentication "$github_token" "true" "false"; then
                     milou_log "SUCCESS" "✓ Token authentication verified"
+                    # Mark token as validated for this session
+                    export GITHUB_TOKEN_VALIDATED="true"
+                    export GITHUB_VALIDATED_TOKEN="$github_token"
                 else
                     milou_log "WARN" "⚠️ Token authentication failed, but continuing"
                     milou_log "INFO" "💡 If image pulls fail, check token permissions"

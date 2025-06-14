@@ -35,6 +35,14 @@ if [[ "${MILOU_VALIDATION_LOADED:-}" != "true" ]]; then
     }
 fi
 
+if [[ "${MILOU_CONFIG_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_config.sh" || {
+        echo "ERROR: Cannot load config module" >&2
+        return 1
+    }
+fi
+
 # =============================================================================
 # DOCKER ENVIRONMENT CONFIGURATION
 # =============================================================================
@@ -58,6 +66,11 @@ docker_handle_startup_error() {
     local service="${2:-}"
     local quiet="${3:-false}"
     
+    # Immediately report logs from any unhealthy containers to capture the root cause
+    if command -v report_unhealthy_services >/dev/null 2>&1; then
+        report_unhealthy_services "$service" "$quiet"
+    fi
+
     [[ "$quiet" == "true" ]] && return 0
     
     # Check for authentication/credential errors first (most common after fresh setup)
@@ -542,9 +555,11 @@ docker_execute() {
     case "$operation" in
         "up"|"start")
             if [[ -n "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling image for service: $service"
+                docker_compose pull "$service"
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting service: $service"
                 local result_output
-                result_output=$(docker_compose up -d "${additional_args[@]}" "$service" 2>&1)
+                result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" "$service" 2>&1)
                 local exit_code=$?
                 
                 if [[ $exit_code -ne 0 ]]; then
@@ -553,6 +568,8 @@ docker_execute() {
                     return $exit_code
                 fi
             else
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling all service images..."
+                docker_compose pull
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting all services"
                 local result_output
                 result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" 2>&1)
@@ -748,51 +765,23 @@ service_start_with_validation() {
         source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
         github_token="${GITHUB_TOKEN:-$github_token}"
     fi
-    
-    # Validate token permissions before attempting to start services (only if not already validated)
-    if [[ -n "$github_token" ]]; then
-        # Check if we've already validated this token in this session
-        if [[ "${GITHUB_TOKEN_VALIDATED:-}" == "true" && "${GITHUB_VALIDATED_TOKEN:-}" == "$github_token" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔐 GitHub token already validated in this session"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token permissions..."
-            
-            # Use the validation function to check token format first
-            if ! validate_github_token "$github_token" "false"; then
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token format appears invalid, but attempting authentication anyway"
-            fi
-            
-            # Test authentication and token permissions
-            if ! test_github_authentication "$github_token" "$quiet" "true"; then
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ GitHub token validation failed"
-                [[ "$quiet" != "true" ]] && echo ""
-                [[ "$quiet" != "true" ]] && echo "🔧 TROUBLESHOOTING:"
-                [[ "$quiet" != "true" ]] && echo "   ✓ Ensure your token has 'read:packages' scope"
-                [[ "$quiet" != "true" ]] && echo "   ✓ Verify you have access to the milou-sh/milou repository"
-                [[ "$quiet" != "true" ]] && echo "   ✓ Check if the token has expired"
-                [[ "$quiet" != "true" ]] && echo "   ✓ Create a new token: https://github.com/settings/tokens"
-                [[ "$quiet" != "true" ]] && echo ""
-                return 1
-            fi
-            
-            # Mark token as validated for this session
-            export GITHUB_TOKEN_VALIDATED="true"
-            export GITHUB_VALIDATED_TOKEN="$github_token"
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ GitHub token validation successful"
-        fi
-    else
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token found - only public images will be accessible"
-    fi
-    
+
     # Ensure Docker environment is initialized (authentication will be handled based on operation)
     if ! docker_init "" "" "$quiet" "false"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker initialization failed"
         return 1
     fi
-    
+
     # Start the service(s)
     if ! docker_execute "start" "$service" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start ${service:-services}"
+        # Direct log capture for backend failure
+        if docker ps -a --format '{{.Names}}' | grep -q "milou-backend"; then
+            if docker ps -a --format '{{.Names}}\t{{.Status}}' | grep "milou-backend" | grep -q "unhealthy"; then
+                 milou_log "ERROR" "Backend service is unhealthy. Displaying last 50 lines of logs:"
+                 docker logs milou-backend --tail 50
+            fi
+        fi
         return 1
     fi
     
@@ -1177,6 +1166,13 @@ docker_validate_environment() {
 detect_credential_mismatch() {
     local quiet="${1:-false}"
     
+    # Ensure Docker environment is initialized before we start.
+    # We skip auth because we only need to interact with the local db.
+    if ! docker_init "" "" "$quiet" "true"; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker init failed during mismatch check."
+        return 0 # Assume mismatch if we can't even init
+    fi
+    
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔍 Checking for credential mismatches..."
     
     # Check if database container exists and has data
@@ -1220,12 +1216,12 @@ detect_credential_mismatch() {
     
     # Temporarily start just the database container to test
     local test_result=0
-    if docker compose --env-file "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" -f "${DOCKER_COMPOSE_FILE}" up -d db 2>/dev/null; then
+    if docker_compose up -d db 2>/dev/null; then
         # Wait a few seconds for database to initialize
         sleep 5
         
         # Try to connect with current credentials
-        if docker exec milou-database psql -U "$current_db_user" -d "${POSTGRES_DB:-${DB_NAME:-milou_database}}" -c "SELECT 1;" >/dev/null 2>&1; then
+        if docker_compose exec -T db psql -U "$current_db_user" -d "${POSTGRES_DB:-${DB_NAME:-milou_database}}" -c "SELECT 1;" >/dev/null 2>&1; then
             [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Database connection successful - no credential mismatch"
             test_result=1  # No mismatch
         else
@@ -1234,7 +1230,7 @@ detect_credential_mismatch() {
         fi
         
         # Stop the test database
-        docker stop milou-database >/dev/null 2>&1 || true
+        docker_compose stop db >/dev/null 2>&1 || true
     else
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not start database for testing - assuming mismatch"
         test_result=0  # Assume mismatch if can't start
@@ -1373,5 +1369,46 @@ export -f handle_mixed_versions
 
 # Legacy compatibility
 export -f milou_docker_compose
+
+# NEW FUNCTION: Report logs for unhealthy containers
+docker_report_unhealthy_services() {
+    local services_to_check="$1"
+    local quiet="$2"
+
+    local unhealthy_containers
+    unhealthy_containers=$(docker_get_unhealthy_containers "$services_to_check" "$quiet")
+
+    if [[ -n "$unhealthy_containers" ]]; then
+        [[ "$quiet" != "true" ]] && echo
+        log_error "Diagnostics for Unhealthy Containers"
+        for container in $unhealthy_containers; do
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            log_warning "Logs for failed container: $container"
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            
+            # Grab and display logs
+            docker logs "$container" --tail 50 2>&1 | sed 's/^/    /' || log_warning "Could not retrieve logs for $container."
+            
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            [[ "$quiet" != "true" ]] && echo
+        done
+        log_info "The logs above may indicate a problem within the application running inside the container (e.g., a coding bug or configuration error), not necessarily a problem with the CLI tool itself."
+    fi
+}
+
+# NEW FUNCTION: Get a list of unhealthy containers
+docker_get_unhealthy_containers() {
+    local services_to_check="$1"
+    local quiet="$2"
+    
+    local project_name
+    # Use COMPOSE_PROJECT_NAME from .env as it's more reliable
+    project_name="${COMPOSE_PROJECT_NAME:-milou}"
+
+    # List all containers for the project, filter for unhealthy status
+    docker ps -a --format "{{.Names}}\t{{.Status}}" --filter "name=${project_name}-" 2>/dev/null | \
+        grep -i 'unhealthy' | \
+        cut -f1
+}
 
 milou_log "DEBUG" "Docker module loaded successfully" 

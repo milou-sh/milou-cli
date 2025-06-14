@@ -457,19 +457,43 @@ rollback_on_failure() {
     fi
 }
 
+# NEW FUNCTION: Report logs for unhealthy containers
+report_unhealthy_services() {
+    local services_to_check="$1"
+    local quiet="$2"
+
+    local unhealthy_containers
+    unhealthy_containers=$(docker_get_unhealthy_containers "$services_to_check" "$quiet")
+
+    if [[ -n "$unhealthy_containers" ]]; then
+        [[ "$quiet" != "true" ]] && echo
+        milou_log "ERROR" "Diagnostics for Unhealthy Containers"
+        for container in $unhealthy_containers; do
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            milou_log "WARN" "Logs for failed container: $container"
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            
+            # Grab and display logs
+            docker logs "$container" --tail 50 2>&1 | sed 's/^/    /' || milou_log "WARN" "Could not retrieve logs for $container."
+            
+            [[ "$quiet" != "true" ]] && echo -e "${YELLOW}--------------------------------------------------${NC}"
+            [[ "$quiet" != "true" ]] && echo
+        done
+        milou_log "INFO" "The logs above may indicate a problem within the application running inside the container (e.g., a coding bug or configuration error), not necessarily a problem with the CLI tool itself."
+    fi
+}
+
 # =============================================================================
-# EXPORT FUNCTIONS
+# MODULE EXPORTS
 # =============================================================================
 
-# Export all error recovery functions
+# Export core recovery functions
+export -f safe_operation
 export -f create_system_snapshot
 export -f restore_system_snapshot
-export -f validate_system_state
-export -f cleanup_failed_operations
 export -f cleanup_old_snapshots
-export -f safe_operation
-export -f register_rollback_action
-export -f execute_with_safety
-export -f rollback_on_failure
+export -f cleanup_failed_operations
+export -f validate_system_state
+export -f report_unhealthy_services
 
 milou_log "DEBUG" "Error recovery module loaded successfully" 

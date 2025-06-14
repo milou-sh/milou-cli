@@ -270,6 +270,14 @@ function handle_smart_setup() {
     local setup_mode
     setup_mode=$(smart_setup_mode "$current_state" "$FORCE" "true")
     
+    # Override for repair mode if specified
+    for arg in "$@"; do
+        if [[ "$arg" == "--repair" ]]; then
+            setup_mode="repair"
+            break
+        fi
+    done
+    
     echo "Installation state: $(describe_installation_state "$current_state")"
     echo "Setup mode: $setup_mode"
     echo
@@ -373,7 +381,7 @@ function handle_smart_setup() {
                     exit 1
                 fi
                 ;;
-            "resume")
+            "start"|"resume")
                 echo -e "${YELLOW}▶️  Resuming Services${NC}"
                 echo "Starting your existing Milou installation."
                 
@@ -513,11 +521,6 @@ function handle_smart_setup() {
                 echo -e "${GREEN}🔒 Preserving your existing credentials and data...${NC}"
                 handle_setup_modular --preserve-creds "$@"
                 ;;
-            "repair")
-                echo -e "${RED}🛠️  Repairing Installation${NC}"
-                echo -e "${GREEN}🔒 Preserving your existing credentials during repair...${NC}"
-                handle_setup_modular --repair --preserve-creds "$@"
-                ;;
             "reinstall")
                 echo -e "${RED}🔄 Force Reinstall${NC}"
                 echo "⚠️  This will destroy all existing data!"
@@ -531,7 +534,8 @@ function handle_smart_setup() {
     }
     
     # Execute setup with automatic rollback on failure
-    safe_operation "milou_setup_$setup_mode" "run_setup_safely" "$@"
+    # safe_operation "milou_setup_$setup_mode" "run_setup_safely" "$@"
+    run_setup_safely "$@"
 }
 
 function handle_smart_status() {

@@ -232,12 +232,114 @@ setup_show_analysis() {
 # MAIN SETUP ORCHESTRATION FUNCTIONS
 # =============================================================================
 
+# Repair mode orchestration
+_setup_run_repair() {
+    local force="$1"
+    local preserve_creds="$2"
+
+    log_step "🛠️" "Repair Mode"
+    
+    # Load existing config
+    if [[ ! -f "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
+        log_error "No .env file found. Cannot run repair. Please run standard setup."
+        return 1
+    fi
+    
+    # Source the .env file to get existing values
+    set -a
+    source "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+    set +a
+
+    # Authenticate with Docker Hub/GitHub Registry first thing
+    log_step "🔐" "GitHub Authentication"
+    if ! docker_login_github "${GITHUB_TOKEN:-}" "false"; then
+        log_error "GitHub Docker Registry authentication failed. Please check your GITHUB_TOKEN."
+        log_info "Get a token: https://github.com/settings/tokens (scope: read:packages)"
+        return 1
+    fi
+
+    local domain="${DOMAIN:-localhost}"
+    local admin_email="${ADMIN_EMAIL:-admin@localhost}"
+    local ssl_mode="${SSL_MODE:-generate}"
+
+    log_info "Found existing configuration:"
+    log_info "  Domain: $domain"
+    log_info "  Admin Email: $admin_email"
+    log_info "  SSL Mode: $ssl_mode"
+
+    # STEP 1: System Validation
+    if ! _setup_validate_system; then
+        log_error "System validation failed. Please address the issues above."
+        return 1
+    fi
+    
+    log_success "System validation passed. Ready to repair."
+    echo
+
+    # NEW: Automatically detect and offer to fix credential mismatches
+    log_step "🔑" "Checking for Credential Mismatch"
+    if detect_credential_mismatch "true"; then # Quietly check
+        log_warning "Credential mismatch detected. This is a common issue after re-installations."
+        log_info "This happens when the application has a different password than the database."
+        
+        if confirm "Attempt to resolve credential mismatch automatically?" "Y"; then
+            if resolve_credential_mismatch "false" "false"; then
+                log_success "Credential mismatch resolved successfully! The system should now start correctly."
+            else
+                log_error "Failed to resolve credential mismatch. The setup may fail."
+                log_info "You can try a full reset with: ./milou.sh setup --clean"
+                return 1
+            fi
+        else
+            log_warning "Skipping automatic credential fix. The setup will likely fail."
+        fi
+    else
+        log_success "No credential mismatch detected. Your credentials appear to be in sync."
+    fi
+    echo
+
+    # STEP 2: Configuration Regeneration (non-interactive)
+    log_step "⚙️" "Configuration Regeneration"
+    
+    # We directly call config_generate, skipping interactive part.
+    # The 'true' for preserve_creds is critical.
+    if ! config_generate "$domain" "$admin_email" "$ssl_mode" "false" "true" "false"; then
+        log_error "Configuration regeneration failed."
+        return 1
+    fi
+
+    # STEP 3: GitHub Token and Deployment
+    if ! _setup_handle_github_and_deployment; then
+        log_error "Deployment failed."
+        return 1
+    fi
+
+    # STEP 4: Finalization and Credentials
+    if ! _setup_finalize_and_display_credentials "$preserve_creds"; then
+        log_error "Finalization step failed."
+        return 1
+    fi
+    
+    milou_log "SUCCESS" "🎉 Milou repair completed successfully! 🎉"
+    echo
+    
+    return 0
+}
+
 # Main setup entry point with enhanced UX
 setup_run() {
     local force="${1:-false}"
     local mode="${2:-auto}"
     local skip_validation="${3:-false}"
     local preserve_creds="${4:-auto}"
+    
+    if [[ "$mode" == "repair" ]]; then
+        if ! _setup_run_repair "$force" "$preserve_creds"; then
+            log_error "Repair process failed."
+            return 1
+        fi
+        return 0
+    fi
     
     # Ensure interactive mode is properly set for setup wizard
     if [[ "${MILOU_INTERACTIVE:-}" == "true" ]] || [[ "${INTERACTIVE:-}" == "true" ]]; then
@@ -1873,204 +1975,11 @@ setup_prepare_docker_environment() {
 setup_start_services() {
     milou_log "INFO" "✓ Starting Milou services..."
     
-    # Check if GitHub token is available for private images
-    local github_token="${GITHUB_TOKEN:-}"
-    local token_source=""
-    
-    # Determine token source for better user messaging
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-        if [[ -n "$github_token" ]] && [[ "$github_token" != "${GITHUB_TOKEN:-}" ]]; then
-            token_source="command-line"
-        else
-            token_source="environment"
-        fi
-    fi
-    
-    # If no token and we're in interactive mode, prompt for it
-    if [[ -z "$github_token" && "$SETUP_CURRENT_MODE" == "$SETUP_MODE_INTERACTIVE" ]]; then
-        echo ""
-        log_section "🔐 GitHub Container Registry Access" "Authentication required for private images"
-        
-        echo -e "${BOLD}${CYAN}📦 About GitHub Container Registry:${NC}"
-        echo -e "   • Milou uses private Docker images from GitHub Container Registry"
-        echo -e "   • A Personal Access Token is required for authentication"
-        echo -e "   • You can create one at: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
-        echo
-        echo -e "${BOLD}${YELLOW}📝 Required Token Scopes:${NC}"
-        echo -e "   • ${BOLD}read:packages${NC} - Access to GitHub Packages"
-        echo
-        echo -e "${BOLD}${GREEN}⚡ Quick Setup Options:${NC}"
-        echo -e "   1) Enter your token now (${BOLD}recommended${NC})"
-        echo -e "   2) Skip and configure later in .env file"
-        echo ""
-        
-        if confirm "Do you have a GitHub Personal Access Token?" "Y"; then
-            echo ""
-            echo -e "${BOLD}${CYAN}🔑 Token Input:${NC}"
-            echo -ne "GitHub Token: "
-            read -r github_token
-            echo ""
-            
-            if [[ -n "$github_token" ]]; then
-                # Validate the token with enhanced feedback
-                milou_log "INFO" "🔍 Validating GitHub token..."
-                
-                # First check format
-                if validate_github_token "$github_token" "false"; then
-                    milou_log "SUCCESS" "✓ Token format is valid"
-                    
-                    # Test authentication with GitHub API and registry
-                    milou_log "INFO" "🔐 Testing GitHub authentication..."
-                    if test_github_authentication "$github_token" "false" "true"; then
-                        milou_log "SUCCESS" "✓ GitHub token validated and authenticated"
-                        
-                        # Mark token as validated for this session to avoid duplicate checks
-                        export GITHUB_TOKEN_VALIDATED="true"
-                        export GITHUB_VALIDATED_TOKEN="$github_token"
-                        
-                        # Update the .env file with the token
-                        if [[ -f "${SCRIPT_DIR:-$(pwd)}/.env" ]]; then
-                            if grep -q "^GITHUB_TOKEN=" "${SCRIPT_DIR:-$(pwd)}/.env"; then
-                                sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "${SCRIPT_DIR:-$(pwd)}/.env"
-                            else
-                                echo "GITHUB_TOKEN=$github_token" >> "${SCRIPT_DIR:-$(pwd)}/.env"
-                            fi
-                            milou_log "INFO" "Token saved to .env file"
-                        fi
-                        
-                        # Export for immediate use
-                        export GITHUB_TOKEN="$github_token"
-                        token_source="user-input"
-                    else
-                        milou_log "ERROR" "❌ Token authentication failed"
-                        echo ""
-                        echo "🔧 TROUBLESHOOTING:"
-                        echo "   ✓ Ensure token has 'read:packages' scope"
-                        echo "   ✓ Check if token is expired"
-                        echo "   ✓ Verify you have access to milou-sh/milou repository"
-                        echo "   ✓ Try creating a new token at: https://github.com/settings/tokens"
-                        echo ""
-                        
-                        if confirm "Continue with potentially invalid token?" "N"; then
-                            milou_log "WARN" "⚠️ Continuing with unverified token"
-                            export GITHUB_TOKEN="$github_token"
-                            token_source="user-input-unverified"
-                        else
-                            milou_log "INFO" "Setup cancelled - please get a valid GitHub token first"
-                            return 1
-                        fi
-                    fi
-                else
-                    milou_log "ERROR" "❌ Invalid token format"
-                    echo ""
-                    echo "🔧 EXPECTED TOKEN FORMATS:"
-                    echo "   ✓ Classic PAT: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                    echo "   ✓ Fine-grained: github_pat_xxxxxxxxxxxxxxxxxxxx"
-                    echo ""
-                    
-                    if confirm "Continue with token anyway? (not recommended)" "N"; then
-                        milou_log "WARN" "⚠️ Continuing with invalid token format"
-                        export GITHUB_TOKEN="$github_token"
-                        token_source="user-input-invalid"
-                    else
-                        milou_log "INFO" "Please get a valid GitHub token and try again"
-                        return 1
-                    fi
-                fi
-            else
-                milou_log "INFO" "No token provided, continuing without authentication"
-            fi
-        else
-            milou_log "INFO" "Skipping GitHub token setup"
-            echo ""
-            log_section "⏭️  Setup Later" "Token configuration postponed"
-            
-            echo -e "${BOLD}${CYAN}📋 How to configure authentication later:${NC}"
-            echo -e "   1. Get a token from: ${BOLD}${BLUE}https://github.com/settings/tokens${NC}"
-            echo -e "   2. Add to .env file: ${BOLD}GITHUB_TOKEN=ghp_your_token_here${NC}"
-            echo -e "   3. Restart services: ${BOLD}./milou.sh restart${NC}"
-            echo
-            echo -e "${YELLOW}💡 Tip:${NC} Services may fail to start without authentication"
-            echo ""
-        fi
-    elif [[ -n "$github_token" ]]; then
-        # Token was provided via command line or environment
-        milou_log "INFO" "🔑 Using GitHub token from $token_source"
-        
-        # Quick validation for command-line provided tokens
-        if [[ "$token_source" == "command-line" ]]; then
-            milou_log "INFO" "🔍 Validating provided token..."
-            if validate_github_token "$github_token" "false"; then
-                milou_log "SUCCESS" "✓ Token format is valid"
-                
-                # Test authentication silently for command-line tokens
-                if test_github_authentication "$github_token" "true" "false"; then
-                    milou_log "SUCCESS" "✓ Token authentication verified"
-                    # Mark token as validated for this session
-                    export GITHUB_TOKEN_VALIDATED="true"
-                    export GITHUB_VALIDATED_TOKEN="$github_token"
-                else
-                    milou_log "WARN" "⚠️ Token authentication failed, but continuing"
-                    milou_log "INFO" "💡 If image pulls fail, check token permissions"
-                fi
-            else
-                milou_log "WARN" "⚠️ Token format appears invalid, but continuing"
-            fi
-        fi
-    fi
-    
-    # INTELLIGENT IMAGE PULLING: Only pull when necessary to avoid unnecessary downloads
-    local should_pull_images="false"
-    local pull_reason=""
-    
-    # Check if we should pull images based on system state
-    if [[ "$SETUP_IS_FRESH_SERVER" == "true" ]]; then
-        should_pull_images="true"
-        pull_reason="fresh server installation"
-    else
-        # Check if any Milou images are missing locally - check for any tag, not just :latest
-        local missing_images=()
-        local core_services=("database" "backend" "frontend")
-        
-        for service in "${core_services[@]}"; do
-            # Check if any image exists for this service (any tag)
-            if ! docker images --format "{{.Repository}}" | grep -q "ghcr.io/milou-sh/milou/$service"; then
-                missing_images+=("ghcr.io/milou-sh/milou/$service")
-            fi
-        done
-        
-        if [[ ${#missing_images[@]} -gt 0 ]]; then
-            should_pull_images="true"
-            pull_reason="missing core images: ${missing_images[*]}"
-        else
-            milou_log "INFO" "✓ Core images already present locally - skipping pull"
-        fi
-    fi
-    
-    # Pull images only when necessary
-    if [[ "$should_pull_images" == "true" ]]; then
-        milou_log "INFO" "⬇️  Pulling Docker images ($pull_reason)..."
-        
-        # Initialize Docker environment first
-        if ! docker_init "" "" "false" "false"; then
-            milou_log "ERROR" "Docker initialization failed"
-            return 1
-        fi
-        
-        # Pull all images
-        if ! docker_execute "pull" "" "false"; then
-            milou_log "WARN" "⚠️  Image pull had issues, but continuing with startup"
-            milou_log "INFO" "💡 Some images may already exist locally or authentication may be needed"
-        else
-            milou_log "SUCCESS" "✅ Images pulled successfully"
-        fi
-    else
-        # Still need to initialize Docker environment
-        if ! docker_init "" "" "false" "false"; then
-            milou_log "ERROR" "Docker initialization failed"
-            return 1
-        fi
-    fi
+    # The complex logic for token handling and intelligent pulling has been
+    # simplified and moved. For repair mode, login is handled earlier.
+    # For interactive mode, the user is prompted.
+    # We now directly proceed to starting the services, and docker-compose
+    # will handle pulling images if they are not present locally.
     
     # Use the Docker module's start function which handles authentication
     if service_start_with_validation "" "60" "false"; then
@@ -2084,44 +1993,20 @@ setup_start_services() {
     else
         milou_log "ERROR" "Failed to start services"
         
-        # Enhanced error guidance based on token status
+        # Error guidance is now handled by docker_handle_startup_error in _docker.sh
+        # which provides more specific feedback based on the docker-compose output.
         echo ""
         echo "🔧 TROUBLESHOOTING SERVICE STARTUP"
         echo "=================================="
+        echo "   Authentication appears OK, but services failed to start."
         echo ""
-        
-        if [[ -z "$github_token" ]]; then
-            echo "❌ NO GITHUB TOKEN PROVIDED"
-            echo "   The error may be due to missing authentication for private images."
-            echo ""
-            echo "✓ SOLUTION:"
-            echo "   1. Get a GitHub token: https://github.com/settings/tokens"
-            echo "   2. Required scopes: read:packages"
-            echo "   3. Re-run: ./milou.sh setup --token ghp_your_token_here"
-            echo ""
-        elif [[ "$token_source" == "user-input-invalid" || "$token_source" == "user-input-unverified" ]]; then
-            echo "❌ INVALID/UNVERIFIED TOKEN"
-            echo "   The token provided may not be working correctly."
-            echo ""
-            echo "✓ SOLUTION:"
-            echo "   1. Check token permissions: read:packages scope required"
-            echo "   2. Verify token hasn't expired"
-            echo "   3. Test manually: echo 'TOKEN' | docker login ghcr.io -u USERNAME --password-stdin"
-            echo "   4. Get a new token if needed: https://github.com/settings/tokens"
-            echo ""
-        else
-            echo "❌ SERVICE STARTUP FAILED"
-            echo "   Authentication appears OK, but services failed to start."
-            echo ""
-            echo "✓ NEXT STEPS:"
-            echo "   1. Check service logs: ./milou.sh logs"
-            echo "   2. Verify system resources: docker system df"
-            echo "   3. Check port availability: ./milou.sh status"
-            echo "   4. Try manual start: ./milou.sh start"
-            echo ""
-        fi
-        
-        echo "💡 For detailed logs, run: ./milou.sh setup --verbose"
+        echo "✓ NEXT STEPS:"
+        echo "   1. Check service logs for detailed errors: ./milou.sh logs"
+        echo "   2. Verify system resources: docker system df"
+        echo "   3. Check for port conflicts: ./milou.sh status"
+        echo "   4. Try a manual start: ./milou.sh start"
+        echo ""
+        echo "💡 For the most detailed output, re-run with --verbose: ./milou.sh setup --verbose"
         echo ""
         
         return 1

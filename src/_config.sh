@@ -108,7 +108,7 @@ config_generate() {
     if [[ "$should_preserve" == "true" && "${CREDENTIALS_PRESERVED:-false}" == "true" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Using preserved credentials for safe update"
         # Use preserved credentials data if available
-        credentials_data="${PRESERVED_CREDENTIALS_DATA:-}"
+        credentials_data=$(config_generate_credentials_with_preservation "$quiet")
     else
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔑 Generating fresh credentials"
         # Generate new credentials

@@ -51,6 +51,17 @@ if [[ "${MILOU_DOCKER_LOADED:-}" != "true" ]]; then
     }
 fi
 
+# ============================================================================
+# HELPER: Sanitize .env file to remove invalid lines before sourcing
+# ============================================================================
+sanitize_env_file() {
+    local target_file="$1"
+    [[ -f "$target_file" ]] || return 0
+    local tmp_file="${target_file}.sanitized.$$"
+    awk '/^[[:space:]]*$/ {print; next} /^[[:space:]]*#/ {print; next} /^[A-Za-z_][A-Za-z0-9_]*=.*/ {print}' "$target_file" > "$tmp_file"
+    mv "$tmp_file" "$target_file"
+}
+
 # =============================================================================
 # SETUP CONSTANTS AND DEFAULTS
 # =============================================================================

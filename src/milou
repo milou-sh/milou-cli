@@ -270,13 +270,28 @@ function handle_smart_setup() {
     local setup_mode
     setup_mode=$(smart_setup_mode "$current_state" "$FORCE" "true")
     
-    # Override for repair mode if specified
-    for arg in "$@"; do
-        if [[ "$arg" == "--repair" ]]; then
-            setup_mode="repair"
-            break
+    # ------------------------------------------------------------------
+    # Safety: If auto-detection picked "repair" but there is no .env file,
+    # the repair workflow cannot function. Switch to fresh install (or ask
+    # the user, if in an interactive TTY) so we end up in the interactive
+    # setup wizard instead of failing immediately.
+    # ------------------------------------------------------------------
+    if [[ "$setup_mode" == "repair" ]]; then
+        local env_candidate="${SCRIPT_DIR}/.env"
+        if [[ ! -f "$env_candidate" ]]; then
+            if [[ "${INTERACTIVE:-true}" == "true" && -t 0 && -t 1 ]]; then
+                echo ""
+                echo "⚠️  Milou detected a broken or incomplete installation, but no configuration file (.env) was found."
+                read -p "Run the interactive setup wizard instead? [Y/n]: " _answer
+                _answer=${_answer:-Y}
+                if [[ ${_answer,,} =~ ^y ]]; then
+                    setup_mode="install"
+                fi
+            else
+                setup_mode="install"
+            fi
         fi
-    done
+    fi
     
     echo "Installation state: $(describe_installation_state "$current_state")"
     echo "Setup mode: $setup_mode"

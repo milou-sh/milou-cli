@@ -2203,6 +2203,20 @@ handle_setup_modular() {
         milou_log "INFO" "✓ GitHub token provided via command line"
     fi
     
+    # ------------------------------------------------------------------
+    # Safety fallback: If repair mode was selected automatically but the
+    # .env file (configuration) is missing, the repair workflow cannot
+    # proceed. In that situation we transparently fall back to the
+    # interactive setup wizard instead of exiting with an error.
+    # ------------------------------------------------------------------
+    if [[ "$mode" == "repair" ]]; then
+        local env_candidate="${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+        if [[ ! -f "$env_candidate" ]]; then
+            milou_log "WARN" "Repair mode requested but no .env file found ($env_candidate). Falling back to interactive setup."
+            mode="interactive"
+        fi
+    fi
+    
     # Handle credential fix first
     if [[ "$fix_credentials" == "true" ]]; then
         milou_log "STEP" "🔧 Fixing Credential Mismatch"

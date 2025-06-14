@@ -498,18 +498,18 @@ docker_init() {
     if [[ "$skip_auth" == "true" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Skipping GitHub authentication as requested"
     else
-        # Try to authenticate with GitHub Container Registry if we have a token and not already authenticated
-        if [[ -n "$github_token" && "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
+        # Always attempt authentication when not already authenticated. This call
+        # will itself handle prompting the user for a token if we don't yet have
+        # one in the environment or .env file.
+        if [[ "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
             if docker_login_github "$github_token" "$quiet"; then
                 [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
                 export GITHUB_AUTHENTICATED="true"
             else
                 [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
             fi
-        elif [[ "${GITHUB_AUTHENTICATED:-}" == "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
         else
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token found - public images only"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
         fi
     fi
     

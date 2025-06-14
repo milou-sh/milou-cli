@@ -8,6 +8,7 @@
 # =============================================================================
 
 set -euo pipefail
+IFS=$'\n\t'  # Prevent word-splitting and globbing surprises
 
 # ----------------------------------------
 # COLORS AND FORMATTING
@@ -801,7 +802,7 @@ build_image_advanced() {
 
     log "STEP" "🔨 Building $service with cross-platform line ending fixes..."
 
-    local build_cmd="docker build"
+    local -a build_cmd=(docker build)
     local build_args_array=()
 
     # Create enhanced Dockerfile with dos2unix line ending fixes
@@ -830,7 +831,7 @@ build_image_advanced() {
     } > "$temp_dockerfile"
 
     if [[ "$MULTI_PLATFORM" == "true" ]]; then
-        build_cmd="docker buildx build"
+        build_cmd=(docker buildx build)
         build_args_array+=("--platform" "$PLATFORMS")
     fi
 
@@ -893,10 +894,10 @@ build_image_advanced() {
 
     build_args_array+=("$context")
 
-    log "DEBUG" "Build command: $build_cmd ${build_args_array[*]}"
+    log "DEBUG" "Build command: ${build_cmd[*]} ${build_args_array[*]}"
 
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "INFO" "[DRY RUN] Would execute: $build_cmd ${build_args_array[*]}"
+        log "INFO" "[DRY RUN] Would execute: ${build_cmd[*]} ${build_args_array[*]}"
         rm -f "$temp_dockerfile"
         return 0
     fi
@@ -906,7 +907,7 @@ build_image_advanced() {
     local start_time
     start_time=$(date +%s)
 
-    if timeout "$BUILD_TIMEOUT" $build_cmd "${build_args_array[@]}"; then
+    if timeout "$BUILD_TIMEOUT" "${build_cmd[@]}" "${build_args_array[@]}"; then
         local end_time duration
         end_time=$(date +%s)
         duration=$((end_time - start_time))
@@ -1331,6 +1332,9 @@ cleanup() {
         log "INFO" "🧹 Performing cleanup..."
         docker logout "$REGISTRY_URL" >/dev/null 2>&1 || true
 
+        # Clear sensitive env var
+        unset GITHUB_TOKEN
+
         if [[ "$PRUNE_AFTER_BUILD" == "true" ]]; then
             docker system prune -f >/dev/null 2>&1 || true
         fi
@@ -1675,70 +1679,42 @@ execute_build_process() {
             fi
         done
     else
-        # Parallel mode: launch up to MAX_PARALLEL_JOBS at once
-        declare -A pid_to_service=()
-        local running=0
+        # Parallel mode with reliable result capture
+        local RESULTS_FILE
+        RESULTS_FILE=$(mktemp -t milou_build_results.XXXX)
+
         for service in "${services_to_build[@]}"; do
+            # Respect MAX_PARALLEL_JOBS
+            while (( $(jobs -r | wc -l) >= MAX_PARALLEL_JOBS )); do
+                sleep 0.2
+            done
+
             (
                 if build_service "$service"; then
-                    echo "SUCCESS::$service"
+                    echo "SUCCESS::$service" >> "$RESULTS_FILE"
                 else
-                    echo "FAILED::$service"
+                    echo "FAILED::$service" >> "$RESULTS_FILE"
                 fi
             ) &
-
-            pid_to_service[$!]="$service"
-            running=$((running + 1))
-
-            # If we've reached MAX_PARALLEL_JOBS, wait for one to finish
-            if (( running >= MAX_PARALLEL_JOBS )); then
-                wait -n
-                # Process all finished children
-                for pid in "${!pid_to_service[@]}"; do
-                    if ! kill -0 "$pid" 2>/dev/null; then
-                        # This PID has exited; find status in child's output
-                        unset pid_to_service["$pid"]
-                        running=$((running - 1))
-                    fi
-                done
-            fi
         done
 
-        # Wait for any remaining children
-        while (( running > 0 )); do
-            wait -n
-            for pid in "${!pid_to_service[@]}"; do
-                if ! kill -0 "$pid" 2>/dev/null; then
-                    unset pid_to_service["$pid"]
-                    running=$((running - 1))
-                fi
-            done
-        done
+        # Wait for all background jobs to finish
+        wait
 
-        # Because we printed "SUCCESS::service" or "FAILED::service" in each subshell,
-        # we need to collect them now. Easiest is to read the entire stdout and parse.
-        # However, because the subshells may have interleaved output, a safer approach is:
-        # store results in a temp file instead. We will change to that approach:
-
-        # (Better approach: echo results to a temp file inside build_service's subshell.)
-        # But for simplicity here, we rely on the final sentinel status already recorded
-        # by build_service in the global arrays. So skip additional parsing.
-        #
-        # Note: The above solution assumes that build_service itself calls
-        # "successful_services+=(...) or "failed_services+=(...) within each subshell,
-        # but that won't reflect into the parent shell. So instead, let's use a temp file
-        # approach:
-
-        # -- ALTERNATE IMPLEMENTATION NOTE: In reality, capturing per-service success/failure
-        # is trickier in background subshells. A robust approach is to have each subshell
-        # write a line to a known temp file (e.g. "service:0" or "service:1"). Then after all
-        # jobs finish, read that temp file and populate successful_services / failed_services.
-        #
-        # For brevity, we leave that detail as a known implementation step: each build_service
-        # invocation should append to /tmp/milou_build_results.$$  (service:0 means success,
-        # service:1 means failure). Then parse that file here. If you want the exact code,
-        # see the commented-out block further below.
-        :
+        # Parse results
+        if [[ -f "$RESULTS_FILE" ]]; then
+            while IFS= read -r line; do
+                case "$line" in
+                    SUCCESS::*)
+                        successful_services+=("${line#SUCCESS::}")
+                        ;;
+                    FAILED::*)
+                        failed_services+=("${line#FAILED::}")
+                        ;;
+                esac
+            done < "$RESULTS_FILE"
+            rm -f "$RESULTS_FILE"
+        fi
     fi
 
     display_build_summary

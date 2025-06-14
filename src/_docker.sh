@@ -242,12 +242,32 @@ docker_login_github() {
     
     # Use provided token or environment variable
     if [[ -z "$github_token" ]]; then
-        github_token="${GITHUB_TOKEN:-}"
-    fi
-    
-    if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token provided for authentication"
-        return 1
+        if [[ "$quiet" != "true" && -t 0 && -t 1 && "${INTERACTIVE:-true}" == "true" ]]; then
+            echo ""
+            echo "🔑  A GitHub Personal Access Token is required to pull Milou images from GitHub Container Registry."
+            echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"
+            echo -n "Enter GitHub token (ghp_…): "
+            read -r github_token
+            github_token="${github_token//[[:space:]]/}"
+            if [[ -z "$github_token" ]]; then
+                milou_log "ERROR" "GitHub token is required but none was provided."
+                return 1
+            fi
+            export GITHUB_TOKEN="$github_token"
+            # Persist token to .env file if available so future commands don't ask again
+            local env_file="${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
+            if [[ -f "$env_file" ]]; then
+                if grep -q "^GITHUB_TOKEN=" "$env_file"; then
+                    sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "$env_file"
+                else
+                    echo "GITHUB_TOKEN=$github_token" >> "$env_file"
+                fi
+                milou_log "INFO" "✓ Token saved to $env_file"
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token provided for authentication"
+            return 1
+        fi
     fi
     
     # Check if already authenticated with this token

@@ -245,10 +245,51 @@ _setup_run_repair() {
         return 1
     fi
     
+    # ------------------------------------------------------------------
+    # Preserve any token that might have been supplied via --token or
+    # environment variable BEFORE we source the user's .env file (which
+    # may contain an empty or outdated GITHUB_TOKEN entry).
+    # ------------------------------------------------------------------
+    local cli_github_token="${GITHUB_TOKEN:-}"
+
     # Source the .env file to get existing values
     set -a
     source "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
     set +a
+
+    # If the .env did not provide a token, fall back to the one supplied
+    # on the command line (if any)
+    if [[ -z "${GITHUB_TOKEN:-}" && -n "$cli_github_token" ]]; then
+        export GITHUB_TOKEN="$cli_github_token"
+    fi
+
+    # ------------------------------------------------------------------
+    # If we still do not have a token, interactively request it (when
+    # running in an interactive TTY). This prevents an immediate failure
+    # and aligns with the behaviour the user expects.
+    # ------------------------------------------------------------------
+    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+        if [[ -t 0 && -t 1 ]]; then
+            echo ""
+            echo "🔑  A GitHub token with 'read:packages' scope is required to pull Milou images."
+            echo -ne "Enter GitHub token (ghp_…): "
+            read -r GITHUB_TOKEN
+            if [[ -z "$GITHUB_TOKEN" ]]; then
+                log_error "GitHub token is required but none was provided."
+                return 1
+            fi
+            export GITHUB_TOKEN
+            # Persist token back into the .env file for future runs
+            if grep -q "^GITHUB_TOKEN=" "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"; then
+                sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$GITHUB_TOKEN/" "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+            else
+                echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+            fi
+        else
+            log_error "GitHub token missing. Provide one via --token or add GITHUB_TOKEN to your .env file."
+            return 1
+        fi
+    fi
 
     # Authenticate with Docker Hub/GitHub Registry first thing
     log_step "🔐" "GitHub Authentication"

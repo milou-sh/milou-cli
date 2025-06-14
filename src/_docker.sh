@@ -1034,7 +1034,7 @@ validate_token_for_build_push() {
     fi
     
     if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" && -t 0 && -t 1 && "${INTERACTIVE:-true}" == "true" ]]; then
+        if [[ "$quiet" != "true" && -t 0 && -t 1 && "${INTERACTIVE:-true}" == "true" ]]; then
             echo ""
             echo "🔑  A GitHub Personal Access Token is required to pull Milou images from GitHub Container Registry."
             echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"

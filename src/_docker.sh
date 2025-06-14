@@ -242,17 +242,43 @@ docker_login_github() {
     
     # Use provided token or environment variable
     if [[ -z "$github_token" ]]; then
+        github_token="${GITHUB_TOKEN:-}"
+    fi
+    
+    # If a token is present but clearly malformed, ignore it and proceed as if missing
+    if [[ -n "$github_token" && "$validate_token" == "true" ]]; then
+        if ! validate_github_token "$github_token" "false"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Detected invalid GitHub token format in environment – requesting a new one."
+            github_token=""
+        fi
+    fi
+    
+    if [[ -z "$github_token" ]]; then
         if [[ "$quiet" != "true" && -t 0 && -t 1 && "${INTERACTIVE:-true}" == "true" ]]; then
             echo ""
             echo "🔑  A GitHub Personal Access Token is required to pull Milou images from GitHub Container Registry."
             echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"
-            echo -n "Enter GitHub token (ghp_…): "
-            read -r github_token
-            github_token="${github_token//[[:space:]]/}"
+
+            local attempts=0
+            local max_attempts=3
+            while [[ $attempts -lt $max_attempts ]]; do
+                echo -n "Enter GitHub token (ghp_…): "
+                read -r github_token
+                github_token="${github_token//[[:space:]]/}"
+                if validate_github_token "$github_token" "false"; then
+                    break
+                else
+                    echo "⚠️  Invalid token format. Please try again."
+                    github_token=""
+                    attempts=$((attempts+1))
+                fi
+            done
+
             if [[ -z "$github_token" ]]; then
                 milou_log "ERROR" "GitHub token is required but none was provided."
                 return 1
             fi
+
             export GITHUB_TOKEN="$github_token"
             # Persist token to .env file if available so future commands don't ask again
             local env_file="${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
@@ -997,22 +1023,57 @@ validate_token_for_build_push() {
     # Use provided token or environment variable
     if [[ -z "$github_token" ]]; then
         github_token="${GITHUB_TOKEN:-}"
-        if [[ -f "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" ]]; then
-            source "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
-            github_token="${GITHUB_TOKEN:-$github_token}"
+    fi
+    
+    # If a token is present but clearly malformed, ignore it and proceed as if missing
+    if [[ -n "$github_token" && "$validate_token" == "true" ]]; then
+        if ! validate_github_token "$github_token" "false"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Detected invalid GitHub token format in environment – requesting a new one."
+            github_token=""
         fi
     fi
     
     if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "GitHub token is required for build and push operations"
-        [[ "$quiet" != "true" ]] && echo ""
-        [[ "$quiet" != "true" ]] && echo "🔧 HOW TO FIX:"
-        [[ "$quiet" != "true" ]] && echo "   ✓ Get a GitHub token: https://github.com/settings/tokens"
-        [[ "$quiet" != "true" ]] && echo "   ✓ Required scopes: 'read:packages' and 'write:packages'"
-        [[ "$quiet" != "true" ]] && echo "   ✓ Add to .env file: GITHUB_TOKEN=ghp_your_token_here"
-        [[ "$quiet" != "true" ]] && echo "   ✓ Or pass via command: --token ghp_your_token_here"
-        [[ "$quiet" != "true" ]] && echo ""
-        return 1
+        [[ "$quiet" != "true" && -t 0 && -t 1 && "${INTERACTIVE:-true}" == "true" ]]; then
+            echo ""
+            echo "🔑  A GitHub Personal Access Token is required to pull Milou images from GitHub Container Registry."
+            echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"
+
+            local attempts=0
+            local max_attempts=3
+            while [[ $attempts -lt $max_attempts ]]; do
+                echo -n "Enter GitHub token (ghp_…): "
+                read -r github_token
+                github_token="${github_token//[[:space:]]/}"
+                if validate_github_token "$github_token" "false"; then
+                    break
+                else
+                    echo "⚠️  Invalid token format. Please try again."
+                    github_token=""
+                    attempts=$((attempts+1))
+                fi
+            done
+
+            if [[ -z "$github_token" ]]; then
+                milou_log "ERROR" "GitHub token is required but none was provided."
+                return 1
+            fi
+
+            export GITHUB_TOKEN="$github_token"
+            # Persist token to .env file if available so future commands don't ask again
+            local env_file="${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}"
+            if [[ -f "$env_file" ]]; then
+                if grep -q "^GITHUB_TOKEN=" "$env_file"; then
+                    sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$github_token/" "$env_file"
+                else
+                    echo "GITHUB_TOKEN=$github_token" >> "$env_file"
+                fi
+                milou_log "INFO" "✓ Token saved to $env_file"
+            fi
+        else
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token provided for authentication"
+            return 1
+        fi
     fi
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔐 Validating GitHub token for build/push operations..."

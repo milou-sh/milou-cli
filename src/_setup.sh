@@ -252,6 +252,9 @@ _setup_run_repair() {
     # ------------------------------------------------------------------
     local cli_github_token="${GITHUB_TOKEN:-}"
 
+    # Sanitize .env first to avoid syntax errors from corrupt lines
+    sanitize_env_file "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+
     # Source the .env file to get existing values
     set -a
     source "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
@@ -2367,5 +2370,8 @@ export -f _setup_validate_system
 export -f _setup_interactive_configuration
 export -f _setup_handle_github_and_deployment
 export -f _setup_finalize_and_display_credentials
+
+# make sanitize helper available to subshells
+export -f sanitize_env_file
 
 milou_log "DEBUG" "Setup module loaded successfully" 

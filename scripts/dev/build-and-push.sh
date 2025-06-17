@@ -87,7 +87,7 @@ PROJECT_PATH=""                                  # Will be set via --path or def
 # Service configurations
 declare -A SERVICE_CONFIGS=(
     ["database"]="./docker/database/Dockerfile|./docker/database|PostgreSQL Database|Essential"
-    ["backend"]="./dashboard/backend/Dockerfile.backend.secure|./dashboard|Backend API|Critical"
+    ["backend"]="./dashboard/backend/Dockerfile.backend|./dashboard|Backend API|Critical"
     ["frontend"]="./dashboard/frontend/Dockerfile.frontend|./dashboard|Frontend UI|Critical"
     ["engine"]="./engine/Dockerfile|./engine|Processing Engine|Essential"
     ["nginx"]="./docker/nginx/Dockerfile|./docker/nginx|Web Server|Important"

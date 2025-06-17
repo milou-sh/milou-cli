@@ -87,7 +87,7 @@ PROJECT_PATH=""                                  # Will be set via --path or def
 # Service configurations
 declare -A SERVICE_CONFIGS=(
     ["database"]="./docker/database/Dockerfile|./docker/database|PostgreSQL Database|Essential"
-    ["backend"]="./dashboard/backend/Dockerfile.backend|./dashboard|Backend API|Critical"
+    ["backend"]="./dashboard/backend/Dockerfile.backend.secure|./dashboard|Backend API|Critical"
     ["frontend"]="./dashboard/frontend/Dockerfile.frontend|./dashboard|Frontend UI|Critical"
     ["engine"]="./engine/Dockerfile|./engine|Processing Engine|Essential"
     ["nginx"]="./docker/nginx/Dockerfile|./docker/nginx|Web Server|Important"
@@ -174,14 +174,16 @@ show_banner() {
 # VALIDATION FUNCTIONS
 # =============================================================================
 validate_service() {
-    local service="$1"
-    if [[ " ${AVAILABLE_SERVICES[*]} " =~ " ${service} " ]]; then
-        return 0
-    else
-        log "ERROR" "Invalid service: $service"
-        log "ERROR" "Available services: ${AVAILABLE_SERVICES[*]}"
-        return 1
-    fi
+    local service_to_validate="$1"
+    for service in "${AVAILABLE_SERVICES[@]}"; do
+        if [[ "$service" == "$service_to_validate" ]]; then
+            return 0
+        fi
+    done
+
+    log "ERROR" "Invalid service: $service_to_validate"
+    log "ERROR" "Available services: ${AVAILABLE_SERVICES[*]}"
+    return 1
 }
 
 check_dependencies() {
@@ -339,12 +341,14 @@ log_github_bug_for_private_package() {
     fi
 
     if [[ "$package_visibility" == "private" ]]; then
-        log "ERROR" "  🐛 GitHub API BUG: Image version $image_id for $service (private package) cannot be deleted due to download count restriction."
-        log "ERROR" "     GitHub is incorrectly applying 5000+ download restriction to PRIVATE packages!"
-        log "ERROR" "     Workaround: Delete via GitHub web interface or contact GitHub Support."
+        log "WARN" "  ⚠️  Encountered a known GitHub API bug on private package '$service' (version $image_id)."
+        log "WARN" "     The API is blocking the deletion of this version with a false error."
+        log "WARN" "     To resolve this, the entire package will be deleted instead."
+        return 0 # Success, indicates it's the private package bug
     else
-        log "WARN" "  ⚠️  Cannot delete image version $image_id for $service (public package with 5000+ downloads, or other restriction)."
-        log "WARN" "     GitHub restricts deletion of popular public packages. Visibility determined as: $package_visibility"
+        log "ERROR" "  ❌ Cannot delete image version $image_id for $service. It is a public package with over 5000 downloads."
+        log "ERROR" "     Visibility determined as: $package_visibility"
+        return 1 # Failure, it's a legitimate public package restriction
     fi
 }
 
@@ -694,8 +698,14 @@ delete_ghcr_images() {
                             last_tag_errors_this_service=$((last_tag_errors_this_service + 1))
                             # This is not counted as an immediate version failure for overall stats yet
                         elif [[ "$error_msg" == *"5000 downloads"* ]]; then
-                            log_github_bug_for_private_package "$service" "$image_id" "$package_name_url_encoded" "$GITHUB_TOKEN" "$GITHUB_ORG"
-                            versions_failed_this_service=$((versions_failed_this_service + 1))
+                            if log_github_bug_for_private_package "$service" "$image_id" "$package_name_url_encoded" "$GITHUB_TOKEN" "$GITHUB_ORG"; then
+                                # The function already logged the explanation. Now, mark for package deletion.
+                                service_needs_package_delete["$service"]=true
+                                last_tag_errors_this_service=$((last_tag_errors_this_service + 1))
+                            else
+                                # It's a public package, which is a genuine failure.
+                                versions_failed_this_service=$((versions_failed_this_service + 1))
+                            fi
                         elif [[ "$error_msg" == *"does not exist"* || "$error_msg" == *"not found"* ]]; then
                             log "WARN" "  ⚠️  Image version already deleted or not found: $image_id for $service"
                         elif [[ "$error_msg" == *"permission"* || "$error_msg" == *"access"* ]]; then
@@ -800,35 +810,10 @@ build_image_advanced() {
     shift 3
     local tags=("$@")
 
-    log "STEP" "🔨 Building $service with cross-platform line ending fixes..."
+    log "STEP" "🔨 Building $service..."
 
     local -a build_cmd=(docker build)
     local build_args_array=()
-
-    # Create enhanced Dockerfile with dos2unix line ending fixes
-    local temp_dockerfile
-    temp_dockerfile=$(mktemp)
-
-    {
-        cat "$dockerfile"
-        echo ""
-        echo "# AUTO-ADDED: Cross-platform line ending normalization"
-        echo "RUN if command -v apk >/dev/null 2>&1; then \\"
-        echo "        apk add --no-cache dos2unix; \\"
-        echo "    elif command -v apt-get >/dev/null 2>&1; then \\"
-        echo "        apt-get update && apt-get install -y dos2unix && rm -rf /var/lib/apt/lists/*; \\"
-        echo "    elif command -v yum >/dev/null 2>&1; then \\"
-        echo "        yum install -y dos2unix; \\"
-        echo "    fi"
-        echo ""
-        echo "# Fix line endings for all shell scripts and entrypoints"
-        echo "RUN find /usr/local/bin /docker-entrypoint* /entrypoint* /start* /run* /boot* \\"
-        echo "         -type f -executable 2>/dev/null | \\"
-        echo "    xargs -r dos2unix 2>/dev/null || true"
-        echo ""
-        echo "# Ensure execute permissions are maintained"
-        echo "RUN chmod +x /docker-entrypoint* /entrypoint* /usr/local/bin/docker-entrypoint* 2>/dev/null || true"
-    } > "$temp_dockerfile"
 
     if [[ "$MULTI_PLATFORM" == "true" ]]; then
         build_cmd=(docker buildx build)
@@ -879,14 +864,13 @@ build_image_advanced() {
         "--label" "org.opencontainers.image.description=Milou ${service^} Service"
         "--label" "org.opencontainers.image.vendor=Milou Security"
         "--label" "org.opencontainers.image.source=https://github.com/$GITHUB_ORG/$REPO_NAME"
-        "--label" "milou.line-endings=normalized-dos2unix"
     )
 
     if [[ -n "$VERSION" ]]; then
         build_args_array+=("--label" "org.opencontainers.image.version=$VERSION")
     fi
 
-    build_args_array+=("-f" "$temp_dockerfile")
+    build_args_array+=("-f" "$dockerfile")
 
     for tag in "${tags[@]}"; do
         build_args_array+=("-t" "$tag")
@@ -898,11 +882,10 @@ build_image_advanced() {
 
     if [[ "$DRY_RUN" == "true" ]]; then
         log "INFO" "[DRY RUN] Would execute: ${build_cmd[*]} ${build_args_array[*]}"
-        rm -f "$temp_dockerfile"
         return 0
     fi
 
-    show_progress "🔨 Building $service with dos2unix line ending fixes..."
+    show_progress "🔨 Building $service..."
 
     local start_time
     start_time=$(date +%s)
@@ -911,21 +894,12 @@ build_image_advanced() {
         local end_time duration
         end_time=$(date +%s)
         duration=$((end_time - start_time))
-        log "SUCCESS" "✅ Successfully built $service with normalized line endings (${duration}s)"
-
-        rm -f "$temp_dockerfile"
+        log "SUCCESS" "✅ Successfully built $service (${duration}s)"
 
         local primary_tag="${tags[0]}"
         local image_size
         image_size=$(docker images --format "table {{.Size}}" "$primary_tag" | tail -n 1)
         log "INFO" "📦 Image size: $image_size"
-
-        log "INFO" "🔍 Verifying line ending normalization..."
-        if docker run --rm --entrypoint="" "$primary_tag" sh -c "command -v dos2unix >/dev/null && echo 'dos2unix available'" 2>/dev/null | grep -q "dos2unix available"; then
-            log "SUCCESS" "✅ Line ending normalization tools confirmed in image"
-        else
-            log "WARN" "⚠️ dos2unix not found in image, but build succeeded"
-        fi
 
         return 0
     else
@@ -933,7 +907,6 @@ build_image_advanced() {
         end_time=$(date +%s)
         duration=$((end_time - start_time))
         log "ERROR" "❌ Failed to build $service (${duration}s)"
-        rm -f "$temp_dockerfile"
         return 1
     fi
 }

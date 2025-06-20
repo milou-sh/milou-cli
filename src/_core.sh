@@ -1055,10 +1055,59 @@ core_update_env_var() {
     fi
 }
 
+# core_require_github_token [explicit_token] [interactive]
+# Ensures $GITHUB_TOKEN is set, persisted to .env and Docker registry login is
+# performed. If not available and interactive==true it will prompt the user.
+core_require_github_token() {
+    local explicit_token="${1:-}"
+    local allow_prompt="${2:-true}"
+
+    # Fast-path: environment already has a token that looks valid
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        explicit_token="$GITHUB_TOKEN"
+    fi
+
+    # Try to locate token via explicit arg, env, files
+    local token
+    token=$(core_find_github_token "$explicit_token" || true)
+
+    # Prompt user if still missing and interactive allowed
+    if [[ -z "$token" && "$allow_prompt" == "true" && -t 0 && -t 1 ]]; then
+        echo ""
+        echo "🔑  A GitHub Personal Access Token is required to pull Milou images."
+        echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"
+        read -r -p "Enter GitHub token (ghp_…): " token
+    fi
+
+    if [[ -z "$token" ]]; then
+        milou_log "ERROR" "GitHub token not provided; cannot continue"
+        return 1
+    fi
+
+    export GITHUB_TOKEN="$token"
+
+    # Persist token to the main .env if we are inside a Milou installation
+    local env_target="${SCRIPT_DIR:-$(pwd)}/.env"
+    if [[ -f "$env_target" ]]; then
+        core_update_env_var "$env_target" "GITHUB_TOKEN" "$token"
+    fi
+
+    # Perform docker login if helper exists and we haven't already
+    if command -v docker_login_github >/dev/null 2>&1; then
+        docker_login_github "$token" "false" || {
+            milou_log "ERROR" "Docker registry authentication failed using provided token"
+            return 1
+        }
+    fi
+
+    return 0
+}
+
 # Export the helpers for every module
 export -f core_find_github_token
 export -f core_get_latest_service_version
 export -f core_update_env_var
+export -f core_require_github_token
 
 # =============================================================================
 # GLOBAL SERVICE LIST – single source of truth used by all modules

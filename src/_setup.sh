@@ -277,39 +277,8 @@ _setup_run_repair() {
         export GITHUB_TOKEN="$cli_github_token"
     fi
 
-    # ------------------------------------------------------------------
-    # If we still do not have a token, interactively request it (when
-    # running in an interactive TTY). This prevents an immediate failure
-    # and aligns with the behaviour the user expects.
-    # ------------------------------------------------------------------
-    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-        if [[ -t 0 && -t 1 ]]; then
-            echo ""
-            echo "🔑  A GitHub token with 'read:packages' scope is required to pull Milou images."
-            echo -ne "Enter GitHub token (ghp_…): "
-            read -r GITHUB_TOKEN
-            if [[ -z "$GITHUB_TOKEN" ]]; then
-                log_error "GitHub token is required but none was provided."
-                return 1
-            fi
-            export GITHUB_TOKEN
-            # Persist token back into the .env file for future runs
-            if grep -q "^GITHUB_TOKEN=" "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"; then
-                sed -i "s/^GITHUB_TOKEN=.*/GITHUB_TOKEN=$GITHUB_TOKEN/" "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
-            else
-                echo "GITHUB_TOKEN=$GITHUB_TOKEN" >> "${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
-            fi
-        else
-            log_error "GitHub token missing. Provide one via --token or add GITHUB_TOKEN to your .env file."
-            return 1
-        fi
-    fi
-
-    # Authenticate with Docker Hub/GitHub Registry first thing
-    log_step "🔐" "GitHub Authentication"
-    if ! docker_login_github "${GITHUB_TOKEN:-}" "false"; then
-        log_error "GitHub Docker Registry authentication failed. Please check your GITHUB_TOKEN."
-        log_info "Get a token: https://github.com/settings/tokens (scope: read:packages)"
+    # Ensure we have a token (will prompt if interactive) and perform registry login
+    if ! core_require_github_token "${GITHUB_TOKEN:-}" "${MILOU_INTERACTIVE:-true}"; then
         return 1
     fi
 
@@ -514,6 +483,14 @@ setup_run() {
     # STEP 2: System Validation
     if ! _setup_validate_system; then
         log_error "System validation failed. Please address the issues above."
+        return 1
+    fi
+    
+    # ------------------------------------------------------------------
+    # Acquire / confirm GitHub token NOW so that configuration generation
+    # can resolve concrete image versions (phase-2 refactor).
+    # ------------------------------------------------------------------
+    if ! core_require_github_token "${GITHUB_TOKEN:-}" "${MILOU_INTERACTIVE:-true}"; then
         return 1
     fi
     
@@ -2022,6 +1999,24 @@ setup_prepare_docker_environment() {
         milou_log "DEBUG" "Docker module not available, networks will be created by compose"
     fi
     
+    # ------------------------------------------------------------------
+    # Pin mutable image tags (latest/stable) once we have a valid
+    # GitHub token – this guarantees concrete versions are recorded in
+    # the .env BEFORE the first docker-compose pull so that future
+    # update checks work reliably.
+    # ------------------------------------------------------------------
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        local _env_file="${MILOU_ENV_FILE:-${SCRIPT_DIR}/.env}"
+        if grep -Eq "^MILOU_(BACKEND|FRONTEND|ENGINE|DATABASE|NGINX)_TAG=(latest|stable)$" "$_env_file" 2>/dev/null; then
+            milou_log "INFO" "📌 Resolving mutable image tags to concrete versions..."
+            if config_resolve_mutable_tags "$_env_file" "$GITHUB_TOKEN" "false"; then
+                milou_log "SUCCESS" "✓ Image tags pinned successfully"
+            else
+                milou_log "WARN" "⚠️  Failed to resolve image tags – proceeding with existing values"
+            fi
+        fi
+    fi
+
     milou_log "SUCCESS" "✓ Docker environment prepared"
     return 0
 }

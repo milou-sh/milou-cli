@@ -127,68 +127,9 @@ get_running_service_versions() {
 
 # Get latest version from GitHub Packages API - ROBUST VERSION
 get_latest_registry_version() {
-    local service="$1"
-    local github_token="${2:-}"
-    local quiet="${3:-false}"
-    
-    if [[ -z "$github_token" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No GitHub token provided for $service"
-        return 1
-    fi
-    
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🌐 Fetching latest $service version from GitHub API"
-    
-    # Map logical service names to package names  
-    local service_package_name
-    case "$service" in
-        "database") service_package_name="database" ;;
-        *) service_package_name="$service" ;;
-    esac
-    
-    # Use GitHub Packages API
-    local api_url="https://api.github.com/orgs/milou-sh/packages/container/milou%2F${service_package_name}/versions"
-    local latest_version=""
-    
-    # Query with timeout and retry logic
-    local attempt=1
-    local max_attempts=3
-    
-    while [[ $attempt -le $max_attempts ]]; do
-        [[ "${VERBOSE:-false}" == "true" ]] && echo -n "      API call attempt $attempt... "
-        
-        local versions_response
-        if versions_response=$(timeout 10 curl -s -f --max-time 10 \
-                              --retry 2 --retry-delay 1 \
-                              -H "Authorization: token $github_token" \
-                              -H "Accept: application/vnd.github.v3+json" \
-                              "$api_url" 2>/dev/null); then
-            
-            # Extract semantic versions
-            if command -v jq >/dev/null 2>&1; then
-                latest_version=$(echo "$versions_response" | jq -r '.[].metadata.container.tags[]' 2>/dev/null | \
-                               grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
-                               sort -V | tail -1)
-            else
-                latest_version=$(echo "$versions_response" | \
-                               grep -o '"[0-9]\+\.[0-9]\+\.[0-9]\+"' | \
-                               sed 's/"//g' | \
-                               sort -V | tail -1)
-            fi
-            
-            if [[ -n "$latest_version" && "$latest_version" != "null" ]]; then
-                [[ "${VERBOSE:-false}" == "true" ]] && echo "✓ v$latest_version"
-                echo "$latest_version"
-                return 0
-            fi
-        fi
-        
-        [[ "${VERBOSE:-false}" == "true" ]] && echo "✗ failed"
-        ((attempt++))
-        [[ $attempt -le $max_attempts ]] && sleep 1
-    done
-    
-    [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  API calls failed for $service after $max_attempts attempts"
-    return 1
+    # Wrapper maintained for backward compatibility – delegates to core helper.
+    local service="$1"; local token="${2:-}"; local quiet="${3:-false}"
+    core_get_latest_service_version "$service" "$token" "$quiet"
 }
 
 # Get ALL available versions for a service

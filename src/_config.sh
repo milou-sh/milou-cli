@@ -410,10 +410,24 @@ NGINX_TAG=${_nginx}"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "Pinned latest service versions: backend=${_backend}, frontend=${_frontend}, engine=${_engine}, database=${_database}, nginx=${_nginx}"
         fi
     else
-        # Caller provided specific versions – detect or keep as-is
-        local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-        service_versions=$(config_detect_service_versions "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Using per-service version detection for optimal compatibility"
+        # ------------------------------------------------------------------
+        # 2. Specific version requested (immutable)
+        # ------------------------------------------------------------------
+        if [[ -n "${MILOU_SELECTED_VERSION:-}" && "${MILOU_SELECTED_VERSION}" != "latest" && "${MILOU_SELECTED_VERSION}" != "stable" ]]; then
+            # Use the exact version selected for every core service.
+            local v="${MILOU_SELECTED_VERSION}"
+            service_versions="BACKEND_TAG=${v}
+FRONTEND_TAG=${v}
+ENGINE_TAG=${v}
+DATABASE_TAG=${v}
+NGINX_TAG=${v}"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "📌 Pinning all services to explicit version ${v}"
+        else
+            # Caller provided 'false' for latest-images but no explicit version → use per-service detection.
+            local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+            service_versions=$(config_detect_service_versions "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Using per-service version detection for optimal compatibility"
+        fi
     fi
     
     # Parse service versions into variables

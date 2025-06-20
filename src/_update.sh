@@ -555,38 +555,36 @@ milou_update_system() {
     # Primary env file reference (needed later for mutable-tag guard)
     local env_file="${script_dir}/.env"
     
-    # Validate GitHub token early
+    # Ensure we have a valid GitHub token for update operations
     if [[ -z "$github_token" ]]; then
         milou_log "WARN" "⚠️  No GitHub token provided - will use local fallbacks only"
-        milou_log "INFO" "   💡 Use: ./milou.sh update --token YOUR_TOKEN for full functionality"
+        milou_log "INFO" "💡 To enable full update functionality, set GITHUB_TOKEN or use --token"
+        milou_log "INFO" "💡 Generate a token at: https://github.com/settings/tokens"
+        echo
+        
+        # For updates, we can continue without token but functionality will be limited
+        # skip_registry_operations=true
     else
-        # Guard: refuse to continue if configuration still contains mutable tags
-        if grep -Eq "^MILOU_(BACKEND|FRONTEND|ENGINE|DATABASE|NGINX)_TAG=(latest|stable)$" "$env_file" 2>/dev/null; then
-            milou_log "ERROR" "❌ Configuration contains mutable 'latest/stable' tags."
-            milou_log "INFO" "   Run 'milou resolve-tags' or rerun setup to pin concrete versions before updating."
-            return 1
-        fi
-
-        # Validate token format and permissions before proceeding
+        # Validate GitHub token for update operations
         milou_log "INFO" "🔐 Validating GitHub token for update operations..."
         
-        # Use the new validation function for build/push operations
-        if command -v validate_token_for_build_push >/dev/null 2>&1; then
-            if ! validate_token_for_build_push "$github_token" "false"; then
-                milou_log "ERROR" "❌ GitHub token validation failed"
+        # Use core_require_github_token to ensure token is valid and persisted
+        if ! core_require_github_token "$github_token" "false"; then
+            milou_log "ERROR" "❌ GitHub token validation failed"
+            return 1
+        fi
+        
+        # Refresh token variable after core_require_github_token
+        github_token="${GITHUB_TOKEN:-}"
+        
+        # Perform Docker registry authentication
+        if command -v docker_login_github >/dev/null 2>&1; then
+            if docker_login_github "$github_token" "false" "true"; then
+                milou_log "SUCCESS" "✅ GitHub authentication successful"
+                export GITHUB_AUTHENTICATED="true"
+            else
+                milou_log "ERROR" "❌ GitHub authentication failed"
                 return 1
-            fi
-        else
-            # Fallback to basic authentication
-            milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
-            if command -v docker_login_github >/dev/null 2>&1; then
-                if docker_login_github "$github_token" "false" "true"; then
-                    milou_log "SUCCESS" "✅ GitHub authentication successful"
-                    export GITHUB_AUTHENTICATED="true"
-                else
-                    milou_log "ERROR" "❌ GitHub authentication failed"
-                    return 1
-                fi
             fi
         fi
     fi

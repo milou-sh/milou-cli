@@ -1625,7 +1625,7 @@ setup_generate_configuration_interactive() {
     # Generate configuration using consolidated config module with credential preservation
     # Pass version_tag information for proper image tag configuration
     local use_latest_images="false"
-    if [[ "$version_tag" == "latest" ]]; then
+    if [[ "$version_tag" == "latest" || "$version_tag" == "stable" ]]; then
         use_latest_images="true"
     fi
     
@@ -1663,7 +1663,7 @@ setup_generate_configuration_automated() {
     local email="${ADMIN_EMAIL:-admin@localhost}"
     local ssl_mode="${SSL_MODE:-generate}"
     
-    # Generate configuration using consolidated config module with credential preservation
+    # Always resolve concrete versions when using automated mode (latest/stable)
     if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "✓ Configuration generated successfully"
         
@@ -1702,7 +1702,7 @@ setup_generate_configuration_smart() {
     
     milou_log "INFO" "✓ Smart defaults: domain=$domain, email=$email, ssl=$ssl_mode"
     
-    # Generate configuration using consolidated config module with credential preservation
+    # Smart mode also wants concrete pinned versions
     if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "✓ Configuration generated successfully"
         

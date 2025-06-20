@@ -1415,6 +1415,45 @@ config_rollback_credentials() {
 }
 
 # =============================================================================
+# CONFIG RESOLUTION UTILITIES – late binding for mutable tags
+# =============================================================================
+
+# config_resolve_mutable_tags <env_file> <github_token> [quiet]
+# If an env file still contains MILOU_*_TAG=latest|stable and we now have a
+# usable token, query GHCR for the concrete version and patch the env file.
+config_resolve_mutable_tags() {
+    local env_file="$1"; local github_token="$2"; local quiet="${3:-false}"
+    [[ -z "$env_file" || -z "$github_token" ]] && return 1
+    [[ ! -f "$env_file" ]] && return 0  # nothing to do
+
+    local updated=false
+    for service in "${MILOU_SERVICE_LIST[@]}"; do
+        local var_name="MILOU_$(to_uppercase "$service")_TAG"
+        local current_value
+        current_value=$(grep -E "^${var_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+        if [[ "$current_value" == "latest" || "$current_value" == "stable" ]]; then
+            local new_tag
+            new_tag=$(core_get_latest_service_version "$service" "$github_token" "true")
+            if [[ -n "$new_tag" ]]; then
+                core_update_env_var "$env_file" "$var_name" "$new_tag"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "📌 Pinned $service image: $current_value → $new_tag"
+                updated=true
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not resolve latest tag for $service"
+            fi
+        fi
+    done
+
+    if [[ "$updated" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✓ .env file updated with concrete image versions"
+    fi
+    return 0
+}
+
+# export helper so other modules can call it
+export -f config_resolve_mutable_tags
+
+# =============================================================================
 # LEGACY ALIASES FOR BACKWARDS COMPATIBILITY
 # =============================================================================
 

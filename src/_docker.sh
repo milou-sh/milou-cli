@@ -513,6 +513,17 @@ docker_init() {
         fi
     fi
     
+    # ------------------------------------------------------------------
+    # After we have a valid token, resolve any remaining MILOU_*_TAG
+    # entries that are still set to the mutable values 'latest' or
+    # 'stable'. This converts them into concrete SemVer tags so the
+    # running containers always reveal their real version (no more
+    # ':latest' in `docker ps`).
+    # ------------------------------------------------------------------
+    if [[ -n "$github_token" && -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
+        config_resolve_mutable_tags "$DOCKER_ENV_FILE" "$github_token" "$quiet"
+    fi
+    
     # Test Docker Compose configuration (only if we have both files)
     if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_COMPOSE_FILE" ]]; then
         local docker_compose_cmd="docker compose"

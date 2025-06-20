@@ -1075,7 +1075,7 @@ core_require_github_token() {
     if [[ -z "$token" && "$allow_prompt" == "true" && -t 0 && -t 1 ]]; then
         echo ""
         echo "🔑  A GitHub Personal Access Token is required to pull Milou images."
-        echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packages)"
+        echo "    Generate one at: https://github.com/settings/tokens  (scope: read:packagess)"
         read -r -p "Enter GitHub token (ghp_…): " token
     fi
 

@@ -113,7 +113,7 @@ success() {
 # Show minimal logo
 show_minimal_logo() {
     [[ "$QUIET" == "true" ]] && return
-    echo -e "${BLUE}Milou CLI Installer${NC}"
+    echo -e "${BLUE}Milou CLI Installer - The One-Line Installer${NC}"
 }
 
 # Prompt for installation directory

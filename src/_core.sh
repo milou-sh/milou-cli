@@ -959,4 +959,113 @@ _safe_export trim_whitespace
 _safe_export command_exists
 _safe_export run_with_timeout
 
+# =============================================================================
+# GitHub helpers – centralised so other modules stop duplicating this logic
+# =============================================================================
+
+# core_find_github_token
+# Return the first non-empty token found in
+#   • the current environment (GITHUB_TOKEN)
+#   • a user-supplied argument ($1)
+#   • the first readable .env from the common search paths
+# If none is found the function prints nothing and exits 1.
+core_find_github_token() {
+    local explicit_token="${1:-}"
+    if [[ -n "$explicit_token" ]]; then
+        echo "$explicit_token"
+        return 0
+    fi
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        echo "$GITHUB_TOKEN"
+        return 0
+    fi
+    # Common locations
+    local candidate
+    for candidate in \
+        "${SCRIPT_DIR:-$(pwd)}/.env" \
+        "${SCRIPT_DIR:-$(pwd)}/../.env" \
+        "$(pwd)/.env" \
+        "${HOME}/.milou/.env"; do
+        if [[ -f "$candidate" ]]; then
+            local token
+            token=$(grep -E '^GITHUB_TOKEN=' "$candidate" 2>/dev/null | head -1 | cut -d'=' -f2-)
+            if [[ -n "$token" ]]; then
+                echo "$token"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+# core_get_latest_service_version <service> <token> [quiet]
+# Query GHCR for the highest semver tag of a given service.
+core_get_latest_service_version() {
+    local service="$1"
+    local token="$2"
+    local quiet="${3:-false}"
+
+    if [[ -z "$service" || -z "$token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "core_get_latest_service_version: missing service or token"
+        return 1
+    fi
+
+    # Map friendly name → package path (database uses same name)
+    local package_name="$service"
+    if [[ "$service" == "database" ]]; then
+        package_name="database"
+    fi
+
+    local api_url="https://api.github.com/orgs/milou-sh/packages/container/milou%2F${package_name}/versions"
+    local response
+    response=$(curl -s -H "Authorization: Bearer $token" -H "Accept: application/vnd.github.v3+json" "$api_url" 2>/dev/null)
+    if [[ -z "$response" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub API empty response for $service"
+        return 1
+    fi
+
+    local latest
+    if command -v jq >/dev/null 2>&1; then
+        latest=$(echo "$response" | jq -r '.[].metadata.container.tags[]' 2>/dev/null | \
+                 grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+    else
+        latest=$(echo "$response" | grep -o '"[0-9]\+\.[0-9]\+\.[0-9]\+"' | tr -d '"' | sort -V | tail -1)
+    fi
+
+    if [[ -z "$latest" || "$latest" == "null" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "No semantic version found for $service"
+        return 1
+    fi
+
+    echo "$latest"
+}
+
+# core_update_env_var <file> <key> <value>
+# Create or update a KEY=value line in the given .env, file kept chmod 600.
+core_update_env_var() {
+    local file="$1"; local key="$2"; local value="$3"
+    [[ -z "$file" || -z "$key" ]] && return 1
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+    chmod 600 "$file" 2>/dev/null || true
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    else
+        echo "${key}=${value}" >> "$file"
+    fi
+}
+
+# Export the helpers for every module
+export -f core_find_github_token
+export -f core_get_latest_service_version
+export -f core_update_env_var
+
+# =============================================================================
+# GLOBAL SERVICE LIST – single source of truth used by all modules
+# =============================================================================
+# Keeping the list here removes the duplication that existed in _update.sh,
+# _config.sh, setup and docker modules.
+# Do NOT mutate this list from other scripts; treat as read-only.
+readonly -a MILOU_SERVICE_LIST=("database" "backend" "frontend" "engine" "nginx")
+
 milou_log "DEBUG" "Core utilities module loaded successfully" 

@@ -385,19 +385,35 @@ config_create_env_file() {
     local image_tag="latest"
     local service_versions=""
     
-    if [[ "$use_latest_images" != "true" ]]; then
-        # Use per-service version detection for better accuracy
-        local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-        service_versions=$(config_detect_service_versions "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Using per-service version detection for optimal compatibility"
-    else
-        # Use latest for all services
-        service_versions="BACKEND_TAG=latest
+    if [[ "$use_latest_images" == "true" ]]; then
+        # Resolve real latest versions now (immutability)
+        local github_token="$(core_find_github_token)"
+        if [[ -z "$github_token" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token available – falling back to literal 'latest' tags (not recommended)"
+            service_versions="BACKEND_TAG=latest
 FRONTEND_TAG=latest
 ENGINE_TAG=latest
 DATABASE_TAG=latest
 NGINX_TAG=latest"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Using latest tags for all services"
+        else
+            local _backend _frontend _engine _database _nginx
+            _backend=$(core_get_latest_service_version "backend" "$github_token" "true") || _backend="latest"
+            _frontend=$(core_get_latest_service_version "frontend" "$github_token" "true") || _frontend="latest"
+            _engine=$(core_get_latest_service_version "engine" "$github_token" "true") || _engine="latest"
+            _database=$(core_get_latest_service_version "database" "$github_token" "true") || _database="latest"
+            _nginx=$(core_get_latest_service_version "nginx" "$github_token" "true") || _nginx="latest"
+            service_versions="BACKEND_TAG=${_backend}
+FRONTEND_TAG=${_frontend}
+ENGINE_TAG=${_engine}
+DATABASE_TAG=${_database}
+NGINX_TAG=${_nginx}"
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "Pinned latest service versions: backend=${_backend}, frontend=${_frontend}, engine=${_engine}, database=${_database}, nginx=${_nginx}"
+        fi
+    else
+        # Caller provided specific versions – detect or keep as-is
+        local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+        service_versions=$(config_detect_service_versions "$github_token" "$quiet" "$MILOU_REGISTRY_ORG" "$MILOU_REGISTRY_REPO")
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Using per-service version detection for optimal compatibility"
     fi
     
     # Parse service versions into variables

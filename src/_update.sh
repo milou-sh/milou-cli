@@ -258,7 +258,7 @@ display_system_versions() {
     echo -e "   ${BOLD}SERVICE STATUS & VERSIONS:${NC}"
     echo
     
-    local services=("database" "backend" "frontend" "engine" "nginx")
+    local services=("${MILOU_SERVICE_LIST[@]}")
     for service in "${services[@]}"; do
         local service_upper="${service^^}"
         local running_var="RUNNING_VERSION_${service_upper}"
@@ -349,7 +349,7 @@ check_updates_needed() {
     # Get current state
     get_running_service_versions "$quiet"
     
-    local services=("database" "backend" "frontend" "engine" "nginx")
+    local services=("${MILOU_SERVICE_LIST[@]}")
     local -A service_target_versions=()
     local -A service_current_versions=()
     local -A service_statuses=()
@@ -601,37 +601,31 @@ milou_update_system() {
     
     milou_log "STEP" "🔄 Updating Milou System - Fixed Version"
     
-    # Load GitHub token from multiple sources (like other components do)
-    local github_token="${GITHUB_TOKEN:-}"
-    
-    # Try to load from .env file if it exists
-    local env_file="${SCRIPT_DIR}/.env"
-    if [[ -f "$env_file" ]]; then
-        # Source the environment file to get GITHUB_TOKEN
-        source "$env_file" 2>/dev/null || true
-        github_token="${GITHUB_TOKEN:-$github_token}"
+    # ------------------------------------------------------------------
+    # Unified token discovery – delegate to core helper
+    # ------------------------------------------------------------------
+    local github_token=""
+    if github_token=$(core_find_github_token "${GITHUB_TOKEN:-}" 2>/dev/null); then
+        milou_log "DEBUG" "Using GitHub token discovered by core helper"
+    else
+        github_token=""
     fi
-    
-    # Also check other common .env locations
-    local alt_env_files=(
-        "${SCRIPT_DIR}/../.env"
-        "$(pwd)/.env"
-        "${HOME}/.milou/.env"
-    )
-    
-    for alt_env in "${alt_env_files[@]}"; do
-        if [[ -z "$github_token" && -f "$alt_env" ]]; then
-            source "$alt_env" 2>/dev/null || true
-            github_token="${GITHUB_TOKEN:-$github_token}"
-            [[ -n "$github_token" ]] && milou_log "DEBUG" "Token loaded from: $alt_env"
-        fi
-    done
+
+    # Primary env file reference (needed later for mutable-tag guard)
+    local env_file="${script_dir}/.env"
     
     # Validate GitHub token early
     if [[ -z "$github_token" ]]; then
         milou_log "WARN" "⚠️  No GitHub token provided - will use local fallbacks only"
         milou_log "INFO" "   💡 Use: ./milou.sh update --token YOUR_TOKEN for full functionality"
     else
+        # Guard: refuse to continue if configuration still contains mutable tags
+        if grep -Eq "^MILOU_(BACKEND|FRONTEND|ENGINE|DATABASE|NGINX)_TAG=(latest|stable)$" "$env_file" 2>/dev/null; then
+            milou_log "ERROR" "❌ Configuration contains mutable 'latest/stable' tags."
+            milou_log "INFO" "   Run 'milou resolve-tags' or rerun setup to pin concrete versions before updating."
+            return 1
+        fi
+
         # Validate token format and permissions before proceeding
         milou_log "INFO" "🔐 Validating GitHub token for update operations..."
         
@@ -788,76 +782,25 @@ _perform_fixed_update() {
     return $([[ ${#failed_services[@]} -eq 0 ]])
 }
 
-# Update environment file with service version
+# Update environment file with service version (now delegates to core helper)
 _update_env_file_service_version() {
     local service="$1"
     local target_version="$2"
-    local env_file="${SCRIPT_DIR}/.env"
-    
-    # Try to find an existing .env file in alternative locations
-    if [[ ! -f "$env_file" ]]; then
-        local alt_env_files=(
-            "${SCRIPT_DIR}/../.env"
-            "$(pwd)/.env"
-            "${HOME}/.milou/.env"
-        )
-        
-        for alt_env in "${alt_env_files[@]}"; do
-            if [[ -f "$alt_env" ]]; then
-                env_file="$alt_env"
-                milou_log "DEBUG" "Using environment file: $env_file"
-                break
-            fi
-        done
-        
-        # If no .env file found, create a minimal one
-        if [[ ! -f "$env_file" ]]; then
-            milou_log "WARN" "⚠️  No .env file found - creating minimal configuration"
-            env_file="${SCRIPT_DIR}/.env"
-            mkdir -p "$(dirname "$env_file")"
-            cat > "$env_file" << 'EOF'
-# Milou Environment Configuration
-# Auto-generated during update process
 
-# GitHub Registry Configuration
-GITHUB_REGISTRY=ghcr.io/milou-sh/milou
-
-# Service Version Tags (auto-updated)
-EOF
-            milou_log "INFO" "📝 Created new .env file at: $env_file"
-        fi
-    fi
-    
-    local tag_name=""
+    local tag_name
     case "$service" in
         "database") tag_name="MILOU_DATABASE_TAG" ;;
-        "backend") tag_name="MILOU_BACKEND_TAG" ;;
+        "backend")  tag_name="MILOU_BACKEND_TAG"  ;;
         "frontend") tag_name="MILOU_FRONTEND_TAG" ;;
-        "engine") tag_name="MILOU_ENGINE_TAG" ;;
-        "nginx") tag_name="MILOU_NGINX_TAG" ;;
-        *) 
+        "engine")   tag_name="MILOU_ENGINE_TAG"   ;;
+        "nginx")    tag_name="MILOU_NGINX_TAG"    ;;
+        *)
             milou_log "WARN" "Unknown service for .env update: $service"
-            return 1 
-            ;;
+            return 1 ;;
     esac
-    
-    local clean_version
-    clean_version=$(echo "$target_version" | tr -d '\n\r' | sed 's/[[:space:]]*$//')
-    
-    local temp_file="${env_file}.tmp"
-    if grep -q "^${tag_name}=" "$env_file" 2>/dev/null; then
-        # Update existing entry
-        grep -v "^${tag_name}=" "$env_file" > "$temp_file"
-        echo "${tag_name}=${clean_version}" >> "$temp_file"
-        mv "$temp_file" "$env_file"
-        milou_log "DEBUG" "Updated $tag_name=$clean_version in $env_file"
-    else
-        # Add new entry
-        echo "${tag_name}=${clean_version}" >> "$env_file"
-        milou_log "DEBUG" "Added $tag_name=$clean_version to $env_file"
-    fi
-    
-    return 0
+
+    local env_file="${script_dir}/.env"
+    core_update_env_var "$env_file" "$tag_name" "$target_version"
 }
 
 # Basic single service update fallback

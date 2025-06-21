@@ -939,12 +939,24 @@ service_update_zero_downtime() {
         
         # Stop old container and start new one
         if docker_execute "up" "$service" "$quiet" --force-recreate --no-deps; then
-            # Validate new service
-            if health_check_service "$service" "$quiet"; then
+            # Give the container some time to initialise on first start (especially for newly installed services)
+            local retries=12   # ~= 1 minute total (12 × 5 s)
+            local wait_interval=5
+            local healthy=false
+            while [[ $retries -gt 0 ]]; do
+                if health_check_service "$service" "true"; then
+                    healthy=true
+                    break
+                fi
+                sleep "$wait_interval"
+                ((retries--))
+            done
+
+            if [[ "$healthy" == "true" ]]; then
                 [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service updated successfully with zero downtime"
                 return 0
             else
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check"
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check after waiting"
                 return 1
             fi
         else

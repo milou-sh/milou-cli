@@ -497,7 +497,7 @@ ensure_dependency_services() {
                 fi
             fi
             
-            if docker_execute "up" "$dep_service" "false" "-d"; then
+            if docker_execute "up" "" "false" "$dep_service"; then
                 ((deps_started++))
                 milou_log "SUCCESS" "      ✅ $dep_service started successfully"
             else

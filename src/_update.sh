@@ -477,45 +477,19 @@ ensure_dependency_services() {
     local deps_started=0
     
     for dep_service in "${DEPENDENCY_SERVICES[@]}"; do
-        local dep_status
-        if dep_status=$(docker ps --filter "name=milou-$dep_service" --format "{{.Status}}" 2>/dev/null); then
-            if [[ "$dep_status" =~ Up|running ]]; then
-                [[ "${VERBOSE:-false}" == "true" ]] && milou_log "DEBUG" "      ✅ $dep_service is running"
-                continue
-            fi
-        fi
-        
-        # Need to start this dependency
-        milou_log "INFO" "      🚀 Starting $dep_service..."
-        
-        if command -v docker_execute >/dev/null 2>&1; then
-            # Initialize docker context with proper files and skip auth for dependency services
-            if command -v docker_init >/dev/null 2>&1; then
-                if ! docker_init "$env_file" "$compose_file" "true" "true"; then
-                    milou_log "ERROR" "      ❌ Failed to initialize Docker context for $dep_service"
-                    return 1
+        # Check if the dependency is running
+        if docker_compose ps --services --filter "status=running" | grep -q "^${dep_service}$"; then
+            if [[ "$quiet" != "true" ]]; then
+                # Only log if we are in verbose mode
+                if [[ "${VERBOSE:-false}" == "true" ]]; then
+                    milou_log "DEBUG" "Dependency '$dep_service' is already running."
                 fi
-            fi
-            
-            if docker_execute "up" "" "false" "$dep_service"; then
-                ((deps_started++))
-                milou_log "SUCCESS" "      ✅ $dep_service started successfully"
-            else
-                milou_log "ERROR" "      ❌ Failed to start $dep_service"
-                return 1
             fi
         else
-            # Fallback to direct docker compose call
-            if command -v docker >/dev/null 2>&1; then
-                if docker compose --env-file "$env_file" -f "$compose_file" up -d "$dep_service" 2>/dev/null; then
-                    ((deps_started++))
-                    milou_log "SUCCESS" "      ✅ $dep_service started successfully (fallback)"
-                else
-                    milou_log "ERROR" "      ❌ Failed to start $dep_service (fallback method also failed)"
-                    return 1
-                fi
-            else
-                milou_log "ERROR" "      ❌ Docker not available"
+            # If not running, start it
+            milou_log "INFO" "Starting dependency: $dep_service"
+            if ! docker_execute "up" "$dep_service" "$quiet"; then
+                milou_log "ERROR" "Failed to start dependency: $dep_service"
                 return 1
             fi
         fi

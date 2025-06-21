@@ -424,82 +424,16 @@ ensure_dependency_services() {
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔧 Ensuring dependency services are running..."
     
-    # Check if we have a proper docker environment before proceeding
-    local env_file="${SCRIPT_DIR}/.env"
-    local compose_file="${SCRIPT_DIR}/static/docker-compose.yml"
-    
-    # Try alternative locations if main files don't exist
-    if [[ ! -f "$env_file" ]]; then
-        local alt_env_files=(
-            "${SCRIPT_DIR}/../.env"
-            "$(pwd)/.env"
-            "${HOME}/.milou/.env"
-        )
-        
-        for alt_env in "${alt_env_files[@]}"; do
-            if [[ -f "$alt_env" ]]; then
-                env_file="$alt_env"
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using environment file: $env_file"
-                break
-            fi
-        done
-        
-        # If still no .env file found, warn but continue
-        if [[ ! -f "$env_file" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No .env file found - dependency services may not be configured properly"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
-            return 1
-        fi
+    # The `up -d` command is idempotent. It will start services if they are
+    # not running, and do nothing if they are already running. This is the
+    # most reliable way to ensure our dependencies are met without complex
+    # status checking.
+    if ! docker_execute "up" "" "$quiet" "redis" "rabbitmq"; then
+        milou_log "ERROR" "❌ Failed to ensure dependency services are running"
+        return 1
     fi
-    
-    # Check for compose file
-    if [[ ! -f "$compose_file" ]]; then
-        local alt_compose_files=(
-            "${SCRIPT_DIR}/../docker-compose.yml"
-            "$(pwd)/docker-compose.yml"
-        )
-        
-        for alt_compose in "${alt_compose_files[@]}"; do
-            if [[ -f "$alt_compose" ]]; then
-                compose_file="$alt_compose"
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using compose file: $compose_file"
-                break
-            fi
-        done
-        
-        if [[ ! -f "$compose_file" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No docker-compose.yml file found"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
-            return 1
-        fi
-    fi
-    
-    local deps_started=0
-    
-    for dep_service in "${DEPENDENCY_SERVICES[@]}"; do
-        # Check if the dependency is running
-        if docker_compose ps --services --filter "status=running" | grep -q "^${dep_service}$"; then
-            if [[ "$quiet" != "true" ]]; then
-                # Only log if we are in verbose mode
-                if [[ "${VERBOSE:-false}" == "true" ]]; then
-                    milou_log "DEBUG" "Dependency '$dep_service' is already running."
-                fi
-            fi
-        else
-            # If not running, start it
-            milou_log "INFO" "Starting dependency: $dep_service"
-            if ! docker_execute "up" "$dep_service" "$quiet"; then
-                milou_log "ERROR" "Failed to start dependency: $dep_service"
-                return 1
-            fi
-        fi
-    done
-    
-    if [[ $deps_started -gt 0 ]]; then
-        milou_log "INFO" "      ⏳ Waiting for dependencies to be ready..."
-        sleep 5
-    fi
-    
+
+    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Dependency services are running"
     return 0
 }
 

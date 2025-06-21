@@ -938,7 +938,7 @@ service_update_zero_downtime() {
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
         
         # Stop old container and start new one
-        if docker_execute "up" "" "$quiet" --force-recreate --no-deps "$service"; then
+        if docker_execute "up" "$service" "$quiet" --no-deps; then
             # Give the container some time to initialise on first start (especially for newly installed services)
             local retries=12   # ~= 1 minute total (12 × 5 s)
             local wait_interval=5
@@ -979,7 +979,7 @@ service_update_zero_downtime() {
         for svc in "${services[@]}"; do
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $svc"
             
-            if docker_execute "up" "" "$quiet" --force-recreate --no-deps "$svc"; then
+            if docker_execute "up" "$svc" "$quiet" --no-deps; then
                 if health_check_service "$svc" "true"; then
                     [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
                 else

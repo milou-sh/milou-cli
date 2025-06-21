@@ -548,8 +548,7 @@ docker_execute() {
     local operation="$1"
     local service="${2:-}"
     local quiet="${3:-false}"
-    shift 3 2>/dev/null || true
-    local additional_args=("$@")
+    local additional_args=("${@:4}")
     
     # Determine if authentication should be skipped based on operation
     local skip_auth="false"
@@ -928,7 +927,7 @@ service_update_zero_downtime() {
     fi
     
     # Pull latest images first
-    if ! docker_execute "pull" "$service" "$quiet"; then
+    if ! docker_execute "pull" "" "$quiet" "$service"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull latest images"
         return 1
     fi
@@ -939,7 +938,7 @@ service_update_zero_downtime() {
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
         
         # Stop old container and start new one
-        if docker_execute "up" "$service" "$quiet" --force-recreate --no-deps; then
+        if docker_execute "up" "" "$quiet" --force-recreate --no-deps "$service"; then
             # Give the container some time to initialise on first start (especially for newly installed services)
             local retries=12   # ~= 1 minute total (12 × 5 s)
             local wait_interval=5
@@ -980,7 +979,7 @@ service_update_zero_downtime() {
         for svc in "${services[@]}"; do
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $svc"
             
-            if docker_execute "up" "$svc" "$quiet" --force-recreate --no-deps; then
+            if docker_execute "up" "" "$quiet" --force-recreate --no-deps "$svc"; then
                 if health_check_service "$svc" "true"; then
                     [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
                 else

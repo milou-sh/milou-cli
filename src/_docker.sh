@@ -497,6 +497,7 @@ docker_init() {
     if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_COMPOSE_FILE" ]]; then
         local docker_compose_cmd="docker compose"
         [[ -n "$DOCKER_ENV_FILE" ]] && docker_compose_cmd="$docker_compose_cmd --env-file $DOCKER_ENV_FILE"
+        docker_compose_cmd="$docker_compose_cmd -p $DOCKER_PROJECT_NAME"
         docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
         
         if ! $docker_compose_cmd config --quiet 2>/dev/null; then
@@ -535,6 +536,7 @@ docker_compose() {
         docker_compose_cmd="$docker_compose_cmd --env-file $DOCKER_ENV_FILE"
     fi
     
+    docker_compose_cmd="$docker_compose_cmd -p $DOCKER_PROJECT_NAME"
     docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
     
     # Execute the command

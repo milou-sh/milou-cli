@@ -60,12 +60,22 @@ declare -gA PRESERVED_CONFIG=()
 
 # Consolidated configuration generation function with enterprise-grade safety
 config_generate() {
+    # Updated parameter order (back-compatible):
+    #   1  domain
+    #   2  admin_email
+    #   3  ssl_mode (generate / none / etc.)
+    #   4  use_latest_images  (true|false)  – whether to resolve concrete versions via GHCR
+    #   5  preserve_credentials (auto|true|false)
+    #   6  quiet   (optional, default false)
+    #   7  skip_existing (optional, default false)
+
     local domain="${1:-localhost}"
     local admin_email="${2:-admin@localhost}"
     local ssl_mode="${3:-generate}"
-    local quiet="${4:-false}"
+    local use_latest_images="${4:-true}"
     local preserve_credentials="${5:-auto}"
-    local skip_existing="${6:-false}"
+    local quiet="${6:-false}"
+    local skip_existing="${7:-false}"
     
     local env_file="${SCRIPT_DIR:-$(pwd)}/.env"
     
@@ -116,7 +126,7 @@ config_generate() {
     fi
     
     # Generate the actual configuration
-    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "false" "$credentials_data" "$quiet"; then
+    if config_create_env_file "$domain" "$admin_email" "$ssl_mode" "$use_latest_images" "$credentials_data" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Configuration written successfully"
         
         # ENTERPRISE VALIDATION: Verify no credentials were lost

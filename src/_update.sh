@@ -684,7 +684,7 @@ _perform_fixed_update() {
         # Perform zero-downtime update
         local update_success=false
         if command -v service_update_zero_downtime >/dev/null 2>&1; then
-            if service_update_zero_downtime "$actual_service_name" "$service_target_version" "false"; then
+            if service_update_zero_downtime "$actual_service_name" "false"; then
                 update_success=true
             fi
         else

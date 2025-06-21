@@ -1608,9 +1608,12 @@ setup_generate_configuration_interactive() {
     # Set version tag environment variable for config generation
     export MILOU_SELECTED_VERSION="$version_tag"
     
+    # DEBUG: show chosen version strategy
+    milou_log "DEBUG" "Version selection: tag=$version_tag, use_latest_images=$use_latest_images"
+    
     # FIXED: Acquire GitHub token just-in-time if dynamic versions are needed.
     if [[ "$use_latest_images" == "true" ]]; then
-        milou_log "INFO" "🔑 To resolve the latest version numbers, a GitHub token is now required."
+        milou_log "INFO" "🔑 A GitHub token is required now to resolve concrete service versions."
         
         # Call the core function which contains the detailed prompt. This avoids duplication.
         if ! core_require_github_token "${GITHUB_TOKEN:-}" "true"; then
@@ -1618,9 +1621,17 @@ setup_generate_configuration_interactive() {
             return 1
         fi
         export MILOU_GITHUB_TOKEN="${GITHUB_TOKEN}"
+        
+        milou_log "DEBUG" "GitHub token obtained and exported."
     fi
     
-    if config_generate "$domain" "$email" "$ssl_mode" "$use_latest_images" "$preserve_creds" "false"; then
+    # Set an env flag so config_generate knows we need per-service latest versions
+    if [[ "$use_latest_images" == "true" ]]; then
+        export AUTO_RESOLVE_LATEST_IMAGES="true"
+    fi
+    
+    # Call with correct positional arguments: quiet flag first
+    if config_generate "$domain" "$email" "$ssl_mode" "false" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "Configuration created successfully"
         
         # Only force container recreation if credentials are NEW (not preserved)

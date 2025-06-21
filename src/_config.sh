@@ -433,7 +433,10 @@ FRONTEND_TAG=${_frontend}
 ENGINE_TAG=${_engine}
 DATABASE_TAG=${_database}
 NGINX_TAG=${_nginx}"
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Per-service latest versions resolved successfully"
+        if [[ "$quiet" != "true" ]]; then
+            milou_log "INFO" "🔍 Per-service latest versions resolved successfully"
+            milou_log "DEBUG" "Resolved tags: backend=$_backend, frontend=$_frontend, engine=$_engine, database=$_database, nginx=$_nginx"
+        fi
 
     else
         # ------------------------------------------------------------------

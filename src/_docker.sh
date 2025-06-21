@@ -73,8 +73,13 @@ docker_handle_startup_error() {
 
     [[ "$quiet" == "true" ]] && return 0
     
+    # FIXED: Improved error detection to avoid false positives
+    # Filter out Docker Compose informational messages that aren't actual errors
+    local filtered_error_output
+    filtered_error_output=$(echo "$error_output" | grep -v "Creating network\|Network.*created\|Creating\|Starting\|Recreating\|Attaching to\|Container.*started\|Container.*is up-to-date\|Pulling\|service.*Started\|service.*Up" || echo "$error_output")
+    
     # Check for authentication/credential errors first (most common after fresh setup)
-    if echo "$error_output" | grep -q "password authentication failed\|authentication failed\|Access denied\|Invalid authentication"; then
+    if echo "$filtered_error_output" | grep -q "password authentication failed\|authentication failed\|Access denied\|Invalid authentication"; then
         echo
         milou_log "ERROR" "❌ Database Authentication Failed"
         echo -e "${DIM}The backend service cannot connect to the database with current credentials.${NC}"
@@ -112,7 +117,7 @@ docker_handle_startup_error() {
     fi
     
     # Check for manifest unknown errors (image not found)
-    if echo "$error_output" | grep -q "manifest unknown\|manifest not found\|pull access denied"; then
+    if echo "$filtered_error_output" | grep -q "manifest unknown\|manifest not found\|pull access denied"; then
         echo
         milou_log "ERROR" "❌ Docker Image Not Found"
         echo -e "${DIM}The requested Docker image could not be found or accessed.${NC}"
@@ -147,7 +152,7 @@ docker_handle_startup_error() {
     fi
     
     # Check for authentication errors (GitHub token issues)
-    if echo "$error_output" | grep -q "unauthorized\|authentication.*required\|login.*required\|403.*Forbidden"; then
+    if echo "$filtered_error_output" | grep -q "unauthorized\|authentication.*required\|login.*required\|403.*Forbidden"; then
         echo
         milou_log "ERROR" "❌ GitHub Authentication Failed"
         echo -e "${DIM}Cannot authenticate with GitHub Container Registry.${NC}"
@@ -161,8 +166,9 @@ docker_handle_startup_error() {
         return 0
     fi
     
-    # Check for network errors
-    if echo "$error_output" | grep -q "network\|connection\|timeout\|dns\|no route to host"; then
+    # FIXED: More specific network error detection to avoid false positives
+    # Only trigger network error for actual connection failures, not informational messages
+    if echo "$filtered_error_output" | grep -E "connection (refused|failed|timeout)|network (unreachable|timeout)|no route to host|name resolution failed|dns.*failed|connection.*reset" >/dev/null; then
         echo
         milou_log "ERROR" "❌ Network Error"
         echo -e "${DIM}Network connection issues detected.${NC}"
@@ -177,7 +183,7 @@ docker_handle_startup_error() {
     fi
     
     # Check for port conflicts
-    if echo "$error_output" | grep -q "port.*already.*use\|address already in use\|bind.*address already in use"; then
+    if echo "$filtered_error_output" | grep -q "port.*already.*use\|address already in use\|bind.*address already in use"; then
         echo
         milou_log "ERROR" "❌ Port Conflict Detected"
         echo -e "${DIM}Required ports are already in use by other services.${NC}"
@@ -192,7 +198,7 @@ docker_handle_startup_error() {
     fi
     
     # Check for disk space issues
-    if echo "$error_output" | grep -q "no space\|disk.*full\|insufficient storage\|device.*space"; then
+    if echo "$filtered_error_output" | grep -q "no space\|disk.*full\|insufficient storage\|device.*space"; then
         echo
         milou_log "ERROR" "❌ Insufficient Disk Space"
         echo -e "${DIM}Not enough disk space to download and run Docker images.${NC}"
@@ -204,6 +210,16 @@ docker_handle_startup_error() {
         echo -e "   ${GREEN}✓${NC} Clean old volumes: ${CYAN}docker volume prune -f${NC}"
         echo
         return 0
+    fi
+    
+    # FIXED: Only show generic error if we have actual error content
+    if [[ -n "$filtered_error_output" && "$filtered_error_output" != "$error_output" ]]; then
+        # We filtered out informational messages, check if there's still error content
+        if [[ -z "$filtered_error_output" ]]; then
+            # No actual errors after filtering - this was just informational output
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker operation completed with informational output only"
+            return 0
+        fi
     fi
     
     # Generic error handling for other cases
@@ -223,9 +239,9 @@ docker_handle_startup_error() {
     echo
     
     # Show a snippet of the actual error for debugging
-    if [[ ${#error_output} -gt 0 ]]; then
+    if [[ ${#filtered_error_output} -gt 0 ]]; then
         echo -e "${DIM}${BOLD}Error Details:${NC}"
-        echo -e "${DIM}$(echo "$error_output" | tail -5)${NC}"
+        echo -e "${DIM}$(echo "$filtered_error_output" | tail -5)${NC}"
         echo
     fi
 }
@@ -937,30 +953,55 @@ service_update_zero_downtime() {
         # Single service update
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
         
-        # Stop old container and start new one
-        if docker_execute "up" "$service" "$quiet" --no-deps; then
-            # Give the container some time to initialise on first start (especially for newly installed services)
-            local retries=12   # ~= 1 minute total (12 × 5 s)
-            local wait_interval=5
-            local healthy=false
-            while [[ $retries -gt 0 ]]; do
-                if health_check_service "$service" "true"; then
-                    healthy=true
-                    break
-                fi
-                sleep "$wait_interval"
-                ((retries--))
-            done
-
-            if [[ "$healthy" == "true" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service updated successfully with zero downtime"
-                return 0
-            else
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check after waiting"
-                return 1
+        # FIXED: Better error handling for zero-downtime updates
+        # Check if service is already running first
+        local service_was_running=false
+        if health_check_service "$service" "true"; then
+            service_was_running=true
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Service $service is currently running"
+        fi
+        
+        # Use docker compose up with better error handling
+        local result_output
+        result_output=$(docker_compose up -d --remove-orphans --no-deps "$service" 2>&1)
+        local exit_code=$?
+        
+        # FIXED: Don't trigger network error for successful updates
+        if [[ $exit_code -ne 0 ]]; then
+            # Only report error if the actual Docker command failed
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to update service: $service"
+            
+            # Show actual error details for debugging
+            if [[ ${#result_output} -gt 0 ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker output: $result_output"
             fi
+            
+            # Only trigger error handler for real failures
+            docker_handle_startup_error "$result_output" "$service" "$quiet"
+            return 1
         else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service update failed"
+            # Success case - log the output for transparency but don't treat as error
+            [[ "$quiet" != "true" && -n "$result_output" ]] && milou_log "DEBUG" "Docker compose output: $result_output"
+        fi
+        
+        # Give the container some time to initialise on first start (especially for newly installed services)
+        local retries=12   # ~= 1 minute total (12 × 5 s)
+        local wait_interval=5
+        local healthy=false
+        while [[ $retries -gt 0 ]]; do
+            if health_check_service "$service" "true"; then
+                healthy=true
+                break
+            fi
+            sleep "$wait_interval"
+            ((retries--))
+        done
+
+        if [[ "$healthy" == "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service updated successfully with zero downtime"
+            return 0
+        else
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check after waiting"
             return 1
         fi
     else
@@ -979,13 +1020,9 @@ service_update_zero_downtime() {
         for svc in "${services[@]}"; do
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $svc"
             
-            if docker_execute "up" "$svc" "$quiet" --no-deps; then
-                if health_check_service "$svc" "true"; then
-                    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
-                else
-                    [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $svc update failed health check"
-                    failed_services+=("$svc")
-                fi
+            # Use the fixed single-service update logic
+            if service_update_zero_downtime "$svc" "true"; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
             else
                 [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $svc update failed"
                 failed_services+=("$svc")

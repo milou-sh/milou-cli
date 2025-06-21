@@ -486,13 +486,6 @@ setup_run() {
         return 1
     fi
     
-    # ------------------------------------------------------------------
-    # The GitHub token is now requested just-in-time during the interactive
-    # configuration if the user selects a dynamic version. This avoids
-    # asking for it unnecessarily. For other modes, the token must be
-    # in the environment, and config_generate will fail correctly if not.
-    # ------------------------------------------------------------------
-    
     log_success "System validation passed. Ready to configure."
     echo
     
@@ -502,7 +495,7 @@ setup_run() {
         return 1
     fi
     
-    # STEP 4: GitHub Token and Deployment
+    # STEP 4: GitHub Token and Deployment (Token is now handled inside interactive config)
     if ! _setup_handle_github_and_deployment; then
         log_error "Deployment failed."
         return 1
@@ -641,6 +634,8 @@ _setup_handle_github_and_deployment() {
     log_step "🚀" "GitHub Authentication & Deployment"
     
     # Validate and start services using existing function
+    # The token acquisition has been moved into the interactive configuration flow,
+    # so by the time we get here, it's either already present or not needed.
     if setup_validate_and_start_services; then
         log_success "GitHub authentication and deployment completed"
         return 0

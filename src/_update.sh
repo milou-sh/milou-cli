@@ -662,6 +662,11 @@ _perform_fixed_update() {
         docker_cleanup_conflicting_networks "false"
     fi
     
+    # FIXED: Ensure networks are ready without creating duplicates
+    if command -v docker_ensure_networks_exist >/dev/null 2>&1; then
+        docker_ensure_networks_exist "false"
+    fi
+    
     # Update each service
     local failed_services=()
     local updated_services=()

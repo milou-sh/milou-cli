@@ -403,13 +403,58 @@ docker_init() {
     local quiet="${3:-false}"
     local skip_auth="${4:-false}"
     
-    # Set files if provided
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Initializing Docker environment (skip_auth=$skip_auth)..."
+    
+    # FIXED: Set default file paths if not provided
+    if [[ -z "$env_file" ]]; then
+        # Try to find the environment file in standard locations
+        local possible_env_files=(
+            "${SCRIPT_DIR}/.env"
+            "${SCRIPT_DIR}/../.env"
+            "$(pwd)/.env"
+        )
+        
+        for potential_env in "${possible_env_files[@]}"; do
+            if [[ -f "$potential_env" ]]; then
+                env_file="$potential_env"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found environment file: $env_file"
+                break
+            fi
+        done
+    fi
+    
+    if [[ -z "$compose_file" ]]; then
+        # Try to find the compose file in standard locations
+        local possible_compose_files=(
+            "${SCRIPT_DIR}/static/docker-compose.yml"
+            "${SCRIPT_DIR}/../static/docker-compose.yml" 
+            "$(pwd)/static/docker-compose.yml"
+            "${SCRIPT_DIR}/docker-compose.yml"
+            "$(pwd)/docker-compose.yml"
+        )
+        
+        for potential_compose in "${possible_compose_files[@]}"; do
+            if [[ -f "$potential_compose" ]]; then
+                compose_file="$potential_compose"
+                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found compose file: $compose_file"
+                break
+            fi
+        done
+    fi
+    
+    # Set files if found
     if [[ -n "$env_file" && -f "$env_file" ]]; then
         DOCKER_ENV_FILE="$env_file"
+    else
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Environment file not found - proceeding with defaults"
+        DOCKER_ENV_FILE=""
     fi
     
     if [[ -n "$compose_file" && -f "$compose_file" ]]; then
         DOCKER_COMPOSE_FILE="$compose_file"
+    else
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker Compose file not found"
+        return 1
     fi
     
     # Validate Docker environment
@@ -1361,78 +1406,107 @@ docker_cleanup_conflicting_networks() {
     local current_project="${DOCKER_PROJECT_NAME:-milou}"
     
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔗 Checking for network conflicts..."
-    
-    # FIXED: More conservative - only remove networks with different project names that use same subnet
-    # Get networks that might conflict (different project prefix but same subnet range)
-    local conflicting_networks=()
-    local all_milou_networks=()
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Current project name: $current_project"
     
     # Get all milou-related networks
+    local all_milou_networks=()
     while IFS= read -r network; do
         [[ -n "$network" ]] && all_milou_networks+=("$network")
     done < <(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null)
     
-    # Check each network to see if it conflicts with our current project
+    if [[ ${#all_milou_networks[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No milou networks found"
+        return 0
+    fi
+    
+    # FIXED: More precise logic - only flag networks that:
+    # 1. Don't belong to the current project AND
+    # 2. Use the same subnet (172.20.0.0/16) AND  
+    # 3. Are actually unused
+    local conflicting_networks=()
+    local current_project_networks=()
+    
     for network in "${all_milou_networks[@]}"; do
-        # Skip if it belongs to our current project
+        # Check if this network belongs to our current project
         if [[ "$network" =~ ^${current_project}_ ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Keeping network (belongs to current project): $network"
+            current_project_networks+=("$network")
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Current project network: $network"
             continue
         fi
         
-        # Check if this network uses the same subnet as our intended network
+        # For other networks, check if they conflict with our subnet
         local network_subnet
         network_subnet=$(docker network inspect "$network" --format "{{range .IPAM.Config}}{{.Subnet}}{{end}}" 2>/dev/null || echo "")
         
         if [[ "$network_subnet" == "172.20.0.0/16" ]]; then
-            # This network conflicts with our subnet
-            conflicting_networks+=("$network")
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "Found conflicting network: $network (subnet: $network_subnet)"
+            # Check if it has containers
+            local containers_count
+            containers_count=$(docker network inspect "$network" --format "{{len .Containers}}" 2>/dev/null || echo "0")
+            
+            if [[ "$containers_count" -eq 0 ]]; then
+                # This is an unused network with our subnet - it's safe to remove
+                conflicting_networks+=("$network")
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Unused conflicting network: $network (subnet: $network_subnet)"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "ℹ️  Network with containers (leaving alone): $network (subnet: $network_subnet)"
+            fi
         else
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Network OK (different subnet): $network (subnet: $network_subnet)"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Different subnet, no conflict: $network (subnet: $network_subnet)"
         fi
     done
     
+    # Report current project networks
+    if [[ ${#current_project_networks[@]} -gt 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Found ${#current_project_networks[@]} networks for current project ($current_project):"
+        for network in "${current_project_networks[@]}"; do
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $network"
+        done
+    fi
+    
+    # Handle conflicting networks
     if [[ ${#conflicting_networks[@]} -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No conflicting networks found"
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ No network conflicts detected"
         return 0
     fi
     
-    # Check if any of these networks have containers attached
-    local safe_to_remove=()
-    local networks_with_containers=()
-    
+    # Remove unused conflicting networks
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🧹 Removing ${#conflicting_networks[@]} unused conflicting networks..."
     for network in "${conflicting_networks[@]}"; do
-        local containers_count
-        containers_count=$(docker network inspect "$network" --format "{{len .Containers}}" 2>/dev/null || echo "0")
-        
-        if [[ "$containers_count" -eq 0 ]]; then
-            safe_to_remove+=("$network")
+        if docker network rm "$network" 2>/dev/null; then
+            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ Removed network: $network"
         else
-            networks_with_containers+=("$network")
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "  ⚠️  Failed to remove network: $network"
         fi
     done
     
-    # Remove networks that have no containers
-    if [[ ${#safe_to_remove[@]} -gt 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🧹 Removing unused conflicting networks..."
-        for network in "${safe_to_remove[@]}"; do
-            if docker network rm "$network" 2>/dev/null; then
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ Removed network: $network"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "  ⚠️  Failed to remove network: $network"
-            fi
-        done
-    fi
+    return 0
+}
+
+# =============================================================================
+# NETWORK MANAGEMENT
+# =============================================================================
+
+# Ensure required networks exist without creating duplicates
+docker_ensure_networks_exist() {
+    local quiet="${1:-false}"
+    local project_name="${DOCKER_PROJECT_NAME:-milou}"
     
-    # For networks with containers, just warn - don't auto-remove
-    if [[ ${#networks_with_containers[@]} -gt 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Networks with active containers (keeping them safe):"
-        for network in "${networks_with_containers[@]}"; do
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "  - $network (has running containers)"
-        done
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 These networks are left untouched to avoid disrupting running services"
-    fi
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🔗 Ensuring required networks exist for project: $project_name"
+    
+    # Define the networks our compose file expects
+    local expected_networks=(
+        "${project_name}_milou_network"
+        "${project_name}_proxy"
+    )
+    
+    # Check if each network exists
+    for network in "${expected_networks[@]}"; do
+        if docker network ls --format "{{.Name}}" | grep -q "^${network}$"; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Network exists: $network"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "ℹ️  Network will be created by Docker Compose: $network"
+        fi
+    done
     
     return 0
 }

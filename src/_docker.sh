@@ -581,8 +581,6 @@ docker_execute() {
     case "$operation" in
         "up"|"start")
             if [[ -n "$service" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling image for service: $service"
-                docker_compose pull "$service"
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting service: $service"
                 local result_output
                 result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" "$service" 2>&1)
@@ -594,8 +592,6 @@ docker_execute() {
                     return $exit_code
                 fi
             else
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling all service images..."
-                docker_compose pull
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting all services"
                 local result_output
                 result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" 2>&1)
@@ -627,7 +623,11 @@ docker_execute() {
             fi
             ;;
         "pull")
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling latest images"
+            if [[ -n "$service" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling image for service: $service"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling all service images"
+            fi
             docker_compose pull "${additional_args[@]}" ${service:+"$service"}
             ;;
         "logs")
@@ -926,7 +926,6 @@ service_update_zero_downtime() {
     fi
     
     # Pull latest images first
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling latest images..."
     if ! docker_execute "pull" "$service" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull latest images"
         return 1

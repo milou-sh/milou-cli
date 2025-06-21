@@ -50,7 +50,7 @@ fi
 # Docker environment variables with defaults
 declare -g DOCKER_ENV_FILE=""
 declare -g DOCKER_COMPOSE_FILE=""
-declare -g DOCKER_PROJECT_NAME="milou"
+declare -g DOCKER_PROJECT_NAME="milou"  # Default fallback
 declare -g DOCKER_VOLUMES_CLEANED=false
 declare -g GITHUB_REGISTRY="${GITHUB_REGISTRY:-ghcr.io/milou-sh/milou}"
 declare -g GITHUB_API_BASE="${GITHUB_API_BASE:-https://api.github.com}"
@@ -193,6 +193,21 @@ docker_handle_startup_error() {
         echo -e "   ${GREEN}✓${NC} Check what's using ports: ${CYAN}netstat -tlnp | grep -E ':(80|443|5432|6379|5672)'${NC}"
         echo -e "   ${GREEN}✓${NC} Change ports in .env file if needed"
         echo -e "   ${GREEN}✓${NC} Run setup again: ${CYAN}./milou.sh setup${NC}"
+        echo
+        return 0
+    fi
+    
+    # FIXED: Check for Docker network conflicts (specific error handling)
+    if echo "$filtered_error_output" | grep -q "failed to create network\|Pool overlaps with other one\|network.*already exists\|invalid pool request"; then
+        echo
+        milou_log "ERROR" "❌ Docker Network Conflict"
+        echo -e "${DIM}Docker networks are conflicting with existing networks.${NC}"
+        echo
+        echo -e "${YELLOW}${BOLD}✓ How to Fix:${NC}"
+        echo -e "   ${GREEN}✓${NC} List conflicting networks: ${CYAN}docker network ls | grep milou${NC}"
+        echo -e "   ${GREEN}✓${NC} Remove unused networks: ${CYAN}docker network prune -f${NC}"
+        echo -e "   ${GREEN}✓${NC} Or use our cleanup tool: ${CYAN}./milou.sh docker cleanup${NC}"
+        echo -e "   ${GREEN}✓${NC} Then try the update again"
         echo
         return 0
     fi
@@ -383,127 +398,56 @@ docker_login_github() {
 
 # Initialize Docker environment - SINGLE AUTHORITATIVE IMPLEMENTATION
 docker_init() {
-    local env_file="${1:-${SCRIPT_DIR}/.env}"
-    local compose_file="${2:-${SCRIPT_DIR}/static/docker-compose.yml}"
+    local env_file="${1:-}"
+    local compose_file="${2:-}"
     local quiet="${3:-false}"
-    local skip_auth="${4:-false}"  # Add parameter to skip authentication
+    local skip_auth="${4:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Initializing Docker environment (skip_auth=$skip_auth)..."
+    # Set files if provided
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        DOCKER_ENV_FILE="$env_file"
+    fi
     
-    # Check Docker access first
-    if ! validate_docker_access "true" "false" "true" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Docker access validation failed"
+    if [[ -n "$compose_file" && -f "$compose_file" ]]; then
+        DOCKER_COMPOSE_FILE="$compose_file"
+    fi
+    
+    # Validate Docker environment
+    if ! docker_validate_environment "$quiet"; then
         return 1
     fi
     
-    # Set global variables
-    DOCKER_ENV_FILE="$env_file"
-    DOCKER_COMPOSE_FILE="$compose_file"
-    
-    # Validate files exist with better error handling
-    if [[ ! -f "$DOCKER_ENV_FILE" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Environment file not found: $DOCKER_ENV_FILE"
-        
-        # Try alternative locations for .env file
-        local alt_env_files=(
-            "${SCRIPT_DIR}/../.env"
-            "$(pwd)/.env"
-            "${HOME}/.milou/.env"
-        )
-        
-        local found_env=false
-        for alt_env in "${alt_env_files[@]}"; do
-            if [[ -f "$alt_env" ]]; then
-                DOCKER_ENV_FILE="$alt_env"
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using alternative environment file: $DOCKER_ENV_FILE"
-                found_env=true
-                break
-            fi
-        done
-        
-        if [[ "$found_env" != "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  No environment file found - proceeding with defaults"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
-            # Don't fail hard - just continue with empty env
-            DOCKER_ENV_FILE=""
+    # FIXED: Load COMPOSE_PROJECT_NAME from environment file to avoid conflicts
+    if [[ -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
+        local compose_project_name
+        compose_project_name=$(grep '^COMPOSE_PROJECT_NAME=' "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' || echo "")
+        if [[ -n "$compose_project_name" ]]; then
+            DOCKER_PROJECT_NAME="$compose_project_name"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using project name from .env: $DOCKER_PROJECT_NAME"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No COMPOSE_PROJECT_NAME found, using default: $DOCKER_PROJECT_NAME"
         fi
     fi
     
-    if [[ ! -f "$DOCKER_COMPOSE_FILE" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Compose file not found: $DOCKER_COMPOSE_FILE"
-        
-        # Try alternative locations for docker-compose file
-        local alt_compose_files=(
-            "${SCRIPT_DIR}/../docker-compose.yml"
-            "${SCRIPT_DIR}/../static/docker-compose.yml"
-            "$(pwd)/docker-compose.yml"
-            "$(pwd)/static/docker-compose.yml"
-        )
-        
-        local found_compose=false
-        for alt_compose in "${alt_compose_files[@]}"; do
-            if [[ -f "$alt_compose" ]]; then
-                DOCKER_COMPOSE_FILE="$alt_compose"
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using alternative compose file: $DOCKER_COMPOSE_FILE"
-                found_compose=true
-                break
-            fi
-        done
-        
-        if [[ "$found_compose" != "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "No docker-compose.yml file found"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Run './milou.sh setup' to create proper configuration"
-            return 1
-        fi
-    fi
-    
-    # Load environment to check for GitHub token (only if we have an env file)
-    local github_token="${GITHUB_TOKEN:-}"
-    if [[ -f "$DOCKER_ENV_FILE" ]]; then
-        # Source the environment file to get GITHUB_TOKEN
-        source "$DOCKER_ENV_FILE" 2>/dev/null || true
-        github_token="${GITHUB_TOKEN:-$github_token}"
-    fi
-    
-    # Handle authentication unless explicitly skipped
-    if [[ "$skip_auth" == "true" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Skipping GitHub authentication as requested"
-    else
-        # For critical operations, ensure we have a valid token
-        if [[ -z "$github_token" ]]; then
-            # Try to acquire token using core helper (non-interactive)
-            if github_token=$(core_find_github_token "" 2>/dev/null); then
-                export GITHUB_TOKEN="$github_token"
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Using GitHub token discovered by core helper"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token available - some operations may fail"
-            fi
+    # GitHub authentication (if required and not skipped)
+    if [[ "$skip_auth" != "true" ]]; then
+        # Get GitHub token from environment file or environment variable
+        local github_token="${GITHUB_TOKEN:-}"
+        if [[ -z "$github_token" && -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
+            github_token=$(grep '^GITHUB_TOKEN=' "$DOCKER_ENV_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d '"' || echo "")
         fi
         
-        # Attempt authentication if we have a token
-        if [[ -n "$github_token" && "${GITHUB_AUTHENTICATED:-}" != "true" ]]; then
-            if docker_login_github "$github_token" "$quiet"; then
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub Container Registry authentication successful"
-                export GITHUB_AUTHENTICATED="true"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed - private images may not be accessible"
+        if [[ -n "$github_token" ]]; then
+            if ! docker_login_github "$github_token" "$quiet"; then
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed, but continuing..."
             fi
         else
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "GitHub authentication already completed"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token available, skipping authentication"
         fi
     fi
     
     # ------------------------------------------------------------------
-    # After authentication we might have received a token via user prompt.
-    # Refresh the local variable so we can use it for tag resolution.
-    # ------------------------------------------------------------------
-    github_token="${GITHUB_TOKEN:-$github_token}"
-
-    # ------------------------------------------------------------------
-    # Resolve any remaining MILOU_*_TAG entries that are still set to the
-    # mutable values 'latest' or 'stable'. This converts them into
-    # concrete SemVer tags so the running containers always reveal their
-    # real version (no more ':latest' in `docker ps`).
+    # Image tag resolution - Load from .env and resolve 'latest' tags
     # ------------------------------------------------------------------
     if [[ -n "$github_token" && -n "$DOCKER_ENV_FILE" && -f "$DOCKER_ENV_FILE" ]]; then
         config_resolve_mutable_tags "$DOCKER_ENV_FILE" "$github_token" "$quiet"
@@ -1405,6 +1349,92 @@ handle_mixed_versions() {
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ All services using consistent version: ${unique_versions[0]}"
         return 1
     fi
+}
+
+# =============================================================================
+# NETWORK CONFLICT RESOLUTION
+# =============================================================================
+
+# Clean up conflicting Docker networks to prevent subnet overlaps
+docker_cleanup_conflicting_networks() {
+    local quiet="${1:-false}"
+    local current_project="${DOCKER_PROJECT_NAME:-milou}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔗 Checking for network conflicts..."
+    
+    # FIXED: More conservative - only remove networks with different project names that use same subnet
+    # Get networks that might conflict (different project prefix but same subnet range)
+    local conflicting_networks=()
+    local all_milou_networks=()
+    
+    # Get all milou-related networks
+    while IFS= read -r network; do
+        [[ -n "$network" ]] && all_milou_networks+=("$network")
+    done < <(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null)
+    
+    # Check each network to see if it conflicts with our current project
+    for network in "${all_milou_networks[@]}"; do
+        # Skip if it belongs to our current project
+        if [[ "$network" =~ ^${current_project}_ ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Keeping network (belongs to current project): $network"
+            continue
+        fi
+        
+        # Check if this network uses the same subnet as our intended network
+        local network_subnet
+        network_subnet=$(docker network inspect "$network" --format "{{range .IPAM.Config}}{{.Subnet}}{{end}}" 2>/dev/null || echo "")
+        
+        if [[ "$network_subnet" == "172.20.0.0/16" ]]; then
+            # This network conflicts with our subnet
+            conflicting_networks+=("$network")
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Found conflicting network: $network (subnet: $network_subnet)"
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Network OK (different subnet): $network (subnet: $network_subnet)"
+        fi
+    done
+    
+    if [[ ${#conflicting_networks[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No conflicting networks found"
+        return 0
+    fi
+    
+    # Check if any of these networks have containers attached
+    local safe_to_remove=()
+    local networks_with_containers=()
+    
+    for network in "${conflicting_networks[@]}"; do
+        local containers_count
+        containers_count=$(docker network inspect "$network" --format "{{len .Containers}}" 2>/dev/null || echo "0")
+        
+        if [[ "$containers_count" -eq 0 ]]; then
+            safe_to_remove+=("$network")
+        else
+            networks_with_containers+=("$network")
+        fi
+    done
+    
+    # Remove networks that have no containers
+    if [[ ${#safe_to_remove[@]} -gt 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🧹 Removing unused conflicting networks..."
+        for network in "${safe_to_remove[@]}"; do
+            if docker network rm "$network" 2>/dev/null; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ Removed network: $network"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "  ⚠️  Failed to remove network: $network"
+            fi
+        done
+    fi
+    
+    # For networks with containers, just warn - don't auto-remove
+    if [[ ${#networks_with_containers[@]} -gt 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Networks with active containers (keeping them safe):"
+        for network in "${networks_with_containers[@]}"; do
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "  - $network (has running containers)"
+        done
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 These networks are left untouched to avoid disrupting running services"
+    fi
+    
+    return 0
 }
 
 # =============================================================================

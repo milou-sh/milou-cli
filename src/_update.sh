@@ -657,6 +657,11 @@ _perform_fixed_update() {
     # docker network create milou_network --subnet 172.21.0.0/16 2>/dev/null || true
     milou_log "DEBUG" "Networks will be created by Docker Compose"
     
+    # FIXED: Clean up conflicting networks before starting updates
+    if command -v docker_cleanup_conflicting_networks >/dev/null 2>&1; then
+        docker_cleanup_conflicting_networks "false"
+    fi
+    
     # Update each service
     local failed_services=()
     local updated_services=()

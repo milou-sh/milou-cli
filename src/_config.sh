@@ -386,29 +386,33 @@ config_create_env_file() {
     local service_versions=""
     
     if [[ "$use_latest_images" == "true" ]]; then
-        # Caller provided 'false' for latest-images but no explicit version → fetch per-service latest tag via core helper.
+        # When fetching latest, we MUST have a GitHub token. No fallback.
         local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
         if [[ -z "$github_token" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token – falling back to 'latest' tags"
-            service_versions="BACKEND_TAG=latest
-FRONTEND_TAG=latest
-ENGINE_TAG=latest
-DATABASE_TAG=latest
-NGINX_TAG=latest"
-        else
-            local _backend _frontend _engine _database _nginx
-            _backend=$(core_get_latest_service_version "backend"  "$github_token" "true")  || _backend="latest"
-            _frontend=$(core_get_latest_service_version "frontend" "$github_token" "true") || _frontend="latest"
-            _engine=$(core_get_latest_service_version  "engine"   "$github_token" "true")  || _engine="latest"
-            _database=$(core_get_latest_service_version "database" "$github_token" "true") || _database="latest"
-            _nginx=$(core_get_latest_service_version   "nginx"    "$github_token" "true")  || _nginx="latest"
-            service_versions="BACKEND_TAG=${_backend}
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "A GitHub token is required to fetch the latest image versions."
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Please re-run setup and provide a token, or set GITHUB_TOKEN in your environment."
+            return 1
+        fi
+        
+        local _backend _frontend _engine _database _nginx
+        _backend=$(core_get_latest_service_version "backend"  "$github_token" "true")  || _backend="error"
+        _frontend=$(core_get_latest_service_version "frontend" "$github_token" "true") || _frontend="error"
+        _engine=$(core_get_latest_service_version  "engine"   "$github_token" "true")  || _engine="error"
+        _database=$(core_get_latest_service_version "database" "$github_token" "true") || _database="error"
+        _nginx=$(core_get_latest_service_version   "nginx"    "$github_token" "true")  || _nginx="error"
+        
+        if [[ "${_backend}${_frontend}${_engine}${_database}${_nginx}" == *"error"* ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to fetch one or more service versions from GitHub."
+            return 1
+        fi
+
+        service_versions="BACKEND_TAG=${_backend}
 FRONTEND_TAG=${_frontend}
 ENGINE_TAG=${_engine}
 DATABASE_TAG=${_database}
 NGINX_TAG=${_nginx}"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Per-service latest versions resolved"
-        fi
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Per-service latest versions resolved successfully"
+
     else
         # ------------------------------------------------------------------
         # 2. Specific version requested (immutable)
@@ -423,29 +427,15 @@ DATABASE_TAG=${v}
 NGINX_TAG=${v}"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "📌 Pinning all services to explicit version ${v}"
         else
-            # Caller provided 'false' for latest-images but no explicit version → fetch per-service latest tag via core helper.
-            local github_token="${MILOU_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
-            if [[ -z "$github_token" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "No GitHub token – falling back to 'latest' tags"
-                service_versions="BACKEND_TAG=latest
+            # This 'else' block is now effectively dead code because the logic is handled by the use_latest_images=true path.
+            # If we reach here, it implies a logic error in the calling script.
+            # We will default to 'latest' with a strong warning, but this path should be avoided.
+            milou_log "WARN" "Configuration generation reached an unexpected state. Defaulting to 'latest' tags."
+            service_versions="BACKEND_TAG=latest
 FRONTEND_TAG=latest
 ENGINE_TAG=latest
 DATABASE_TAG=latest
 NGINX_TAG=latest"
-            else
-                local _backend _frontend _engine _database _nginx
-                _backend=$(core_get_latest_service_version "backend"  "$github_token" "true")  || _backend="latest"
-                _frontend=$(core_get_latest_service_version "frontend" "$github_token" "true") || _frontend="latest"
-                _engine=$(core_get_latest_service_version  "engine"   "$github_token" "true")  || _engine="latest"
-                _database=$(core_get_latest_service_version "database" "$github_token" "true") || _database="latest"
-                _nginx=$(core_get_latest_service_version   "nginx"    "$github_token" "true")  || _nginx="latest"
-                service_versions="BACKEND_TAG=${_backend}
-FRONTEND_TAG=${_frontend}
-ENGINE_TAG=${_engine}
-DATABASE_TAG=${_database}
-NGINX_TAG=${_nginx}"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Per-service latest versions resolved"
-            fi
         fi
     fi
     

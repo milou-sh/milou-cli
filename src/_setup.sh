@@ -487,12 +487,11 @@ setup_run() {
     fi
     
     # ------------------------------------------------------------------
-    # Acquire / confirm GitHub token NOW so that configuration generation
-    # can resolve concrete image versions (phase-2 refactor).
+    # The GitHub token is now requested just-in-time during the interactive
+    # configuration if the user selects a dynamic version. This avoids
+    # asking for it unnecessarily. For other modes, the token must be
+    # in the environment, and config_generate will fail correctly if not.
     # ------------------------------------------------------------------
-    if ! core_require_github_token "${GITHUB_TOKEN:-}" "${MILOU_INTERACTIVE:-true}"; then
-        return 1
-    fi
     
     log_success "System validation passed. Ready to configure."
     echo
@@ -625,7 +624,7 @@ _setup_validate_system() {
 _setup_interactive_configuration() {
     local preserve_creds="${1:-auto}"
     
-    log_step "⚙️" "Interactive Configuration"
+    log_section "⚙️" "Interactive Configuration"
     
     # Use the existing setup_generate_configuration_interactive function
     if setup_generate_configuration_interactive "$preserve_creds"; then
@@ -1608,6 +1607,18 @@ setup_generate_configuration_interactive() {
     
     # Set version tag environment variable for config generation
     export MILOU_SELECTED_VERSION="$version_tag"
+    
+    # FIXED: Acquire GitHub token just-in-time if dynamic versions are needed.
+    if [[ "$use_latest_images" == "true" ]]; then
+        milou_log "INFO" "🔑 To resolve the latest version numbers, a GitHub token is now required."
+        
+        # Call the core function which contains the detailed prompt. This avoids duplication.
+        if ! core_require_github_token "${GITHUB_TOKEN:-}" "true"; then
+            milou_log "ERROR" "A valid GitHub token is required to proceed."
+            return 1
+        fi
+        export MILOU_GITHUB_TOKEN="${GITHUB_TOKEN}"
+    fi
     
     if config_generate "$domain" "$email" "$ssl_mode" "$use_latest_images" "$preserve_creds" "false"; then
         milou_log "SUCCESS" "Configuration created successfully"

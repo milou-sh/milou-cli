@@ -517,14 +517,15 @@ start_setup() {
         
         if [[ "$choice" =~ ^[Yy]$ ]]; then
             cd "$INSTALL_DIR"
+            export MILOU_INSTALLER_RUN="true"
             export INTERACTIVE=true
             export MILOU_INTERACTIVE=true
             unset FORCE QUIET
             
             if [[ ! -t 0 ]]; then
-                exec ./milou.sh setup < /dev/tty
+                exec ./milou.sh setup --from-installer < /dev/tty
             else
-                exec ./milou.sh setup
+                exec ./milou.sh setup --from-installer
             fi
         else
             log "INFO" "Run: cd $INSTALL_DIR && ./milou.sh setup (when ready)"
@@ -546,6 +547,10 @@ main() {
         parse_args "$@"
     fi
     
+    # Suppress logo if setup will be run immediately after
+    if [[ "$AUTO_START" == "true" ]]; then
+        export MILOU_INSTALLER_RUN="true"
+    fi
     show_minimal_logo
     
     if [[ -z "${MILOU_INSTALL_DIR:-}" ]]; then
@@ -574,5 +579,7 @@ main() {
 if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
     main "$@"
 else
+    # When piped, MILOU_INSTALLER_RUN will be set to avoid double logo
+    export MILOU_INSTALLER_RUN="true"
     main "$@"
 fi 

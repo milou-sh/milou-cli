@@ -108,7 +108,10 @@ config_generate() {
         should_preserve="true"
         [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 FORCED: Preserving existing credentials"
     elif [[ "$preserve_credentials" == "false" ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "🚨 FORCED: Generating new credentials (will affect data access!)"
+        # Only warn if we are overwriting an existing file
+        if [[ -f "$env_file" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "🚨 FORCED: Generating new credentials (will affect data access!)"
+        fi
     fi
     
     # Preserve existing credentials if needed

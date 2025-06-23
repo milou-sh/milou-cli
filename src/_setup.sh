@@ -92,6 +92,11 @@ declare -g SETUP_CURRENT_MODE="$SETUP_MODE_INTERACTIVE"
 
 # Professional Milou logo with consistent design
 setup_show_logo() {
+    # If called from install.sh, skip showing logo again.
+    if [[ "${MILOU_INSTALLER_RUN:-}" == "true" ]]; then
+        return 0
+    fi
+
     if tty -s && [[ "${QUIET:-false}" != "true" ]]; then
         echo -e "${BOLD}${PURPLE}"
         cat << 'EOF'
@@ -345,6 +350,7 @@ setup_run() {
     local mode="${2:-auto}"
     local skip_validation="${3:-false}"
     local preserve_creds="${4:-auto}"
+    local from_installer="${5:-false}"
     
     if [[ "$mode" == "repair" ]]; then
         if ! _setup_run_repair "$force" "$preserve_creds"; then
@@ -369,8 +375,10 @@ setup_run() {
         milou_log "WARN" "Setup detected non-interactive environment"
     fi
     
-    # Show enhanced Milou logo and welcome
-    setup_show_logo
+    # Show enhanced Milou logo and welcome, unless coming from installer
+    if [[ "$from_installer" != "true" ]]; then
+        setup_show_logo
+    fi
     
     # Enhanced setup header with progress tracking
     setup_show_header 1 7 "Starting Setup"
@@ -1351,174 +1359,113 @@ setup_generate_configuration_interactive() {
     echo -e "${DIM}SSL certificates encrypt the connection between your browser and Milou.${NC}"
     echo -e "${DIM}This keeps your login and data safe from prying eyes.${NC}"
     echo
-    
-    echo -e "${BOLD}${CYAN}Choose your security level:${NC}"
-    echo
-    echo -e "${GREEN}   1) ${BOLD}Quick & Easy${NC} ${DIM}(Self-signed certificates)${NC}"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Works immediately, no setup required"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for testing and development"
-    echo -e "      ${YELLOW}✓${NC}  Browser will show a security warning (this is normal)"
-    echo
-    echo -e "${YELLOW}   2) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} No browser warnings"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Perfect for business use"
-    echo -e "      ${BLUE}✓${NC}  Requires: certificate files (supports .crt/.key or .pem formats)"
-    echo -e "      ${DIM}      SSL directory: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
-    echo
-    echo -e "${RED}   3) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
-    echo -e "      ${RED}${CROSSMARK}${NC} Connection is not encrypted"
-    echo -e "      ${RED}${CROSSMARK}${NC} Only use for testing in trusted environments"
-    echo
-    
-    local ssl_choice ssl_mode
-    while true; do
-        echo -ne "${BOLD}${GREEN}Choose security option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
-        read -r ssl_choice
-        if [[ -z "$ssl_choice" ]]; then
-            ssl_choice="1"
-        fi
-        
-        case "$ssl_choice" in
-            1) 
-                ssl_mode="generate"
-                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Self-signed certificates${NC}"
-                echo -e "   ${DIM}Your system will be secure and ready in minutes.${NC}"
-                break
-                ;;
-            2) 
-                ssl_mode="existing"
-                echo -e "   ${YELLOW}${CHECKMARK} Professional setup!${NC} Using: ${BOLD}Your own certificates${NC}"
-                echo -e "   ${BLUE}✓ SSL directory:${NC} $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")"
-                echo -e "   ${DIM}   Supports: Let's Encrypt (.pem), Standard (.crt/.key), and custom formats${NC}"
-                echo
-                
-                # Load SSL module for interactive certificate setup
-                if [[ "${MILOU_SSL_LOADED:-}" != "true" ]]; then
-                    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-                    source "${script_dir}/_ssl.sh" || {
-                        echo -e "   ${RED}${CROSSMARK} Error: Cannot load SSL module${NC}"
-                        continue
-                    }
-                fi
-                
-                # Interactive certificate setup RIGHT NOW
-                log_section "📁 Certificate Location Setup" "Let's locate your SSL certificates"
-                echo -e "${DIM}We need to find your SSL certificate files to configure HTTPS properly.${NC}"
-                echo
-                
-                echo -e "${BOLD}${CYAN}💡 Common Enterprise Certificate Sources:${NC}"
-                echo
-                echo -e "${GREEN}Cloud Provider Managed:${NC}"
-                echo "  • Azure Key Vault exported certificates"
-                echo "  • AWS Certificate Manager exports"
-                echo "  • Google Cloud Certificate Manager"
-                echo
-                echo -e "${BLUE}Corporate/Internal CA:${NC}"  
-                echo "  • Internal Certificate Authority"
-                echo "  • Corporate PKI certificates"
-                echo "  • Domain-joined certificate stores"
-                echo
-                echo -e "${PURPLE}Commercial CA:${NC}"
-                echo "  • DigiCert, GlobalSign, Sectigo, etc."
-                echo "  • Wildcard certificates"
-                echo "  • Extended Validation (EV) certificates"
-                echo
-                echo -e "${YELLOW}Self-Managed:${NC}"
-                echo "  • Let's Encrypt (Certbot)"
-                echo "  • Self-signed for development"
-                echo
-                echo -e "${CYAN}📋 Supported Formats:${NC}"
-                echo "  • PEM format: certificate.pem + private-key.pem"
-                echo "  • Standard format: certificate.crt + private-key.key"
-                echo "  • Combined format: fullchain.pem + privkey.pem (Let's Encrypt)"
-                echo "  • PKCS#12: certificate.p12 or certificate.pfx (will be converted)"
-                echo
-                
-                # Show certificate directories if they exist
-                local common_paths=("/etc/ssl/certs" "/etc/pki/tls/certs" "/etc/letsencrypt/live" "/opt/certificates" "/var/ssl")
-                local found_paths=()
-                
-                for path in "${common_paths[@]}"; do
-                    if [[ -d "$path" ]] && [[ -n "$(ls -A "$path" 2>/dev/null)" ]]; then
-                        found_paths+=("$path")
-                    fi
-                done
-                
-                if [[ ${#found_paths[@]} -gt 0 ]]; then
-                    echo -e "${GREEN}💡 Found certificate directories on your system:${NC}"
-                    for path in "${found_paths[@]}"; do
-                        echo "  • $path"
-                    done
+
+    if [[ "$domain" == "localhost" || "$domain" == "127.0.0.1" ]]; then
+        echo -e "${BOLD}${CYAN}Choose your security level:${NC}"
+        echo
+        echo -e "${GREEN}   1) ${BOLD}Quick & Easy${NC} ${DIM}(Self-signed certificates)${NC}"
+        echo -e "      ${GREEN}✓${NC} Works immediately, no setup required"
+        echo -e "      ${GREEN}✓${NC} Perfect for local development"
+        echo -e "      ${YELLOW}⚠${NC}  Browser will show a security warning (this is normal)"
+        echo
+        echo -e "${YELLOW}   2) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
+        echo -e "      ${GREEN}✓${NC} No browser warnings"
+        echo -e "      ${GREEN}✓${NC} Perfect for business use"
+        echo -e "      ${BLUE}✓${NC}  Requires: certificate files (supports .crt/.key or .pem formats)"
+        echo -e "      ${DIM}      SSL directory: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
+        echo
+        echo -e "${RED}   3) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
+        echo -e "      ${RED}✗${NC} Connection is not encrypted"
+        echo -e "      ${RED}✗${NC} Only use for testing in trusted environments"
+        echo
+
+        local ssl_choice ssl_mode
+        while true; do
+            echo -ne "${BOLD}${GREEN}Choose security option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}2${NC}): "
+            read -r ssl_choice
+            if [[ -z "$ssl_choice" ]]; then
+                ssl_choice="2"
+            fi
+            
+            case "$ssl_choice" in
+                1) 
+                    ssl_mode="generate"
+                    echo -e "   ${GREEN}✓${NC} Using: ${BOLD}Self-signed certificates${NC}"
+                    break
+                    ;;
+                2) 
+                    ssl_mode="existing"
+                    echo -e "   ${YELLOW}✓${NC} Using: ${BOLD}Your own certificates${NC}"
+                    break
+                    ;;
+                3) 
+                    ssl_mode="none"
+                    echo -e "   ${RED}✗ No encryption selected${NC} Using: ${BOLD}HTTP only${NC}"
+                    break
+                    ;;
+                *) 
+                    echo -e "   ${RED}✗ Please choose 1, 2, or 3${NC}"
                     echo
-                fi
-                
-                local cert_source=""
-                while true; do
-                    echo -ne "${BOLD}${GREEN}Enter certificate directory path${NC}: "
-                    read -r cert_source
-                    
-                    if [[ -z "$cert_source" ]]; then
-                        echo -e "${YELLOW}No path provided. Try again or press Ctrl+C to cancel.${NC}"
-                        continue
-                    fi
-                    
-                    # Expand tilde
-                    cert_source="${cert_source/#\~/$HOME}"
-                    
-                    if [[ ! -d "$cert_source" ]]; then
-                        echo -e "${RED}Directory not found: $cert_source${NC}"
-                        echo "Please check the path and try again."
-                        continue
-                    fi
-                    
-                    if [[ -z "$(ls -A "$cert_source" 2>/dev/null)" ]]; then
-                        echo -e "${YELLOW}Directory is empty: $cert_source${NC}"
-                        echo "Please choose a directory containing certificate files."
-                        continue
-                    fi
-                    
-                    echo -e "${GREEN}✓ Certificate directory found: $cert_source${NC}"
+                    ;;
+            esac
+        done
+    else
+        echo -e "${BOLD}${CYAN}Choose your security level:${NC}"
+        echo
+        echo -e "${BLUE}   1) ${BOLD}Production Ready${NC} ${DIM}(Your own certificates)${NC}"
+        echo -e "      ${GREEN}✓${NC} No browser warnings"
+        echo -e "      ${GREEN}✓${NC} Perfect for business use, full control over certificate source"
+        echo
+        echo -e "${GREEN}   2) ${BOLD}Let's Encrypt${NC} ${DIM}(Automated)${NC}"
+        echo -e "      ${GREEN}✓${NC} Free trusted certificates"
+        echo -e "      ${GREEN}✓${NC} Automatic renewal"
+        echo -e "      ${YELLOW}⚠${NC}  Requires domain pointing to this server"
+        echo
+        echo -e "${CYAN}   3) ${BOLD}Generate Self-Signed${NC}"
+        echo -e "      ${CYAN}✓${NC} Quick and automatic for testing"
+        echo -e "      ${YELLOW}⚠${NC}  Browser security warnings"
+        echo
+        echo -e "${RED}   4) ${BOLD}No Encryption${NC} ${DIM}(HTTP only - not recommended)${NC}"
+        echo -e "      ${RED}✗${NC} Not secure"
+        echo -e "      ${RED}✗${NC} Not recommended for public domains"
+        echo
+
+        local ssl_choice ssl_mode
+        while true; do
+            echo -ne "${BOLD}${GREEN}Choose security option${NC} [${CYAN}1-4${NC}] (recommended: ${BOLD}1${NC}): "
+            read -r ssl_choice
+            if [[ -z "$ssl_choice" ]]; then
+                ssl_choice="1"
+            fi
+            
+            case "$ssl_choice" in
+                1) 
+                    ssl_mode="existing"
+                    echo -e "   ${BLUE}✓${NC} Using: ${BOLD}Your own certificates${NC}"
+                    break
+                    ;;
+                2) 
+                    ssl_mode="letsencrypt"
+                    echo -e "   ${GREEN}✓${NC} Using: ${BOLD}Let's Encrypt${NC}"
+                    break
+                    ;;
+                3) 
+                    ssl_mode="generate"
+                    echo -e "   ${CYAN}✓${NC} Using: ${BOLD}Self-signed certificates${NC}"
+                    break
+                    ;;
+                4) 
+                    ssl_mode="none"
+                    echo -e "   ${RED}✗${NC} Using: ${BOLD}No Encryption${NC}"
+                    break
+                    ;;
+                *) 
+                    echo -e "   ${RED}✗ Please choose 1, 2, 3, or 4${NC}"
                     echo
-                    
-                    # Show what certificate files were found
-                    echo -e "${CYAN}📂 Found certificate files:${NC}"
-                    local cert_files=($(ls "$cert_source"/*.{crt,key,pem,p12,pfx} 2>/dev/null || true))
-                    if [[ ${#cert_files[@]} -gt 0 ]]; then
-                        for file in "${cert_files[@]}"; do
-                            echo "  • $(basename "$file")"
-                        done
-                    else
-                        echo "  ${YELLOW}⚠️  No certificate files found (.crt, .key, .pem, .p12, .pfx)${NC}"
-                        echo "  Please ensure your certificate files are in this directory."
-                    fi
-                    echo
-                    
-                    if confirm "Use certificates from this directory?" "Y"; then
-                        # Store the certificate source for later use
-                        export MILOU_SSL_CERT_SOURCE="$cert_source"
-                        echo -e "${GREEN}✓ Certificate location configured!${NC}"
-                        echo -e "${DIM}   Certificates will be copied to Milou's SSL directory during setup.${NC}"
-                        break
-                    else
-                        echo "Please enter a different path."
-                        echo
-                    fi
-                done
-                echo
-                break
-                ;;
-            3) 
-                ssl_mode="none"
-                echo -e "   ${RED}${CROSSMARK} No encryption selected${NC} Using: ${BOLD}HTTP only${NC}"
-                echo -e "   ${YELLOW}✓  Warning:${NC} Your connection will not be encrypted"
-                break
-                ;;
-            *) 
-                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
-                echo
-                ;;
-        esac
-    done
+                    ;;
+            esac
+        done
+    fi
     echo
     
     # Version Selection with enhanced UX
@@ -1529,24 +1476,19 @@ setup_generate_configuration_interactive() {
     echo -e "${BOLD}${CYAN}Available options:${NC}"
     echo
     echo -e "${GREEN}   1) ${BOLD}Latest Stable${NC} ${DIM}(Recommended)${NC}"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Most recent stable release"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Thoroughly tested and reliable"
-    echo -e "      ${GREEN}${CHECKMARK}${NC} Best for production use"
+    echo -e "      ${GREEN}✓${NC} Most recent stable release"
+    echo -e "      ${GREEN}✓${NC} Thoroughly tested and reliable"
+    echo -e "      ${GREEN}✓${NC} Best for production use"
     echo
-    echo -e "${YELLOW}   2) ${BOLD}Latest Development${NC} ${DIM}(Beta features)${NC}"
-    echo -e "      ${YELLOW}✓${NC} Cutting-edge features"
-    echo -e "      ${YELLOW}✓${NC} May contain bugs"
-    echo -e "      ${BLUE}✓${NC}  Best for testing and development"
-    echo
-    echo -e "${BLUE}   3) ${BOLD}Specific Version${NC} ${DIM}(Advanced users)${NC}"
+    echo -e "${BLUE}   2) ${BOLD}Specific Version${NC} ${DIM}(Advanced users)${NC}"
     echo -e "      ${BLUE}✓${NC}  Choose exact version tag"
     echo -e "      ${BLUE}✓${NC}  Full control over deployment"
-    echo -e "      ${YELLOW}✓${NC}  Requires knowledge of available versions"
+    echo -e "      ${YELLOW}⚠${NC}  Requires knowledge of available versions"
     echo
     
     local version_choice version_tag="1.0.0"
     while true; do
-        echo -ne "${BOLD}${GREEN}Choose version option${NC} [${CYAN}1-3${NC}] (recommended: ${BOLD}1${NC}): "
+        echo -ne "${BOLD}${GREEN}Choose version option${NC} [${CYAN}1-2${NC}] (recommended: ${BOLD}1${NC}): "
         read -r version_choice
         if [[ -z "$version_choice" ]]; then
             version_choice="1"
@@ -1555,18 +1497,12 @@ setup_generate_configuration_interactive() {
         case "$version_choice" in
             1) 
                 version_tag="stable"
-                echo -e "   ${GREEN}${CHECKMARK} Excellent choice!${NC} Using: ${BOLD}Latest Stable${NC}"
+                echo -e "   ${GREEN}✓ Excellent choice!${NC} Using: ${BOLD}Latest Stable${NC}"
                 echo -e "   ${DIM}The most reliable version will be fetched during deployment.${NC}"
                 break
                 ;;
             2) 
-                version_tag="latest"
-                echo -e "   ${YELLOW}${CHECKMARK} Development version selected!${NC} Using: ${BOLD}Latest Development${NC}"
-                echo -e "   ${YELLOW}✓  Note:${NC} This may include beta features and should be used for testing"
-                break
-                ;;
-            3) 
-                echo -e "   ${BLUE}${CHECKMARK} Custom version selected!${NC}"
+                echo -e "   ${BLUE}✓ Custom version selected!${NC}"
                 
                 # Loop until a valid version is entered
                 while true; do
@@ -1613,7 +1549,7 @@ setup_generate_configuration_interactive() {
                 break
                 ;;
             *) 
-                echo -e "   ${RED}${CROSSMARK} Please choose 1, 2, or 3${NC}"
+                echo -e "   ${RED}✗ Please choose 1 or 2${NC}"
                 echo
                 ;;
         esac
@@ -1621,15 +1557,17 @@ setup_generate_configuration_interactive() {
     echo
     
     # Enhanced configuration summary with visual appeal
-    echo -e "${BOLD}${PURPLE}✓${NC}"
-    echo -e "${BOLD}${PURPLE}                ✓ Your Configuration Summary${NC}"
-    echo -e "${BOLD}${PURPLE}✓${NC}"
-    echo
-    echo -e "   ${BOLD}Domain:${NC}        ${CYAN}$domain${NC}"
-    echo -e "   ${BOLD}Admin Email:${NC}   ${CYAN}$email${NC}"
-    echo -e "   ${BOLD}SSL Security:${NC}  ${CYAN}$ssl_mode${NC}"
-    echo -e "   ${BOLD}Milou Version:${NC} ${CYAN}$version_tag${NC}"
-    echo
+    local summary_panel
+    summary_panel=$(cat <<EOF
+Your Configuration Summary:
+- Domain:         $domain
+- Admin Email:    $email
+- SSL Security:   $ssl_mode
+- Milou Version:  $version_tag
+EOF
+)
+    milou_log "PANEL" "$summary_panel"
+
     echo -e "${GREEN}${CHECKMARK} Everything looks perfect! Generating your configuration...${NC}"
     echo
     
@@ -2189,6 +2127,7 @@ handle_setup_modular() {
     local clean="false"
     local fix_credentials="false"
     local github_token=""
+    local from_installer="false"
     
     # Parse command line options
     while [[ $# -gt 0 ]]; do
@@ -2209,6 +2148,10 @@ handle_setup_modular() {
             --repair)
                 mode="repair"
                 preserve_creds="true"  # Always preserve credentials in repair mode
+                shift
+                ;;
+            --from-installer)
+                from_installer="true"
                 shift
                 ;;
             --preserve-creds|--preserve-credentials)
@@ -2359,7 +2302,7 @@ handle_setup_modular() {
     fi
     
     # Run main setup with parsed options
-    setup_run "$force" "$mode" "$skip_validation" "$preserve_creds"
+    setup_run "$force" "$mode" "$skip_validation" "$preserve_creds" "$from_installer"
 }
 
 # Show setup help

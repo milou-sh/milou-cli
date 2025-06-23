@@ -130,11 +130,10 @@ function show_contextual_help() {
             echo
             echo -e "${BOLD}Getting Started:${NC}"
             echo "  setup                           Install Milou on this system"
-            echo "  setup --help                    See all installation options"
             echo
             echo -e "${BOLD}System Information:${NC}"
             echo "  status                          Check system requirements"
-            echo "  --version                       Show version information"
+            echo "  version                         Show version information"
             ;;
         "running")
             echo -e "${GREEN}✅ Milou is Running${NC}"
@@ -153,8 +152,10 @@ function show_contextual_help() {
             echo "  stop                            Stop all services"
             echo
             echo -e "${BOLD}Administration:${NC}"
-            echo "  admin credentials               Manage admin credentials"
-            echo "  config show                     Show current configuration"
+            echo "  admin                           Manage admin credentials"
+            echo "  config                          Manage CLI configuration"
+            echo "  user                            Manage the 'milou' system user"
+            echo "  ssl                             Manage SSL certificates"
             echo "  shell <service>                 Access service shell"
             ;;
         "installed_stopped")
@@ -183,7 +184,6 @@ function show_contextual_help() {
             echo
             echo -e "${BOLD}Repair Options:${NC}"
             echo "  setup --repair                  Attempt to repair installation"
-            echo "  setup --force                   Reinstall (⚠️  may lose data)"
             echo "  restore <backup>                Restore from backup"
             echo "  recovery list                   Show available snapshots"
             echo "  recovery restore <id>           Restore from system snapshot"
@@ -191,7 +191,7 @@ function show_contextual_help() {
             echo -e "${BOLD}Diagnosis:${NC}"
             echo "  status                          Show detailed system status"
             echo "  version                         Show system version info"
-            echo "  logs                           Check error logs"
+            echo "  logs                            Check error logs"
             ;;
         *)
             echo -e "${BOLD}Usage:${NC}"
@@ -206,6 +206,10 @@ function show_contextual_help() {
             echo "  update                          Update system"
             echo "  backup/restore                  Data management"
             echo "  recovery                        System recovery and snapshots"
+            echo "  admin                           Manage admin credentials"
+            echo "  config                          Manage CLI configuration"
+            echo "  user                            Manage the 'milou' system user"
+            echo "  ssl                             Manage SSL certificates"
             ;;
     esac
     
@@ -1150,9 +1154,19 @@ function main() {
             handle_smart_setup "$@"
             ;;
         status)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou status"
+                echo "Shows the status of all services, similar to 'docker-compose ps'."
+                exit 0
+            fi
             handle_smart_status "$@"
             ;;
         version)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou version"
+                echo "Displays the version of the Milou CLI."
+                exit 0
+            fi
             # Load update module for comprehensive version info
             if source "${SRC_DIR}/_update.sh" 2>/dev/null; then
                 if command -v handle_version >/dev/null 2>&1; then
@@ -1165,6 +1179,11 @@ function main() {
             fi
             ;;
         update-status)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou update-status"
+                echo "Checks for available updates for the Milou services."
+                exit 0
+            fi
             # Show detailed update information
             source "${SRC_DIR}/_update.sh" || { echo "Update module not available"; exit 1; }
             if command -v handle_update_status >/dev/null 2>&1; then
@@ -1175,45 +1194,129 @@ function main() {
             fi
             ;;
         start)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou start"
+                echo "Starts all Milou services in the background."
+                exit 0
+            fi
             handle_docker_command "start" "$@"
             ;;
         stop)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou stop"
+                echo "Stops all running Milou services."
+                exit 0
+            fi
             handle_docker_command "stop" "$@"
             ;;
         restart)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou restart"
+                echo "Restarts all Milou services."
+                exit 0
+            fi
             handle_docker_command "restart" "$@"
             ;;
         logs)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou logs [options] [service...]"
+                echo "Fetches and displays logs from services."
+                echo "Supports standard 'docker-compose logs' options like --follow and --tail."
+                exit 0
+            fi
             handle_docker_command "logs" "$@"
             ;;
         backup)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_backup.sh" || exit 1
+                if command -v show_backup_help >/dev/null 2>&1; then
+                    show_backup_help
+                    exit 0
+                fi
+            fi
             handle_backup_command "$@"
             ;;
         restore)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_backup.sh" || exit 1
+                if command -v show_backup_help >/dev/null 2>&1; then
+                    show_backup_help
+                    exit 0
+                fi
+            fi
             handle_restore_command "$@"
             ;;
         update)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_update.sh" || exit 1
+                handle_update --help
+                exit 0
+            fi
             handle_update_command "$@"
             ;;
         self-update)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_update.sh" || exit 1
+                handle_update --help
+                exit 0
+            fi
             handle_update_command "$@"
             ;;
         admin)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_admin.sh" || exit 1
+                handle_admin "help"
+                exit 0
+            fi
             handle_admin_command "$@"
             ;;
         config)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou config <subcommand>"
+                echo "Manages the CLI configuration."
+                echo ""
+                echo "Subcommands:"
+                echo "  show      - Display the current configuration"
+                echo "  validate  - Validate the current .env configuration"
+                exit 0
+            fi
             handle_config_command "$@"
             ;;
         user)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_user.sh" || exit 1
+                show_user_management_help
+                exit 0
+            fi
             handle_user_command "$@"
             ;;
         ssl)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou ssl <subcommand>"
+                echo "Manages SSL certificates."
+                echo ""
+                echo "Subcommands:"
+                echo "  status    - Check the status of the current SSL certificates"
+                echo "  generate  - Generate a new self-signed certificate"
+                echo "  setup     - Run the interactive SSL setup wizard"
+                exit 0
+            fi
             handle_ssl_command "$@"
             ;;
         health)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou health"
+                echo "Performs a health check on all running services."
+                exit 0
+            fi
             handle_docker_command "health" "$@"
             ;;
         shell)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                echo "Usage: milou shell <service> [command...]"
+                echo "Accesses the shell of a running service container."
+                exit 0
+            fi
             handle_docker_command "shell" "$@"
             ;;
         help)
@@ -1221,6 +1324,11 @@ function main() {
             show_contextual_help "$current_state"
             ;;
         recovery)
+            if [[ "$*" == *--help* ]] || [[ "$*" == *-h* ]]; then
+                source "${SRC_DIR}/_error_recovery.sh" || exit 1
+                handle_recovery_command "help"
+                exit 0
+            fi
             handle_recovery_command "$@"
             ;;
         *)

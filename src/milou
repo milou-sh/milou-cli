@@ -5,10 +5,10 @@
 # =============================================================================
 # Milou CLI - Main Entry Point
 # Professional command-line interface with intelligent state detection
-# Version: 4.0.0 - Smart State-Based Architecture
+# Version: 1.0.0 - Smart State-Based Architecture
 # =============================================================================
 
-VERSION="4.0.0"
+VERSION="1.0.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -716,7 +716,6 @@ _check_status_updates() {
     else
         # No updates needed or API failed
         echo "✅ All services appear to be up to date"
-        echo "💡 Run 'milou update-status' for detailed information"
     fi
 }
 

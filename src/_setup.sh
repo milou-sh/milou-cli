@@ -110,7 +110,7 @@ setup_show_logo() {
     
 EOF
         echo -e "${NC}"
-        log_header "Professional Docker Management - v$VERSION"
+        log_header "The tool for the lazy - v$VERSION"
         log_info "Welcome to the Milou setup wizard. Let's get your environment configured."
         echo
     fi

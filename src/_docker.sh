@@ -1596,12 +1596,13 @@ docker_get_services_status() {
         return 1
     fi
 
-    local project_name="${DOCKER_PROJECT_NAME:-milou-static}"
-
     # Get all container info in one go for efficiency
+    # FIXED: Use a hardcoded "milou-" prefix for the filter, as all container_name
+    # entries in the docker-compose.yml start with this. The project name from
+    # the .env file (milou-static) is not used for container naming in this setup.
     local container_data
     container_data=$(docker ps -a \
-        --filter "name=${project_name}-" \
+        --filter "name=milou-" \
         --format '{{.Names}}|{{.ID}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' 2>/dev/null)
         
     if [[ -z "$container_data" ]]; then
@@ -1613,11 +1614,9 @@ docker_get_services_status() {
     # Process the data
     local services_json="[]"
     while IFS='|' read -r name id image state status ports; do
-        # Extract service name by removing the project prefix
-        local service_name=${name##*${project_name}-}
-        # Further strip the numeric suffix (e.g., "-1")
-        service_name=${service_name%-*}
-
+        # Extract service name by removing the hardcoded "milou-" prefix
+        local service_name=${name##*milou-}
+        
         local image_tag=${image##*:}
         
         # Prettify status

@@ -51,6 +51,14 @@ if [[ "${MILOU_DOCKER_LOADED:-}" != "true" ]]; then
     }
 fi
 
+if [[ "${MILOU_UPDATE_LOADED:-}" != "true" ]]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source "${script_dir}/_update.sh" || {
+        echo "ERROR: Cannot load update module" >&2
+        return 1
+    }
+fi
+
 # ============================================================================
 # HELPER: Sanitize .env file to remove invalid lines before sourcing
 # ============================================================================
@@ -1559,16 +1567,49 @@ setup_generate_configuration_interactive() {
                 ;;
             3) 
                 echo -e "   ${BLUE}${CHECKMARK} Custom version selected!${NC}"
-                echo -e "   ${DIM}Enter the exact version tag (e.g., 1.0.0, 2.1.3):${NC}"
-                echo -ne "   ${BOLD}Version tag:${NC} "
-                read -r custom_version
-                if [[ -n "$custom_version" ]]; then
-                    version_tag="$custom_version"
-                    echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom version: ${BOLD}$version_tag${NC}"
-                else
-                    echo -e "   ${RED}${CROSSMARK} No version entered, defaulting to stable${NC}"
-                    version_tag="stable"
-                fi
+                
+                # Loop until a valid version is entered
+                while true; do
+                    echo -e "   ${DIM}Enter the exact version tag (e.g., 1.0.0, 2.1.3):${NC}"
+                    echo -ne "   ${BOLD}Version tag:${NC} "
+                    read -r custom_version
+                    if [[ -z "$custom_version" ]]; then
+                        milou_log "WARN" "No version entered. Please provide a version tag."
+                        continue
+                    fi
+
+                    # Ensure we have a token before we can validate
+                    if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+                         if ! core_require_github_token "" "true"; then
+                             milou_log "ERROR" "A GitHub token is required to verify the version. Setup cannot continue."
+                             return 1
+                         fi
+                    fi
+
+                    milou_log "INFO" "🔍 Verifying if version '$custom_version' exists for all services..."
+                    
+                    local all_versions_exist=true
+                    local missing_for_services=()
+                    for service in "${MILOU_SERVICE_LIST[@]}"; do
+                        local available_versions
+                        available_versions=$(get_all_available_versions "$service" "${GITHUB_TOKEN}")
+                        if ! [[ "$available_versions" =~ (^|,)$custom_version(,|$) ]]; then
+                            all_versions_exist=false
+                            missing_for_services+=("$service")
+                        fi
+                        sleep 0.1 # Prevent hitting API rate limits
+                    done
+                    
+                    if [[ "$all_versions_exist" == "true" ]]; then
+                        version_tag="$custom_version"
+                        echo -e "   ${GREEN}${CHECKMARK}${NC} Version ${BOLD}$version_tag${NC} is valid and available for all services."
+                        break # Exit validation loop
+                    else
+                        milou_log "ERROR" "Version '$custom_version' is not available for the following service(s): ${missing_for_services[*]}"
+                        milou_log "INFO" "Please enter a different version tag or choose another option (Ctrl+C to exit)."
+                    fi
+                done
+                
                 break
                 ;;
             *) 
@@ -1605,19 +1646,16 @@ setup_generate_configuration_interactive() {
     # DEBUG: show chosen version strategy
     milou_log "DEBUG" "Version selection: tag=$version_tag, use_latest_images=$use_latest_images"
     
-    # FIXED: Acquire GitHub token just-in-time if dynamic versions are needed.
-    if [[ "$use_latest_images" == "true" ]]; then
-        milou_log "INFO" "🔑 A GitHub token is required now to resolve concrete service versions."
-        
-        # Call the core function which contains the detailed prompt. This avoids duplication.
-        if ! core_require_github_token "${GITHUB_TOKEN:-}" "true"; then
-            milou_log "ERROR" "A valid GitHub token is required to proceed."
-            return 1
-        fi
-        export MILOU_GITHUB_TOKEN="${GITHUB_TOKEN}"
-        
-        milou_log "DEBUG" "GitHub token obtained and exported."
+    # Acquire GitHub token. It's always needed to pull images, and sometimes to resolve 'latest' tags.
+    milou_log "INFO" "🔑 A GitHub token is required to pull images from the registry."
+
+    # Call the core function which contains the detailed prompt. This avoids duplication.
+    if ! core_require_github_token "${GITHUB_TOKEN:-}" "true"; then
+        milou_log "ERROR" "A valid GitHub token is required to proceed."
+        return 1
     fi
+    export MILOU_GITHUB_TOKEN="${GITHUB_TOKEN}"
+    milou_log "DEBUG" "GitHub token obtained and exported."
     
     # Call with correct positional arguments: quiet flag, preserve_creds, use_latest_images
     if config_generate "$domain" "$email" "$ssl_mode" "false" "$preserve_creds" "false" "$use_latest_images"; then

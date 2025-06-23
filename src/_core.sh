@@ -260,6 +260,10 @@ log_step() {
     milou_log "STEP" "$@"
 }
 
+log_header() {
+    milou_log "HEADER" "$@"
+}
+
 log_info() {
     milou_log "INFO" "$@"
 }
@@ -930,6 +934,7 @@ _safe_export() {
 # Core logging
 _safe_export milou_log
 _safe_export log_step
+_safe_export log_header
 _safe_export log_info
 _safe_export log_error
 _safe_export log_success

@@ -922,110 +922,58 @@ service_update_zero_downtime() {
     local service="${1:-}"
     local quiet="${2:-false}"
     
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Starting zero-downtime update for: ${service:-all services}"
+    if [[ -z "$service" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "service_update_zero_downtime requires a service name."
+        return 1
+    fi
+    
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Starting zero-downtime update for: $service"
     
     # Create backup snapshot
     if command -v create_system_snapshot >/dev/null 2>&1; then
-        if ! create_system_snapshot "update_${service:-all}_$(date +%s)" "$quiet"; then
+        if ! create_system_snapshot "update_${service}_$(date +%s)" "$quiet"; then
             [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Could not create backup snapshot"
         fi
     fi
     
-    # Pull latest images first
+    # Pull the specific image for the service
     if ! docker_execute "pull" "$service" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull latest images"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull new image for $service"
         return 1
     fi
     
-    # Perform rolling update
-    if [[ -n "$service" ]]; then
-        # Single service update
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
-        
-        # FIXED: Better error handling for zero-downtime updates
-        # Check if service is already running first
-        local service_was_running=false
+    # Perform rolling update for the single service
+    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
+    
+    local result_output
+    result_output=$(docker_compose up -d --remove-orphans --no-deps "$service" 2>&1)
+    local exit_code=$?
+    
+    if [[ $exit_code -ne 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to update service: $service"
+        docker_handle_startup_error "$result_output" "$service" "$quiet"
+        return 1
+    fi
+    
+    # Wait for the updated service to become healthy
+    local retries=12
+    local wait_interval=5
+    local healthy=false
+    while [[ $retries -gt 0 ]]; do
         if health_check_service "$service" "true"; then
-            service_was_running=true
-            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Service $service is currently running"
+            healthy=true
+            break
         fi
-        
-        # Use docker compose up with better error handling
-        local result_output
-        result_output=$(docker_compose up -d --remove-orphans --no-deps "$service" 2>&1)
-        local exit_code=$?
-        
-        # FIXED: Don't trigger network error for successful updates
-        if [[ $exit_code -ne 0 ]]; then
-            # Only report error if the actual Docker command failed
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to update service: $service"
-            
-            # Show actual error details for debugging
-            if [[ ${#result_output} -gt 0 ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Docker output: $result_output"
-            fi
-            
-            # Only trigger error handler for real failures
-            docker_handle_startup_error "$result_output" "$service" "$quiet"
-            return 1
-        else
-            # Success case - log the output for transparency but don't treat as error
-            [[ "$quiet" != "true" && -n "$result_output" ]] && milou_log "DEBUG" "Docker compose output: $result_output"
-        fi
-        
-        # Give the container some time to initialise on first start (especially for newly installed services)
-        local retries=12   # ~= 1 minute total (12 × 5 s)
-        local wait_interval=5
-        local healthy=false
-        while [[ $retries -gt 0 ]]; do
-            if health_check_service "$service" "true"; then
-                healthy=true
-                break
-            fi
-            sleep "$wait_interval"
-            ((retries--))
-        done
+        sleep "$wait_interval"
+        ((retries--))
+    done
 
-        if [[ "$healthy" == "true" ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service updated successfully with zero downtime"
-            return 0
-        else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service failed health check after waiting"
-            return 1
-        fi
+    if [[ "$healthy" == "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service $service updated successfully with zero downtime"
+        return 0
     else
-        # Multi-service rolling update
-        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Performing rolling update of all services"
-        
-        # Get all services
-        local services=()
-        while IFS= read -r svc; do
-            [[ -n "$svc" ]] && services+=("$svc")
-        done < <(docker_compose config --services 2>/dev/null)
-        
-        local failed_services=()
-        
-        # Update each service individually
-        for svc in "${services[@]}"; do
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $svc"
-            
-            # Use the fixed single-service update logic
-            if service_update_zero_downtime "$svc" "true"; then
-                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $svc updated successfully"
-            else
-                [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $svc update failed"
-                failed_services+=("$svc")
-            fi
-        done
-        
-        # Report results
-        if [[ ${#failed_services[@]} -eq 0 ]]; then
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 All services updated successfully with zero downtime"
-            return 0
-        else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Some services failed to update: ${failed_services[*]}"
-            return 1
-        fi
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Updated service $service failed health check"
+        return 1
     fi
 }
 

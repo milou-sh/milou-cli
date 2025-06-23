@@ -234,15 +234,33 @@ display_system_versions() {
         local remote_version_display="${RED}Unknown${NC}"
         if [[ -n "$github_token" ]]; then
             local remote_version
-            remote_version=$(get_latest_registry_version "$service" "$github_token" "true")
-            if [[ -n "$remote_version" ]]; then
-                if [[ "$current_version" == "$remote_version" ]]; then
-                    remote_version_display="${GREEN}v$remote_version (up-to-date)${NC}"
+            
+            # If a specific target version is requested, check against that
+            if [[ -n "$target_version" && "$target_version" != "latest" && "$target_version" != "stable" ]]; then
+                local available_versions
+                available_versions=$(get_all_available_versions "$service" "$github_token")
+                
+                if [[ "$available_versions" =~ (^|,)$target_version(,|$) ]]; then
+                    if [[ "$current_version" == "$target_version" ]]; then
+                         remote_version_display="${GREEN}v$target_version (up-to-date)${NC}"
+                    else
+                        remote_version_display="${YELLOW}v$target_version ${BOLD}(Update Target)${NC}"
+                    fi
                 else
-                    remote_version_display="${YELLOW}v$remote_version ${BOLD}(Update Available)${NC}"
+                    remote_version_display="${DIM}v$target_version (unavailable)${NC}"
                 fi
             else
-                remote_version_display="${RED}API Error${NC}"
+                # Otherwise, check against the latest version
+                remote_version=$(get_latest_registry_version "$service" "$github_token" "true")
+                if [[ -n "$remote_version" ]]; then
+                    if [[ "$current_version" == "$remote_version" ]]; then
+                        remote_version_display="${GREEN}v$remote_version (up-to-date)${NC}"
+                    else
+                        remote_version_display="${YELLOW}v$remote_version ${BOLD}(Update Available)${NC}"
+                    fi
+                else
+                    remote_version_display="${RED}API Error${NC}"
+                fi
             fi
         fi
 
@@ -346,9 +364,7 @@ check_updates_needed() {
     # Analyze what needs updating
     local updates_needed_count=0
     local services_to_update=()
-    local -a update_analysis_table=()
-    update_analysis_table+=("${BOLD}SERVICE|CURRENT|TARGET|STATUS${NC}")
-
+    
     for service in "${services_to_process[@]}"; do
         local current_version="${service_current_versions[$service]}"
         local target_version_for_service="${service_target_versions[$service]:-}"
@@ -361,67 +377,35 @@ check_updates_needed() {
         
         local needs_action=false
         local reason=""
-        local reason_color=""
         
         if [[ -z "$current_version" || "$current_version" == "latest" ]]; then
             needs_action=true
-            reason="INSTALL"
-            reason_color="$CYAN"
+            reason="INSTALL → v$target_version_for_service"
         elif [[ "$current_version" != "$target_version_for_service" ]]; then
             needs_action=true
             if compare_semver_versions "$current_version" "$target_version_for_service"; then
-                reason="UPGRADE"
-                reason_color="$YELLOW"
+                reason="UPGRADE: v$current_version → v$target_version_for_service"
             else
-                reason="DOWNGRADE"
-                reason_color="$YELLOW"
+                reason="DOWNGRADE: v$current_version → v$target_version_for_service"
             fi
         elif [[ "$service_status" != "running" ]]; then
             needs_action=true
-            reason="START"
-            reason_color="$BLUE"
+            reason="START: v$current_version (correct version, not running)"
         elif [[ "$force_all" == "true" ]]; then
             needs_action=true
-            reason="FORCE UPDATE"
-            reason_color="$PURPLE"
+            reason="FORCE UPDATE: v$current_version → v$target_version_for_service"
         else
-            reason="UP-TO-DATE"
-            reason_color="$GREEN"
+            reason="UP-TO-DATE: v$current_version (running)"
         fi
-        
-        needs_update["$service"]="$needs_action"
-        update_reasons["$service"]="$reason"
-        
-        update_analysis_table+=("$service|v$current_version|v$target_version_for_service|${reason_color}${reason}${NC}")
         
         if [[ "$needs_action" == "true" ]]; then
             ((updates_needed_count++))
             services_to_update+=("$service")
+            milou_log "INFO" "      📦 $service: $reason"
+        else
+            [[ "${VERBOSE:-false}" == "true" ]] && milou_log "DEBUG" "      ✅ $service: $reason"
         fi
     done
-
-    # Display the analysis in a clean table format
-    echo
-    if command -v column >/dev/null 2>&1; then
-        (
-          IFS=$'\n'
-          echo -e "${update_analysis_table[*]}"
-        ) | column -t -s '|' | sed 's/^/  /'
-    else
-        # Fallback for systems without 'column'
-        local header_printed=false
-        for row in "${update_analysis_table[@]}"; do
-            IFS='|' read -r s c t r <<< "$row"
-            if ! "$header_printed"; then
-                printf "  %-15s %-15s %-15s %-15s\n" "$(echo -e "$s")" "$(echo -e "$c")" "$(echo -e "$t")" "$(echo -e "$r")"
-                echo "  -----------------------------------------------------------------"
-                header_printed=true
-            else
-                printf "  %-15s %-15s %-15s %-15s\n" "$s" "$c" "$t" "$(echo -e "$r")"
-            fi
-        done
-    fi
-    echo
     
     # Export results
     if [[ "$updates_needed_count" -gt 0 ]]; then

@@ -284,7 +284,8 @@ check_updates_needed() {
     # Get current state
     get_running_service_versions "$quiet"
     
-    local services=("${MILOU_SERVICE_LIST[@]}")
+    local services=("${DEFAULT_SERVICES[@]}")
+    local services_to_process=("${DEFAULT_SERVICES[@]}")
     local -A service_target_versions=()
     local -A service_current_versions=()
     local -A service_statuses=()
@@ -316,46 +317,45 @@ check_updates_needed() {
             fi
         done
     else
-        # For specific version, use that version for ALL services (this was broken before)
-        milou_log "INFO" "   🎯 Setting target version $target_version for ALL services..."
-        
+        # For a specific version, find which services have this version available
+        milou_log "INFO" "   🎯 Checking for services with target version: v$target_version..."
+        local services_with_target_version=()
         for service in "${services[@]}"; do
-            service_target_versions["$service"]="$target_version"
+            if [[ -n "$github_token" ]]; then
+                local available_versions
+                available_versions=$(get_all_available_versions "$service" "$github_token")
+                if [[ "$available_versions" =~ (^|,)$target_version(,|$) ]]; then
+                    services_with_target_version+=("$service")
+                    service_target_versions["$service"]="$target_version"
+                fi
+            else
+                services_with_target_version+=("$service")
+                service_target_versions["$service"]="$target_version"
+            fi
         done
+        
+        if [[ ${#services_with_target_version[@]} -eq 0 ]]; then
+            milou_log "WARN" "No services found with version v$target_version in the registry."
+            return 1
+        fi
+        
+        services_to_process=("${services_with_target_version[@]}")
+        milou_log "INFO" "   Found ${#services_to_process[@]} service(s) with version v$target_version: ${services_to_process[*]}"
     fi
     
     # Analyze what needs updating
     local updates_needed_count=0
     local services_to_update=()
-    local services_skipped=()
-    
-    for service in "${services[@]}"; do
+    local -a update_analysis_table=()
+    update_analysis_table+=("SERVICE|CURRENT|TARGET|STATUS")
+
+    for service in "${services_to_process[@]}"; do
         local current_version="${service_current_versions[$service]}"
         local target_version_for_service="${service_target_versions[$service]:-}"
         local service_status="${service_statuses[$service]}"
         
         # Skip if no target version determined
         if [[ -z "$target_version_for_service" ]]; then
-            services_skipped+=("$service")
-            continue
-        fi
-        
-        # Before checking versions, let's validate the target version exists
-        local version_exists=false
-        if [[ -n "$github_token" ]]; then
-            local available_versions
-            available_versions=$(get_all_available_versions "$service" "$github_token")
-            if [[ "$available_versions" =~ (^|,)$target_version_for_service(,|$) ]]; then
-                version_exists=true
-            fi
-        else
-            # If no token, we can't validate, so we assume it exists and let the pull fail later
-            version_exists=true
-        fi
-
-        if [[ "$version_exists" != "true" ]]; then
-            milou_log "WARN" "      ❌ $service: Target version v$target_version_for_service is NOT available in the registry. Skipping."
-            services_skipped+=("$service")
             continue
         fi
         
@@ -364,35 +364,49 @@ check_updates_needed() {
         
         if [[ -z "$current_version" || "$current_version" == "latest" ]]; then
             needs_action=true
-            reason="INSTALL → v$target_version_for_service"
+            reason="INSTALL"
         elif [[ "$current_version" != "$target_version_for_service" ]]; then
             needs_action=true
             if compare_semver_versions "$current_version" "$target_version_for_service"; then
-                reason="UPGRADE: v$current_version → v$target_version_for_service"
+                reason="UPGRADE"
             else
-                reason="DOWNGRADE: v$current_version → v$target_version_for_service"
+                reason="DOWNGRADE"
             fi
         elif [[ "$service_status" != "running" ]]; then
             needs_action=true
-            reason="START: v$current_version (correct version, not running)"
+            reason="START"
         elif [[ "$force_all" == "true" ]]; then
             needs_action=true
-            reason="FORCE UPDATE: v$current_version → v$target_version_for_service"
+            reason="FORCE UPDATE"
         else
-            reason="UP-TO-DATE: v$current_version (running)"
+            reason="UP-TO-DATE"
         fi
         
         needs_update["$service"]="$needs_action"
         update_reasons["$service"]="$reason"
         
+        update_analysis_table+=("$service|v$current_version|v$target_version_for_service|$reason")
+        
         if [[ "$needs_action" == "true" ]]; then
             ((updates_needed_count++))
             services_to_update+=("$service")
-            milou_log "INFO" "      📦 $service: $reason"
-        else
-            [[ "${VERBOSE:-false}" == "true" ]] && milou_log "DEBUG" "      ✅ $service: $reason"
         fi
     done
+
+    # Display the analysis in a clean table format
+    echo
+    if command -v column >/dev/null 2>&1; then
+        printf "%s\n" "${update_analysis_table[@]}" | column -t -s '|'
+    else
+        # Fallback for systems without 'column'
+        printf "%-15s %-15s %-15s %-15s\n" "SERVICE" "CURRENT" "TARGET" "STATUS"
+        echo "-----------------------------------------------------------------"
+        for row in "${update_analysis_table[@]:1}"; do
+            IFS='|' read -r s c t r <<< "$row"
+            printf "%-15s %-15s %-15s %-15s\n" "$s" "$c" "$t" "$r"
+        done
+    fi
+    echo
     
     # Export results
     if [[ "$updates_needed_count" -gt 0 ]]; then
@@ -403,14 +417,10 @@ check_updates_needed() {
             export "$var_name"="${service_target_versions[$service]}"
         done
         
-        echo
-        milou_log "INFO" "🔄 Updates needed for $updates_needed_count service(s): ${services_to_update[*]}"
-        [[ ${#services_skipped[@]} -gt 0 ]] && milou_log "WARN" "⚠️  Skipped: ${services_skipped[*]}"
-        
+        milou_log "INFO" "🔄 Updates will be applied for $updates_needed_count service(s): ${services_to_update[*]}"
         return 0
     else
-        milou_log "SUCCESS" "✅ All services are up to date and running"
-        [[ ${#services_skipped[@]} -gt 0 ]] && milou_log "WARN" "⚠️  Skipped: ${services_skipped[*]}"
+        milou_log "SUCCESS" "✅ All services are up-to-date and running"
         return 1
     fi
 }
@@ -567,7 +577,7 @@ milou_update_system() {
         # skip_registry_operations=true
     else
         # Validate GitHub token for update operations
-        milou_log "INFO" "🔐 Validating GitHub token for update operations..."
+        milou_log "INFO" "🔐 Authenticating with GitHub Container Registry..."
         
         # Use core_require_github_token to ensure token is valid and persisted
         if ! core_require_github_token "$github_token" "false"; then
@@ -581,7 +591,7 @@ milou_update_system() {
         # Perform Docker registry authentication
         if command -v docker_login_github >/dev/null 2>&1; then
             if docker_login_github "$github_token" "false" "true"; then
-                milou_log "SUCCESS" "✅ GitHub authentication successful"
+                milou_log "SUCCESS" "✅ Authentication successful"
                 export GITHUB_AUTHENTICATED="true"
             else
                 milou_log "ERROR" "❌ GitHub authentication failed"

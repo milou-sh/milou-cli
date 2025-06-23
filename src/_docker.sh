@@ -308,7 +308,7 @@ docker_login_github() {
     
     if [[ $login_exit_code -eq 0 ]]; then
         login_successful=true
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry"
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Successfully authenticated with GitHub Container Registry"
     else
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "oauth2 login failed, trying token as username..."
         
@@ -318,7 +318,7 @@ docker_login_github() {
         
         if [[ $login_exit_code -eq 0 ]]; then
             login_successful=true
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Successfully authenticated with GitHub Container Registry (fallback method)"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Successfully authenticated with GitHub Container Registry (fallback method)"
         fi
     fi
     
@@ -385,7 +385,7 @@ docker_login_github() {
             [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️ Token authenticated but lacks repository permissions"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Ensure token has 'read:packages' scope and repository access"
         else
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 Full GitHub Container Registry access verified"
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🎉 Full GitHub Container Registry access verified"
         fi
     fi
     
@@ -485,6 +485,9 @@ docker_init() {
         if [[ -n "$github_token" ]]; then
             if ! docker_login_github "$github_token" "$quiet"; then
                 [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub authentication failed, but continuing..."
+            else
+                # Single success message after successful login and validation
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Authenticated with GitHub Container Registry"
             fi
         else
             [[ "$quiet" != "true" ]] && milou_log "DEBUG" "No GitHub token available, skipping authentication"

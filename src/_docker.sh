@@ -634,7 +634,7 @@ docker_execute() {
             else
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling all service images"
             fi
-            docker_compose pull --no-deps "${additional_args[@]}" ${service:+"$service"}
+            docker_compose pull "${additional_args[@]}" ${service:+"$service"}
             ;;
         "logs")
             docker_compose logs "${additional_args[@]}" ${service:+"$service"}
@@ -932,7 +932,7 @@ service_update_zero_downtime() {
     fi
     
     # Pull latest images first
-    if ! docker_execute "pull" "" "$quiet" "$service"; then
+    if ! docker_execute "pull" "$service" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull latest images"
         return 1
     fi

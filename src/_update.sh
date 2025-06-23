@@ -543,7 +543,7 @@ milou_update_system() {
     fi
 
     # Primary env file reference (needed later for mutable-tag guard)
-    local env_file="${script_dir}/.env"
+    local env_file="${SCRIPT_DIR}/.env"
     
     # Ensure we have a valid GitHub token for update operations
     if [[ -z "$github_token" ]]; then
@@ -680,6 +680,7 @@ _perform_fixed_update() {
         # Update .env file
         _update_env_file_service_version "$service" "$service_target_version"
         
+        
         # Get actual service name for Docker operations
         local actual_service_name="${SERVICE_NAME_MAP[$service]:-$service}"
         
@@ -740,7 +741,7 @@ _update_env_file_service_version() {
             return 1 ;;
     esac
 
-    local env_file="${script_dir}/.env"
+    local env_file="${SCRIPT_DIR}/.env"
     core_update_env_var "$env_file" "$tag_name" "$target_version"
 }
 

@@ -82,33 +82,33 @@ get_running_service_versions() {
     while IFS='|' read -r container_name image_name status || [[ -n "$container_name" ]]; do
         [[ -z "$container_name" || "$container_name" == "NAMES" ]] && continue
         
-        if [[ "$container_name" =~ milou-(.+) ]]; then
-            local service="${BASH_REMATCH[1]}"
-            
-            # Map actual service names to logical names
-            case "$service" in
-                "db") service="database" ;;
-                *) ;;
-            esac
-            
-            # Extract version from image tag
-            local version=""
-            if [[ "$image_name" =~ :([^[:space:]]+)$ ]]; then
-                version="${BASH_REMATCH[1]}"
-                version=$(echo "$version" | tr -d '[:space:]' | sed 's/^v//')
+        # Correctly parse service name from container name
+        local service
+        service=$(echo "$container_name" | sed -e 's/milou-static-//' -e 's/milou-//')
+
+        # Map actual service names to logical names
+        case "$service" in
+            "db") service="database" ;;
+            *) ;;
+        esac
+        
+        # Extract version from image tag
+        local version=""
+        if [[ "$image_name" =~ :([^[:space:]]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            version=$(echo "$version" | tr -d '[:space:]' | sed 's/^v//')
+        fi
+        
+        if [[ -n "$version" ]]; then
+            versions["$service"]="$version"
+            # Determine status
+            local service_status="stopped"
+            if [[ "$status" =~ Up|running ]]; then
+                service_status="running"
+            elif [[ "$status" =~ Restart ]]; then
+                service_status="restarting"
             fi
-            
-            if [[ -n "$version" ]]; then
-                versions["$service"]="$version"
-                # Determine status
-                local service_status="stopped"
-                if [[ "$status" =~ Up|running ]]; then
-                    service_status="running"
-                elif [[ "$status" =~ Restart ]]; then
-                    service_status="restarting"
-                fi
-                statuses["$service"]="$service_status"
-            fi
+            statuses["$service"]="$service_status"
         fi
     done <<< "$container_data"
     
@@ -129,6 +129,13 @@ get_running_service_versions() {
 get_latest_registry_version() {
     # Wrapper maintained for backward compatibility – delegates to core helper.
     local service="$1"; local token="${2:-}"; local quiet="${3:-false}"
+    
+    # Add a guard for missing token
+    if [[ -z "$token" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "GitHub token not provided to get_latest_registry_version"
+        return 1
+    fi
+    
     core_get_latest_service_version "$service" "$token" "$quiet"
 }
 
@@ -284,7 +291,7 @@ check_updates_needed() {
     done
     
     # Determine target versions - THIS IS THE FIXED LOGIC
-    if [[ "$target_version" == "latest" ]]; then
+    if [[ "$target_version" == "latest" || "$target_version" == "stable" ]]; then
         # For "latest", get the actual latest version for each service
         milou_log "INFO" "   🌐 Fetching latest versions from GitHub API..."
         
@@ -302,19 +309,7 @@ check_updates_needed() {
         milou_log "INFO" "   🎯 Setting target version $target_version for ALL services..."
         
         for service in "${services[@]}"; do
-            # Validate that this version exists for each service
-            local available_versions=""
-            if [[ -n "$github_token" ]]; then
-                available_versions=$(get_all_available_versions "$service" "$github_token")
-            fi
-            
-            if [[ -n "$available_versions" ]] && [[ "$available_versions" =~ (^|,)$target_version($|,) ]]; then
-                service_target_versions["$service"]="$target_version"
-                milou_log "INFO" "      ✓ $service: v$target_version is available"
-            else
-                milou_log "WARN" "      ❌ $service: v$target_version is NOT available"
-                # Don't set target version - will be skipped
-            fi
+            service_target_versions["$service"]="$target_version"
         done
     fi
     
@@ -330,6 +325,25 @@ check_updates_needed() {
         
         # Skip if no target version determined
         if [[ -z "$target_version_for_service" ]]; then
+            services_skipped+=("$service")
+            continue
+        fi
+        
+        # Before checking versions, let's validate the target version exists
+        local version_exists=false
+        if [[ -n "$github_token" ]]; then
+            local available_versions
+            available_versions=$(get_all_available_versions "$service" "$github_token")
+            if [[ "$available_versions" =~ (^|,)$target_version_for_service(,|$) ]]; then
+                version_exists=true
+            fi
+        else
+            # If no token, we can't validate, so we assume it exists and let the pull fail later
+            version_exists=true
+        fi
+
+        if [[ "$version_exists" != "true" ]]; then
+            milou_log "WARN" "      ❌ $service: Target version v$target_version_for_service is NOT available in the registry. Skipping."
             services_skipped+=("$service")
             continue
         fi
@@ -617,7 +631,9 @@ _perform_fixed_update() {
     
     # Get services to update from analysis
     local -a services_to_update=()
-    if [[ -n "${MILOU_SERVICES_TO_UPDATE:-}" ]]; then
+    if [[ -n "$specific_services" ]]; then
+        IFS=',' read -ra services_to_update <<< "$specific_services"
+    elif [[ -n "${MILOU_SERVICES_TO_UPDATE:-}" ]]; then
         IFS=' ' read -ra services_to_update <<< "$MILOU_SERVICES_TO_UPDATE"
     else
         milou_log "WARN" "⚠️  No services identified for update"

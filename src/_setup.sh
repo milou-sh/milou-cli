@@ -308,7 +308,7 @@ _setup_run_repair() {
     
     # We directly call config_generate, skipping interactive part.
     # The 'true' for preserve_creds is critical.
-    if ! config_generate "$domain" "$admin_email" "$ssl_mode" "false" "true" "false"; then
+    if ! config_generate "$domain" "$admin_email" "$ssl_mode" "false" "true" "false" "true"; then
         log_error "Configuration regeneration failed."
         return 1
     fi
@@ -1619,13 +1619,8 @@ setup_generate_configuration_interactive() {
         milou_log "DEBUG" "GitHub token obtained and exported."
     fi
     
-    # Set an env flag so config_generate knows we need per-service latest versions
-    if [[ "$use_latest_images" == "true" ]]; then
-        export AUTO_RESOLVE_LATEST_IMAGES="true"
-    fi
-    
-    # Call with correct positional arguments: quiet flag first
-    if config_generate "$domain" "$email" "$ssl_mode" "false" "$preserve_creds" "false"; then
+    # Call with correct positional arguments: quiet flag, preserve_creds, use_latest_images
+    if config_generate "$domain" "$email" "$ssl_mode" "false" "$preserve_creds" "false" "$use_latest_images"; then
         milou_log "SUCCESS" "Configuration created successfully"
         
         # Only force container recreation if credentials are NEW (not preserved)
@@ -1657,7 +1652,7 @@ setup_generate_configuration_automated() {
     local ssl_mode="${SSL_MODE:-generate}"
     
     # Always resolve concrete versions when using automated mode (latest/stable)
-    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false" "true"; then
         milou_log "SUCCESS" "✓ Configuration generated successfully"
         
         # Only force container recreation if credentials are NEW (not preserved)
@@ -1696,7 +1691,7 @@ setup_generate_configuration_smart() {
     milou_log "INFO" "✓ Smart defaults: domain=$domain, email=$email, ssl=$ssl_mode"
     
     # Smart mode also wants concrete pinned versions
-    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false"; then
+    if config_generate "$domain" "$email" "$ssl_mode" "true" "$preserve_creds" "false" "true"; then
         milou_log "SUCCESS" "✓ Configuration generated successfully"
         
         # Only force container recreation if credentials are NEW (not preserved)

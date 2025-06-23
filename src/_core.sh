@@ -97,7 +97,7 @@ mark_module_loaded "core" "$(($(date +%s%3N 2>/dev/null || date +%s) - MILOU_MOD
 # =============================================================================
 # Milou CLI - Core Utilities Module
 # Consolidated utilities to eliminate code duplication
-# Version: 3.1.0 - Refactored Edition
+# Version: 1.0.0 - Refactored Edition
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly

@@ -3,7 +3,7 @@
 # =============================================================================
 # Milou CLI - Setup Management Module
 # Consolidated setup operations to eliminate massive code duplication
-# Version: 3.1.0 - Refactored Edition
+# Version: 1.0.0 - Refactored Edition
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly

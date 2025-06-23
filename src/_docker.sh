@@ -3,7 +3,7 @@
 # =============================================================================
 # Milou CLI - Docker Management Module
 # Consolidated Docker operations to eliminate code duplication
-# Version: 3.1.0 - Refactored Edition
+# Version: 1.0.0 - Refactored Edition
 # =============================================================================
 
 # Ensure this script is sourced, not executed directly

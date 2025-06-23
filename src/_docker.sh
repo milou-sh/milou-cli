@@ -630,11 +630,11 @@ docker_execute() {
             ;;
         "pull")
             if [[ -n "$service" ]]; then
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling image for service: $service"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling new image for service: $service (dependencies skipped)"
             else
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "⬇️  Pulling all service images"
             fi
-            docker_compose pull "${additional_args[@]}" ${service:+"$service"}
+            docker_compose pull --no-deps "${additional_args[@]}" ${service:+"$service"}
             ;;
         "logs")
             docker_compose logs "${additional_args[@]}" ${service:+"$service"}

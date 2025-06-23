@@ -203,7 +203,7 @@ display_system_versions() {
     # Simple table rendering
     for row in "${info_table[@]}"; do
         IFS='|' read -r key value <<< "$row"
-        printf "  ${BOLD}%-20s${NC} %s\n" "$key:" "$value"
+        echo -e "  ${BOLD}$(printf '%-20s' "$key:")${NC} $value"
     done
     echo
 
@@ -239,18 +239,29 @@ display_system_versions() {
                 if [[ "$current_version" == "$remote_version" ]]; then
                     remote_version_display="${GREEN}v$remote_version (up-to-date)${NC}"
                 else
-                    remote_version_display="${YELLOW}v$remote_version (update available)${NC}"
+                    remote_version_display="${YELLOW}v$remote_version ${BOLD}(Update Available)${NC}"
                 fi
             else
                 remote_version_display="${RED}API Error${NC}"
             fi
         fi
 
-        printf "  %-14s %-23s %-22s %-18s\n" \
-            "$service" \
-            "$(echo -e "${status_color}${service_status}${NC}")" \
-            "$current_version" \
-            "$remote_version_display"
+        # --- Corrected Printf for Alignment ---
+        local status_formatted
+        status_formatted="$(echo -e "${status_color}${service_status}${NC}")"
+
+        # Print service and status with manual padding
+        printf "  %-14s %s" "$service" "$status_formatted"
+        
+        # Calculate padding for status column
+        local status_padding=$((24 - ${#service_status}))
+        printf "%*s" $status_padding ""
+
+        # Print local version with padding
+        printf "%-22s" "$current_version"
+
+        # Print remote version
+        echo -e "$remote_version_display"
     done
     
     echo

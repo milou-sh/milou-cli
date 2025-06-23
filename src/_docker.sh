@@ -806,7 +806,7 @@ service_start_with_validation() {
 
     # Start the service(s)
     if ! docker_execute "start" "$service" "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Failed to start ${service:-services}"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to start ${service:-services}"
         # Direct log capture for backend failure
         if docker ps -a --format '{{.Names}}' | grep -q "milou-backend"; then
             if docker ps -a --format '{{.Names}}\t{{.Status}}' | grep "milou-backend" | grep -q "unhealthy"; then

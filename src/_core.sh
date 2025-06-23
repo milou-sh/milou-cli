@@ -1063,14 +1063,24 @@ core_get_latest_service_version() {
 core_update_env_var() {
     local file="$1"; local key="$2"; local value="$3"
     [[ -z "$file" || -z "$key" ]] && return 1
+    
+    local temp_file
+    temp_file=$(mktemp)
+    
     mkdir -p "$(dirname "$file")"
     touch "$file"
     chmod 600 "$file" 2>/dev/null || true
+
     if grep -q "^${key}=" "$file" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+        # Use awk for robust replacement
+        awk -v key="$key" -v value="$value" 'BEGIN{FS=OFS="="} $1==key{$2=value}1' "$file" > "$temp_file" && mv "$temp_file" "$file"
     else
-        echo "${key}=${value}" >> "$file"
+        # If key does not exist, append it
+        cp "$file" "$temp_file"
+        echo "${key}=${value}" >> "$temp_file"
+        mv "$temp_file" "$file"
     fi
+    chmod 600 "$file" 2>/dev/null || true
 }
 
 # core_require_github_token [explicit_token] [interactive]

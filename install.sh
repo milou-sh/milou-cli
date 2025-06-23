@@ -6,6 +6,58 @@
 
 set -euo pipefail
 
+# --- Start of UI Library ---
+# A lightweight, self-contained set of UI functions for a consistent look and feel.
+
+# Colors
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly PURPLE='\033[0;35m'
+readonly BOLD='\033[1m'
+readonly DIM='\033[2m'
+readonly NC='\033[0m' # No Color
+
+# Symbols
+readonly CHECKMARK='✔'
+readonly CROSSMARK='✖'
+readonly ROCKET='🚀'
+
+# Logging function
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    
+    [[ "${QUIET:-false}" == "true" ]] && [[ "$level" != "ERROR" ]] && return 0
+
+    case "$level" in
+        ERROR)
+            echo -e "${RED}${BOLD}${CROSSMARK} ERROR:${NC} ${message}" >&2
+            ;;
+        WARN)
+            echo -e "${YELLOW}▲ WARNING:${NC} ${message}" >&2
+            ;;
+        SUCCESS)
+            echo -e "${GREEN}${CHECKMARK} SUCCESS:${NC} ${message}"
+            ;;
+        STEP)
+            echo -e "\n${BLUE}━━━ ${BOLD}Step: ${message}${NC} ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+            ;;
+        INFO)
+            echo -e "${CYAN}→ INFO:${NC} ${message}"
+            ;;
+        *)
+            echo -e "${message}"
+            ;;
+    esac
+}
+
+# --- End of UI Library ---
+
+
 # Determine default installation directory
 get_default_install_dir() {
     local username
@@ -23,20 +75,6 @@ readonly REPO_URL="https://github.com/milou-sh/milou-cli"
 readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
 INSTALL_DIR="${MILOU_INSTALL_DIR:-$(get_default_install_dir)}"
 readonly BRANCH="${MILOU_BRANCH:-main}"
-
-# Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly BOLD='\033[1m'
-readonly DIM='\033[2m'
-readonly NC='\033[0m' # No Color
-
-# Symbols
-readonly CHECKMARK='✓'
-readonly CROSSMARK='✗'
 
 # Global variables
 QUIET=false
@@ -74,7 +112,7 @@ prompt_user() {
 # Error handling
 handle_error() {
     local error_msg="$1"
-    echo -e "${RED}Error: $error_msg${NC}" >&2
+    log "ERROR" "$error_msg"
     
     if [[ "$INTERACTIVE" == "false" ]] || [[ "$QUIET" == "true" ]]; then
         exit 1
@@ -113,7 +151,19 @@ success() {
 # Show minimal logo
 show_minimal_logo() {
     [[ "$QUIET" == "true" ]] && return
-    echo -e "${BLUE}Milou CLI Installer - The One-Line Installer${NC}"
+    echo -e "${BOLD}${PURPLE}"
+    cat << 'EOF'
+
+    ███╗   ███╗██╗██╗      ██████╗ ██╗   ██╗
+    ████╗ ████║██║██║     ██╔═══██╗██║   ██║  
+    ██╔████╔██║██║██║     ██║   ██║██║   ██║  
+    ██║╚██╔╝██║██║██║     ██║   ██║██║   ██║  
+    ██║ ╚═╝ ██║██║███████╗╚██████╔╝╚██████╔╝  
+    ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝  ╚═════╝   
+    
+EOF
+    echo -e "${NC}"
+    log "STEP" "Milou CLI Installer"
 }
 
 # Prompt for installation directory
@@ -124,21 +174,19 @@ prompt_installation_directory() {
     
     local current_install_dir="$INSTALL_DIR"
     
-    echo -e "${BLUE}📁 Installation Directory Setup${NC}"
-    echo -e "${DIM}Choose where to install Milou CLI on your system.${NC}"
-    echo
+    log "INFO" "Please choose where to install Milou CLI."
     
     echo -e "${BOLD}${CYAN}Recommended options:${NC}"
     echo
     if [[ $EUID -eq 0 ]]; then
         echo -e "${GREEN}   1) ${BOLD}System-wide${NC} ${DIM}(/opt/milou-cli)${NC}"
-        echo -e "      ${GREEN}${CHECKMARK}${NC} Accessible to all users"
-        echo -e "      ${GREEN}${CHECKMARK}${NC} Standard system location"
-        echo -e "      ${GREEN}${CHECKMARK}${NC} Recommended for production servers"
+        echo -e "      ${CHECKMARK} Accessible to all users"
+        echo -e "      ${CHECKMARK} Standard system location"
+        echo -e "      ${CHECKMARK} Recommended for production servers"
         echo
         echo -e "${BLUE}   2) ${BOLD}Custom location${NC} ${DIM}(specify your own path)${NC}"
-        echo -e "      ${BLUE}✓${NC} Full control over location"
-        echo -e "      ${BLUE}✓${NC} For advanced setups"
+        echo -e "      ${CHECKMARK} Full control over location"
+        echo -e "      ${CHECKMARK} For advanced setups"
         echo
         
         local dir_choice
@@ -152,24 +200,24 @@ prompt_installation_directory() {
             case "$dir_choice" in
                 1) 
                     INSTALL_DIR="/opt/milou-cli"
-                    echo -e "   ${GREEN}${CHECKMARK} System-wide installation!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
+                    log "SUCCESS" "System-wide installation selected. Using: ${BOLD}$INSTALL_DIR${NC}"
                     break
                     ;;
                 2) 
-                    echo -e "   ${BLUE}${CHECKMARK} Custom location selected!${NC}"
+                    log "INFO" "Custom location selected."
                     local custom_dir
                     custom_dir=$(prompt_user "Installation directory" "/opt/milou-cli")
                     if [[ -n "$custom_dir" ]]; then
                         INSTALL_DIR="$custom_dir"
-                        echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom location: ${BOLD}$INSTALL_DIR${NC}"
+                        log "SUCCESS" "Using custom location: ${BOLD}$INSTALL_DIR${NC}"
                     else
-                        echo -e "   ${RED}${CROSSMARK} No path entered, using default${NC}"
+                        log "WARN" "No path entered, using default."
                         INSTALL_DIR="/opt/milou-cli"
                     fi
                     break
                     ;;
                 *) 
-                    echo -e "   ${RED}${CROSSMARK} Please choose 1 or 2${NC}"
+                    log "ERROR" "Please choose 1 or 2"
                     echo
                     ;;
             esac
@@ -194,23 +242,23 @@ prompt_installation_directory() {
             
             case "$dir_choice" in
                 1) 
-                    echo -e "   ${GREEN}${CHECKMARK} Default location!${NC} Using: ${BOLD}$INSTALL_DIR${NC}"
+                    log "SUCCESS" "Default location selected. Using: ${BOLD}$INSTALL_DIR${NC}"
                     break
                     ;;
                 2) 
-                    echo -e "   ${BLUE}${CHECKMARK} Custom location selected!${NC}"
+                    log "INFO" "Custom location selected."
                     local custom_dir
                     custom_dir=$(prompt_user "Installation directory" "$HOME/milou-cli")
                     if [[ -n "$custom_dir" ]]; then
                         INSTALL_DIR="$custom_dir"
-                        echo -e "   ${GREEN}${CHECKMARK}${NC} Using custom location: ${BOLD}$INSTALL_DIR${NC}"
+                        log "SUCCESS" "Using custom location: ${BOLD}$INSTALL_DIR${NC}"
                     else
-                        echo -e "   ${RED}${CROSSMARK} No path entered, using default${NC}"
+                        log "WARN" "No path entered, using default."
                     fi
                     break
                     ;;
                 *) 
-                    echo -e "   ${RED}${CROSSMARK} Please choose 1 or 2${NC}"
+                    log "ERROR" "Please choose 1 or 2"
                     echo
                     ;;
             esac
@@ -249,7 +297,7 @@ parse_args() {
                 exit 0
                 ;;
             *)
-                warn "Unknown option: $1"
+                log "WARN" "Unknown option: $1"
                 shift
                 ;;
         esac
@@ -274,12 +322,14 @@ show_help() {
 
 # Check prerequisites
 check_prerequisites() {
+    log "STEP" "Checking prerequisites..."
     for cmd in curl tar; do
         if ! command -v "$cmd" &> /dev/null; then
             handle_error "Missing required dependency: $cmd. Please install it and try again."
             return 1
         fi
     done
+    log "SUCCESS" "All prerequisites are met."
     return 0
 }
 
@@ -297,12 +347,12 @@ check_existing_installation() {
                 return 1
             fi
         elif [[ "$is_milou_installation" == "true" ]]; then
-            warn "Existing Milou CLI installation detected"
+            log "WARN" "Existing Milou CLI installation detected."
             
             if [[ "$INTERACTIVE" == "false" ]] || [[ "$QUIET" == "true" ]]; then
                 local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
                 if mv "$INSTALL_DIR" "$backup_dir"; then
-                    log "Backup created: $backup_dir"
+                    log "INFO" "Backup created: $backup_dir"
                 else
                     handle_error "Failed to backup existing installation"
                     return 1
@@ -313,7 +363,7 @@ check_existing_installation() {
                 if [[ "$choice" =~ ^[Yy]$ ]]; then
                     local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
                     if mv "$INSTALL_DIR" "$backup_dir"; then
-                        log "Backup created: $backup_dir"
+                        log "INFO" "Backup created: $backup_dir"
                     else
                         handle_error "Failed to backup existing installation"
                         return 1
@@ -343,7 +393,7 @@ check_existing_installation() {
 
 # Download and install Milou CLI
 install_milou() {
-    log "Installing Milou CLI to $INSTALL_DIR..."
+    log "STEP" "Installing Milou CLI to $INSTALL_DIR..."
     
     local parent_dir
     parent_dir="$(dirname "$INSTALL_DIR")"
@@ -354,7 +404,7 @@ install_milou() {
         fi
     fi
     
-    log "Downloading from GitHub ($BRANCH branch)..."
+    log "INFO" "Downloading from GitHub ($BRANCH branch)..."
     
     # Create the installation directory first
     mkdir -p "$INSTALL_DIR"
@@ -384,15 +434,17 @@ install_milou() {
         target_user=$(echo "$INSTALL_DIR" | cut -d'/' -f3)
         if id "$target_user" &>/dev/null; then
             chown -R "$target_user:$target_user" "$INSTALL_DIR" 2>/dev/null || true
+            log "INFO" "Set ownership of $INSTALL_DIR to user '$target_user'"
         fi
     fi
     
-    success "Installation completed"
+    log "SUCCESS" "Installation completed."
     return 0
 }
 
 # Set up PATH and shell integration
 setup_shell_integration() {
+    log "STEP" "Setting up shell integration..."
     local target_user=""
     local shell_rc=""
     
@@ -427,6 +479,7 @@ setup_shell_integration() {
             if [[ -n "$target_user" ]]; then
                 chown "$target_user:$target_user" "$shell_rc" 2>/dev/null || true
             fi
+            log "SUCCESS" "Milou alias added to $shell_rc"
         fi
     fi
 }
@@ -434,13 +487,13 @@ setup_shell_integration() {
 # Show completion
 show_completion() {
     [[ "$QUIET" == "true" ]] && return
-    success "Milou CLI installed to $INSTALL_DIR"
+    log "SUCCESS" "Milou CLI was installed to $INSTALL_DIR"
 }
 
 # Ready to start message
 start_setup() {
     if [[ "$AUTO_START" == "true" ]]; then
-        [[ "$QUIET" != "true" ]] 
+        log "STEP" "Finalizing Setup"
         
         local choice
         choice=$(prompt_user "Start setup wizard now? (Y/n)" "y")
@@ -457,10 +510,10 @@ start_setup() {
                 exec ./milou.sh setup
             fi
         else
-            echo "Run: cd $INSTALL_DIR && ./milou.sh setup (when ready)"
+            log "INFO" "Run: cd $INSTALL_DIR && ./milou.sh setup (when ready)"
         fi
     else
-        [[ "$QUIET" != "true" ]] && echo "Run: cd $INSTALL_DIR && ./milou.sh setup (when ready)"
+        log "INFO" "Run: cd $INSTALL_DIR && ./milou.sh setup (when ready)"
     fi
 }
 

@@ -173,6 +173,7 @@ readonly LOG_SUCCESS=5
 readonly LOG_STEP=6
 readonly LOG_HEADER=7
 readonly LOG_HIGHLIGHT=8
+readonly LOG_PANEL=9
 
 # Current log level (can be overridden by environment)
 MILOU_LOG_LEVEL="${MILOU_LOG_LEVEL:-${LOG_INFO}}"
@@ -182,7 +183,7 @@ milou_log() {
     local level="$1"
     shift
     local message="$*"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp=$(date '+%H:%M:%S')
     local log_level_num
     
     case "$level" in
@@ -195,6 +196,7 @@ milou_log() {
         STEP)  log_level_num=$LOG_STEP ;;
         HEADER) log_level_num=$LOG_HEADER ;;
         HIGHLIGHT) log_level_num=$LOG_HIGHLIGHT ;;
+        PANEL) log_level_num=$LOG_PANEL ;;
         *) log_level_num=$LOG_INFO; level="INFO" ;;
     esac
     
@@ -206,33 +208,43 @@ milou_log() {
     # Enhanced formatting with better visual hierarchy
     case "$level" in
         ERROR)   
-            echo -e "${RED}${BOLD}❌ ERROR${NC} ${message}" >&2 
+            echo -e "${RED}${BOLD}✖ ERROR:${NC} ${message}" >&2 
             ;;
         WARN)    
-            echo -e "${YELLOW}${BOLD}⚠️  WARNING${NC} ${message}" >&2 
+            echo -e "${YELLOW}▲ WARNING:${NC} ${message}" >&2 
             ;;
         SUCCESS) 
-            echo -e "${GREEN}${BOLD}${CHECKMARK} SUCCESS${NC} ${message}" 
+            echo -e "${GREEN}✔ SUCCESS:${NC} ${message}" 
             ;;
         STEP)    
-            echo -e "${BLUE}${BOLD}${ROCKET} STEP${NC} ${message}" 
+            echo -e "\n${BLUE}━━━ ${BOLD}Step: ${message}${NC} ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
             ;;
         HEADER)  
-            echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════════════════${NC}"
-            echo -e "${BOLD}${CYAN}${message}${NC}"
-            echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════${NC}\n"
+            echo -e "\n${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${BOLD}${CYAN}║ ${message}${NC}"
+            echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}\n"
             ;;
         HIGHLIGHT)
-            echo -e "${BOLD}${YELLOW}${STAR} ${message}${NC}"
+            echo -e "${BOLD}${PURPLE}✨ ${message}${NC}"
+            ;;
+        PANEL)
+            echo -e "${YELLOW}╭────────────────────────────────────────────────────────╮${NC}"
+            echo -e "${YELLOW}│                                                        │${NC}"
+            # Split message into lines and pad
+            while IFS= read -r line; do
+                printf "${YELLOW}│${NC}   %-54s ${YELLOW}│${NC}\n" "$line"
+            done <<< "$message"
+            echo -e "${YELLOW}│                                                        │${NC}"
+            echo -e "${YELLOW}╰────────────────────────────────────────────────────────╯${NC}"
             ;;
         DEBUG)   
-            echo -e "${DIM}${BULLET} DEBUG${NC} ${DIM}${message}${NC}" 
+            echo -e "${DIM}DEBUG: ${message}${NC}" 
             ;;
         TRACE)   
-            echo -e "${DIM}${BULLET} TRACE${NC} ${DIM}${message}${NC}" 
+            echo -e "${DIM}TRACE: ${message}${NC}" 
             ;;
         *)       
-            echo -e "${CYAN}${BULLET} INFO${NC} ${message}" 
+            echo -e "${CYAN}→ INFO:${NC} ${message}" 
             ;;
     esac
 }
@@ -273,27 +285,28 @@ log_progress() {
     local total="$2"
     local description="$3"
     local percentage=$((step * 100 / total))
-    local filled=$((step * 20 / total))
-    local empty=$((20 - filled))
+    local filled_width=$((percentage * 40 / 100))
+    local empty_width=$((40 - filled_width))
+
+    local bar
+    bar=$(printf "%*s" "$filled_width" | tr ' ' '█')
+    local empty
+    empty=$(printf "%*s" "$empty_width" | tr ' ' '░')
     
-    printf "\r${BLUE}${BOLD}Progress:${NC} ["
-    printf "%*s" $filled | tr ' ' '█'
-    printf "%*s" $empty | tr ' ' '░'
-    printf "] %d%% ${CYAN}(%d/%d)${NC} %s" $percentage $step $total "$description"
-    
+    printf "\r${BLUE}Progress: ${NC}[${CYAN}%s%s${NC}] ${BOLD}%3d%%${NC} ${DIM}(%d/%d)${NC} - %s" "$bar" "$empty" $percentage $step $total "$description"
+
     if [[ $step -eq $total ]]; then
-        echo -e "\n${GREEN}${BOLD}${CHECKMARK} Complete!${NC}"
+        echo -e "\n${GREEN}✔ Complete!${NC}"
     fi
 }
 
 log_section() {
     local title="$1"
     local subtitle="${2:-}"
-    echo -e "\n${BOLD}${BLUE}▼ ${title}${NC}"
+    echo -e "\n${BOLD}${BLUE}═══ ${title} ${NC}${DIM}════════════════════════════════════════════════${NC}"
     if [[ -n "$subtitle" ]]; then
         echo -e "${DIM}  ${subtitle}${NC}"
     fi
-    echo
 }
 
 log_user_action() {
@@ -309,7 +322,7 @@ log_system_status() {
             echo -e "${GREEN}${CHECKMARK} System Status:${NC} ${GREEN}Healthy${NC} - ${details}"
             ;;
         "warning")
-            echo -e "${YELLOW}⚠️  System Status:${NC} ${YELLOW}Warning${NC} - ${details}"
+            echo -e "${YELLOW}▲ System Status:${NC} ${YELLOW}Warning${NC} - ${details}"
             ;;
         "error")
             echo -e "${RED}${CROSSMARK} System Status:${NC} ${RED}Error${NC} - ${details}"

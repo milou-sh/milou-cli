@@ -95,15 +95,10 @@ setup_show_logo() {
     ██║ ╚═╝ ██║██║███████╗╚██████╔╝╚██████╔╝  
     ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝  ╚═════╝   
     
-    ┌─────────────────────────────────────────┐
-    │   🚀 Professional Docker Management     │
-    │   Simple • Secure • Reliable           │
-    └─────────────────────────────────────────┘
-
 EOF
         echo -e "${NC}"
-        log_welcome "Let's get your Milou environment set up quickly and easily!"
-        echo -e "${DIM}This wizard will guide you through each step with clear explanations.${NC}"
+        log_header "Professional Docker Management - v$VERSION"
+        log_info "Welcome to the Milou setup wizard. Let's get your environment configured."
         echo
     fi
 }
@@ -115,10 +110,7 @@ setup_show_header() {
     local step_name="${3:-Starting Setup}"
     
     if tty -s && [[ "${QUIET:-false}" != "true" ]]; then
-        echo
-        milou_log "HEADER" "✓ Milou Setup - Professional Installation v$(get_milou_version 2>/dev/null || echo 'latest')"
         log_progress "$current_step" "$total_steps" "$step_name"
-        echo
     fi
 }
 
@@ -127,14 +119,12 @@ setup_announce_step() {
     local step_number="$1"
     local step_title="$2"
     local step_description="${3:-}"
-    local estimated_time="${4:-}"
     
-    log_section "Step $step_number: $step_title" "$step_description"
-    
-    if [[ -n "$estimated_time" ]]; then
-        echo -e "${DIM}  ✓  Estimated time: $estimated_time${NC}"
-        echo
+    log_step "$step_number: $step_title"
+    if [[ -n "$step_description" ]]; then
+        echo -e "${DIM}  ${step_description}${NC}"
     fi
+    echo
 }
 
 # Enhanced success messages with clear next steps  
@@ -144,36 +134,27 @@ setup_show_success() {
     local admin_password="${3:-[generated]}"
     local admin_email="${4:-admin@localhost}"
     
-    echo
-    milou_log "HEADER" "✓ Setup Complete! Welcome to Milou"
+    milou_log "HEADER" "🎉 Setup Complete! Welcome to Milou 🎉"
     
-    echo -e "${BOLD}${GREEN}✓${NC}"
-    echo -e "${BOLD}${GREEN}✓              ✓ CONGRATULATIONS! ✓                ✓${NC}"
-    echo -e "${BOLD}${GREEN}✓        Your Milou system is ready to use!          ✓${NC}"
-    echo -e "${BOLD}${GREEN}✓${NC}"
-    echo
-    
-    log_section "✓ Access Your System" "Your Milou installation is now accessible"
-    echo -e "   ${BOLD}Web Interface:${NC} ${CYAN}https://$domain${NC}"
-    echo
-    
-    log_section "✓ Your Admin Credentials" "Keep these credentials safe!"
-    echo -e "   ${BOLD}Username:${NC} $admin_user"
-    echo -e "   ${BOLD}Password:${NC} $admin_password"
-    echo -e "   ${BOLD}Email:${NC}    $admin_email"
-    echo
-    echo -e "${YELLOW}${BOLD}✓  IMPORTANT:${NC} Save these credentials in a secure password manager!"
-    echo
-    
+    local success_message
+    success_message=$(cat <<EOF
+Your Milou system is ready to use!
+
+Access URL:   https://$domain
+Admin User:   $admin_user
+Password:     $admin_password
+
+IMPORTANT: Save these credentials securely!
+EOF
+)
+    milou_log "PANEL" "$success_message"
+
     log_next_steps \
-        "Open ${CYAN}https://$domain${NC} in your web browser" \
-        "Accept the SSL certificate (normal for self-signed certificates)" \
-        "Log in with the credentials above" \
-        "Change your password after first login" \
-        "Create a backup: ${CYAN}./milou.sh backup${NC}" \
-        "Explore the system and start managing your environment!"
+        "Open ${CYAN}https://$domain${NC} in your browser" \
+        "Log in with your new credentials" \
+        "Create a backup: ${CYAN}./milou.sh backup${NC}"
     
-    log_tip "Need help? Run ${CYAN}./milou.sh --help${NC} or check the documentation in the ${CYAN}docs/${NC} folder"
+    log_tip "Need help? Run ${CYAN}./milou.sh --help${NC} or check the documentation."
 }
 
 # Enhanced error display with helpful guidance
@@ -208,7 +189,7 @@ setup_show_analysis() {
     local needs_user="${3:-false}"
     local existing_install="${4:-false}"
     
-    log_section "✓ System Analysis" "Understanding your current environment"
+    log_section "System Analysis" "Understanding your current environment"
     
     # Translate technical status to user-friendly language
     if [[ "$is_fresh" == "true" ]]; then
@@ -218,21 +199,21 @@ setup_show_analysis() {
     fi
     
     if [[ "$needs_deps" == "true" ]]; then
-        echo -e "   ${YELLOW}${WRENCH}${NC} We'll install Docker and other required tools automatically"
+        echo -e "   ${YELLOW}${WRENCH}${NC} Docker and other tools will be installed automatically."
     else
-        echo -e "   ${GREEN}${CHECKMARK}${NC} All required tools are already installed"
+        echo -e "   ${GREEN}${CHECKMARK}${NC} All required tools are already installed."
     fi
     
     if [[ "$needs_user" == "true" ]]; then
-        echo -e "   ${BLUE}${BULLET}${NC} We'll create a dedicated user account for security"
+        echo -e "   ${BLUE}${BULLET}${NC} A dedicated 'milou' user will be created for security."
     else
-        echo -e "   ${GREEN}${CHECKMARK}${NC} User account is already properly configured"
+        echo -e "   ${GREEN}${CHECKMARK}${NC} User account is properly configured."
     fi
     
     if [[ "$existing_install" == "true" ]]; then
-        echo -e "   ${YELLOW}${WRENCH}${NC} Existing Milou installation found - we'll update it carefully"
+        echo -e "   ${YELLOW}${WRENCH}${NC} Existing Milou installation found. We'll update it carefully."
     else
-        echo -e "   ${GREEN}${SPARKLES}${NC} This will be your first Milou installation"
+        echo -e "   ${GREEN}${SPARKLES}${NC} This will be a fresh Milou installation."
     fi
     
     echo
@@ -421,25 +402,24 @@ setup_run() {
     # Determine cleanup strategy based on what we found
     if [[ "$has_env_file" == "true" && "$has_docker_resources" == "true" ]]; then
         # This is a re-configuration of existing installation
-        log_step "🔧 Re-configuration" "Existing installation found. Stopping services to apply new settings."
+        setup_announce_step "🧹" "Preparing Environment" "Stopping existing services to apply new settings."
         if ! docker_cleanup_environment "safe"; then # Safe mode preserves data
              log_warning "Could not stop all services cleanly, but proceeding."
         fi
         echo
     elif [[ "$has_env_file" == "false" && "$has_docker_resources" == "true" ]]; then
         # This is likely leftover from a previous broken installation
-        log_step "🧹 Cleanup" "Found leftover Docker resources from previous installation."
-        log_info "Cleaning up containers and networks (data volumes will be preserved)."
+        setup_announce_step "🧹" "Cleanup" "Found leftover Docker resources from a previous installation."
         
         # For cleanup without .env file, we need to use a more direct approach
         if command -v docker >/dev/null 2>&1; then
             # Stop and remove containers by name pattern
             if docker ps -q --filter "name=milou-" | head -1 >/dev/null 2>&1; then
-                log_debug "Stopping Milou containers..."
+                log_info "Stopping Milou containers..."
                 docker stop $(docker ps -q --filter "name=milou-") 2>/dev/null || true
             fi
             if docker ps -aq --filter "name=milou-" | head -1 >/dev/null 2>&1; then
-                log_debug "Removing Milou containers..."
+                log_info "Removing Milou containers..."
                 docker rm $(docker ps -aq --filter "name=milou-") 2>/dev/null || true
             fi
             
@@ -448,7 +428,7 @@ setup_run() {
             if networks=$(docker network ls --filter "name=milou" --format "{{.Name}}" 2>/dev/null); then
                 for network in $networks; do
                     if [[ "$network" != "bridge" && "$network" != "host" && "$network" != "none" ]]; then
-                        log_debug "Removing network: $network"
+                        log_info "Removing network: $network"
                         docker network rm "$network" 2>/dev/null || true
                     fi
                 done
@@ -457,11 +437,11 @@ setup_run() {
         echo
     elif [[ "$has_env_file" == "false" && "$has_docker_resources" == "false" ]]; then
         # This is a truly fresh installation - no cleanup needed
-        log_step "🆕 Fresh Installation" "Clean system detected. Proceeding with fresh setup."
+        setup_announce_step "✨" "Fresh Installation" "Clean system detected. Ready to begin."
         echo
     else
         # Edge case: has .env but no Docker resources
-        log_step "🔧 Configuration Recovery" "Configuration file found but no Docker resources."
+        setup_announce_step "🔧" "Configuration Recovery" "Configuration file found but no active services."
         echo
     fi
 
@@ -497,18 +477,32 @@ setup_run() {
     echo
     
     # STEP 3: Interactive Configuration
-    if ! _setup_interactive_configuration "$preserve_creds"; then
-        log_error "Configuration was cancelled or failed."
-        return 1
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        setup_announce_step "2" "Configuration" "Let's personalize your Milou setup."
+        
+        # Use the existing setup_generate_configuration_interactive function
+        if ! setup_generate_configuration_interactive "$preserve_creds"; then
+            log_error "Configuration was cancelled or failed."
+            return 1
+        fi
+    else
+        # Automated mode
+        setup_announce_step "2" "Configuration" "Generating configuration automatically."
+        if ! setup_generate_configuration_automated "$preserve_creds"; then
+            log_error "Automated configuration failed."
+            return 1
+        fi
     fi
     
     # STEP 4: GitHub Token and Deployment
+    setup_announce_step "4" "Deployment" "Pulling images and starting services."
     if ! _setup_handle_github_and_deployment; then
         log_error "Deployment failed."
         return 1
     fi
 
     # STEP 5: Finalization and Credentials
+    setup_announce_step "5" "Finalizing"
     if ! _setup_finalize_and_display_credentials "$preserve_creds"; then
         log_error "Finalization step failed."
         return 1
@@ -526,7 +520,7 @@ setup_run() {
 
 # System validation orchestrator
 _setup_validate_system() {
-    log_step "🔍" "System Validation"
+    log_section "System Validation"
     
     local errors=0
     local warnings=0
@@ -536,40 +530,40 @@ _setup_validate_system() {
     local needs_docker_install=false
     if ! command -v docker >/dev/null 2>&1; then
         needs_docker_install=true
-        log_info "Docker not detected - will be installed during dependencies step"
+        log_info "Docker not detected. It will be installed automatically."
     elif ! docker info >/dev/null 2>&1; then
-        log_warning "Docker is installed but daemon is not running"
+        log_warning "Docker is installed but the daemon is not running."
         if systemctl is-active --quiet docker 2>/dev/null || service docker status >/dev/null 2>&1; then
-            log_info "Attempting to start Docker daemon..."
+            log_info "Attempting to start the Docker daemon..."
             if systemctl start docker 2>/dev/null || service docker start 2>/dev/null; then
-                log_success "Docker daemon started successfully"
+                log_success "Docker daemon started successfully."
                 sleep 2  # Give Docker a moment to fully start
             else
-                log_warning "Could not start Docker daemon automatically"
+                log_warning "Could not start the Docker daemon automatically."
                 ((warnings++))
             fi
         else
-            log_warning "Docker daemon is not running and service is not available"
+            log_warning "Docker daemon is not running and the service is not available/enabled."
             ((warnings++))
         fi
     fi
     
     # Install dependencies if needed (on fresh systems) - USE INTERACTIVE VERSION
     if [[ "$needs_docker_install" == "true" ]]; then
-        log_info "🔧 Dependencies are required for Milou to function"
+        log_info "🔧 Milou requires Docker to function. The installer will now set it up for you."
         
         # Use interactive installation to ask user permission
         if ! setup_install_dependencies_interactive; then
-            log_error "Dependencies installation was cancelled or failed"
+            log_error "Dependencies installation was cancelled or failed."
             ((errors++))
         else
-            log_success "Dependencies installed successfully"
+            log_success "Dependencies installed successfully."
             
             # Verify Docker is now working
             if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                log_success "Docker is now available and running"
+                log_success "Docker is now available and running."
             else
-                log_warning "Docker was installed but may need manual start"
+                log_warning "Docker was installed but may need to be started manually."
                 ((warnings++))
             fi
         fi
@@ -578,7 +572,7 @@ _setup_validate_system() {
     # Now validate what we have
     if command -v docker >/dev/null 2>&1; then
         if docker info >/dev/null 2>&1; then
-            log_success "✓ Docker is available and running"
+            log_success "Docker is available and running."
             
             # Test Docker Compose
             if docker compose version >/dev/null 2>&1; then

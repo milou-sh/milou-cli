@@ -1580,4 +1580,65 @@ docker_get_unhealthy_containers() {
         cut -f1
 }
 
+# =============================================================================
+# DOCKER STATUS AND HEALTH CHECKS
+# =============================================================================
+
+# Get rich status for all services - NEW COMPREHENSIVE STATUS FUNCTION
+docker_get_services_status() {
+    local quiet="${1:-false}"
+    
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Getting detailed status for all services..."
+    
+    # Check if Docker is available
+    if ! docker info >/dev/null 2>&1; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker daemon not running. Cannot get service status."
+        return 1
+    fi
+
+    local project_name="${DOCKER_PROJECT_NAME:-milou-static}"
+
+    # Get all container info in one go for efficiency
+    local container_data
+    container_data=$(docker ps -a \
+        --filter "name=${project_name}-" \
+        --format '{{.Names}}|{{.ID}}|{{.Image}}|{{.State}}|{{.Status}}|{{.Ports}}' 2>/dev/null)
+        
+    if [[ -z "$container_data" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "No Milou services found."
+        echo "[]"
+        return 0
+    fi
+    
+    # Process the data
+    local services_json="[]"
+    while IFS='|' read -r name id image state status ports; do
+        # Extract service name by removing the project prefix
+        local service_name=${name##*${project_name}-}
+        # Further strip the numeric suffix (e.g., "-1")
+        service_name=${service_name%-*}
+
+        local image_tag=${image##*:}
+        
+        # Prettify status
+        local pretty_status="$status"
+        
+        # Build JSON object for the service
+        local service_json
+        service_json=$(jq -n \
+            --arg name "$service_name" \
+            --arg id "${id:0:12}" \
+            --arg status "$pretty_status" \
+            --arg image_tag "$image_tag" \
+            --arg ports "$ports" \
+            '{name: $name, id: $id, status: $status, image_tag: $image_tag, ports: $ports}')
+            
+        services_json=$(echo "$services_json" | jq --argjson s "$service_json" '. += [$s]')
+        
+    done <<< "$container_data"
+    
+    echo "$services_json"
+    return 0
+}
+
 milou_log "DEBUG" "Docker module loaded successfully" 

@@ -182,22 +182,29 @@ display_system_versions() {
     local github_token="${2:-}"
     local quiet="${3:-false}"
     
-    echo
-    milou_log "INFO" "📊 System Version Analysis"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    milou_log "HEADER" "System Version Analysis"
     
     # CLI and System info
     local cli_version="${SCRIPT_VERSION:-${MILOU_VERSION:-unknown}}"
-    echo -e "   ${BOLD}Milou CLI:${NC}         v$cli_version"
-    echo -e "   ${BOLD}Target Version:${NC}    $target_version"
-    echo -e "   ${BOLD}GitHub Token:${NC}      ${github_token:+✓ }${github_token:-❌ Missing}"
+    local token_status="${github_token:+${GREEN}✓ Present${NC}}"
+    
+    local -a info_table=()
+    info_table+=("Milou CLI Version|v$cli_version")
+    info_table+=("Target Version|$target_version")
+    info_table+=("GitHub Token|${token_status:-${RED}✖ Missing${NC}}")
+    
+    # Simple table rendering
+    for row in "${info_table[@]}"; do
+        IFS='|' read -r key value <<< "$row"
+        printf "  ${BOLD}%-20s${NC} %s\n" "$key:" "$value"
+    done
     echo
 
     # Get current running versions
     get_running_service_versions "$quiet"
     
-    echo -e "   ${BOLD}SERVICE STATUS & VERSIONS:${NC}"
-    echo
+    echo -e "  ${BOLD}${CYAN}SERVICE        STATUS                  LOCAL VERSION          REMOTE (TARGET)${NC}"
+    echo -e "  ${BOLD}${CYAN}────────────── ─────────────────────── ────────────────────── ──────────────────${NC}"
     
     local services=("${MILOU_SERVICE_LIST[@]}")
     for service in "${services[@]}"; do
@@ -205,73 +212,42 @@ display_system_versions() {
         local running_var="RUNNING_VERSION_${service_upper}"
         local status_var="SERVICE_STATUS_${service_upper}"
         
-        local current_version="${!running_var:-}"
+        local current_version="${!running_var:-Not Installed}"
         local service_status="${!status_var:-stopped}"
         
-        # Print service name with consistent padding
-        printf "   ${BOLD}├─ %-15s${NC}" "${service}:"
-        
-        # LOCAL VERSION (current)
-        if [[ -n "$current_version" && "$current_version" != "latest" ]]; then
-            if [[ "$service_status" == "running" ]]; then
-                echo -en "${GREEN}LOCAL: v$current_version (running)${NC}"
-            elif [[ "$service_status" == "restarting" ]]; then
-                echo -en "${YELLOW}LOCAL: v$current_version (restarting)${NC}"
-            else
-                echo -en "${RED}LOCAL: v$current_version (stopped)${NC}"
-            fi
-        else
-            echo -en "${RED}LOCAL: not installed${NC}"
+        # Colorize status
+        local status_color="$RED"
+        if [[ "$service_status" == "running" ]]; then
+            status_color="$GREEN"
+        elif [[ "$service_status" == "restarting" ]]; then
+            status_color="$YELLOW"
         fi
-        
-        echo -en " | "
-        
-        # REMOTE VERSION (latest available)
+
+        # Determine remote version
+        local remote_version_display="${RED}Unknown${NC}"
         if [[ -n "$github_token" ]]; then
-            echo -en "🌐 "
             local remote_version
-            if remote_version=$(get_latest_registry_version "$service" "$github_token" "true"); then
-                if [[ "$target_version" == "latest" ]]; then
-                    echo -e "${GREEN}REMOTE: v$remote_version (latest)${NC}"
+            remote_version=$(get_latest_registry_version "$service" "$github_token" "true")
+            if [[ -n "$remote_version" ]]; then
+                if [[ "$current_version" == "$remote_version" ]]; then
+                    remote_version_display="${GREEN}v$remote_version (up-to-date)${NC}"
                 else
-                    # Check if target version is available
-                    local all_versions
-                    if all_versions=$(get_all_available_versions "$service" "$github_token"); then
-                        if [[ "$all_versions" =~ (^|,)$target_version($|,) ]]; then
-                            echo -e "${GREEN}REMOTE: v$target_version (available)${NC}"
-                        else
-                            echo -e "${RED}REMOTE: v$target_version (NOT AVAILABLE)${NC}"
-                        fi
-                    else
-                        echo -e "${RED}REMOTE: API error${NC}"
-                    fi
+                    remote_version_display="${YELLOW}v$remote_version (update available)${NC}"
                 fi
             else
-                echo -e "${RED}REMOTE: API unavailable${NC}"
+                remote_version_display="${RED}API Error${NC}"
             fi
-        else
-            echo -e "${YELLOW}REMOTE: no token provided${NC}"
         fi
+
+        printf "  %-14s %-23s %-22s %-18s\n" \
+            "$service" \
+            "$(echo -e "${status_color}${service_status}${NC}")" \
+            "$current_version" \
+            "$remote_version_display"
     done
     
-    echo -e "   ${BOLD}└─ Dependencies:${NC}"
-    
-    # Check dependency services
-    for dep_service in "${DEPENDENCY_SERVICES[@]}"; do
-        local dep_status
-        if dep_status=$(docker ps --filter "name=milou-$dep_service" --format "{{.Status}}" 2>/dev/null); then
-            if [[ "$dep_status" =~ Up|running ]]; then
-                printf "      ├─ %-15s${GREEN}running${NC}\n" "$dep_service:"
-            else
-                printf "      ├─ %-15s${RED}stopped${NC}\n" "$dep_service:"
-            fi
-        else
-            printf "      ├─ %-15s${RED}not installed${NC}\n" "$dep_service:"
-        fi
-    done
-    
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo
+    log_tip "Run './milou.sh update' to install the latest versions of all services."
 }
 
 # =============================================================================

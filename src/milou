@@ -560,71 +560,73 @@ function handle_smart_setup() {
 function handle_smart_status() {
     source "${SRC_DIR}/_docker.sh" || exit 1
     
-    # Get current installation state (quiet mode to avoid output corruption)
-    local current_state
-    current_state=$(get_current_state "true")
+    milou_log "STEP" "System Status"
     
-    echo -e "${CYAN}📊 Milou System Status${NC}"
-    echo "=================="
-    echo
-    echo "Installation State: $(describe_installation_state "$current_state")"
-    echo
-    
-    case "$current_state" in
-        "fresh")
-            echo -e "${BLUE}System Analysis:${NC}"
-            echo "• No Milou installation detected"
-            echo "• Ready for fresh installation"
-            echo
-            echo -e "${GREEN}Next Steps:${NC}"
-            echo "• Run: milou setup"
-            ;;
-        "running")
-            echo -e "${GREEN}✅ Services Status:${NC}"
-            if command -v docker_status >/dev/null 2>&1; then
-                docker_status "$@"
-            else
-                docker compose ps 2>/dev/null || echo "Could not get service status"
-            fi
-            ;;
-        "installed_stopped")
-            echo -e "${YELLOW}⏸️  Services Stopped:${NC}"
-            if command -v docker_status >/dev/null 2>&1; then
-                docker_status "$@"
-            else
-                docker compose ps 2>/dev/null || echo "Could not get service status"
-            fi
-            echo
-            echo -e "${GREEN}Next Steps:${NC}"
-            echo "• Run: milou start"
-            echo "• Run: milou logs (to check why stopped)"
-            ;;
-        "broken")
-            echo -e "${RED}🔧 System Issues Detected:${NC}"
-            if command -v docker_status >/dev/null 2>&1; then
-                docker_status "$@"
-            else
-                echo "Cannot determine service status"
-            fi
-            echo
-            echo -e "${GREEN}Repair Options:${NC}"
-            echo "• Run: milou setup --repair"
-            echo "• Run: milou logs (to diagnose issues)"
-            ;;
-        *)
-            echo -e "${YELLOW}System state: $current_state${NC}"
-            if command -v docker_status >/dev/null 2>&1; then
-                docker_status "$@"
-            else
-                echo "Run 'milou setup' to initialize the system"
-            fi
-            ;;
-    esac
-    
-    # Add update check for running or stopped services
-    if [[ "$current_state" == "running" || "$current_state" == "installed_stopped" ]]; then
-        _check_status_updates
+    # Initialize Docker environment to load project name, etc.
+    if ! docker_init "" "" "true" "true"; then
+        log_error "Failed to initialize Docker environment. Cannot get status."
+        return 1
     fi
+
+    # Get rich status data
+    local services_json
+    services_json=$(docker_get_services_status "true")
+    
+    if [[ -z "$services_json" || "$services_json" == "[]" ]]; then
+        log_info "No Milou services are running or configured."
+        log_tip "Run './milou.sh setup' to get started."
+        return 0
+    fi
+    
+    # Check for jq
+    if ! command -v jq > /dev/null 2>&1; then
+        log_warning "jq is not installed. Displaying basic status."
+        docker_compose ps
+        log_tip "Install jq for a more detailed status view (e.g., 'sudo apt install jq')."
+        return 0
+    fi
+    
+    # Render rich table
+    echo -e "${BOLD}${CYAN}SERVICE        STATUS                  PORTS                  IMAGE TAG${NC}"
+    echo -e "${BOLD}${CYAN}────────────── ─────────────────────── ────────────────────── ──────────${NC}"
+
+    local unhealthy_services=()
+    echo "$services_json" | jq -c '.[]' | while IFS= read -r service_json; do
+        local name status ports image_tag
+        name=$(echo "$service_json" | jq -r '.name')
+        status=$(echo "$service_json" | jq -r '.status')
+        ports=$(echo "$service_json" | jq -r '.ports')
+        image_tag=$(echo "$service_json" | jq -r '.image_tag')
+        
+        local status_color="$GREEN"
+        if [[ "$status" == *"unhealthy"* || "$status" == *"Exit"* ]]; then
+            status_color="$RED"
+            unhealthy_services+=("$name")
+        elif [[ "$status" == *"restarting"* || "$status" == *"starting"* ]]; then
+            status_color="$YELLOW"
+        fi
+
+        printf "%-14s %-23s %-22s %-10s\n" \
+            "$name" \
+            "$(echo -e "${status_color}${status}${NC}")" \
+            "${ports:--}" \
+            "$image_tag"
+    done
+    echo
+
+    # Contextual Diagnostics
+    if [[ ${#unhealthy_services[@]} -gt 0 ]]; then
+        log_error "Found ${#unhealthy_services[@]} unhealthy service(s). Showing logs:"
+        for service in "${unhealthy_services[@]}"; do
+            milou_log "PANEL" "Logs for: $service"
+            docker_execute "logs" "$service" "true" "--tail 20"
+        done
+        log_tip "Run './milou.sh logs $service' for more details or './milou.sh restart $service'."
+    else
+        log_success "All services are running correctly."
+    fi
+    
+    _check_status_updates
 }
 
 # Simple update checker for status command

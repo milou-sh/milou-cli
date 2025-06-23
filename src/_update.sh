@@ -347,7 +347,7 @@ check_updates_needed() {
     local updates_needed_count=0
     local services_to_update=()
     local -a update_analysis_table=()
-    update_analysis_table+=("SERVICE|CURRENT|TARGET|STATUS")
+    update_analysis_table+=("${BOLD}SERVICE|CURRENT|TARGET|STATUS${NC}")
 
     for service in "${services_to_process[@]}"; do
         local current_version="${service_current_versions[$service]}"
@@ -361,31 +361,38 @@ check_updates_needed() {
         
         local needs_action=false
         local reason=""
+        local reason_color=""
         
         if [[ -z "$current_version" || "$current_version" == "latest" ]]; then
             needs_action=true
             reason="INSTALL"
+            reason_color="$CYAN"
         elif [[ "$current_version" != "$target_version_for_service" ]]; then
             needs_action=true
             if compare_semver_versions "$current_version" "$target_version_for_service"; then
                 reason="UPGRADE"
+                reason_color="$YELLOW"
             else
                 reason="DOWNGRADE"
+                reason_color="$YELLOW"
             fi
         elif [[ "$service_status" != "running" ]]; then
             needs_action=true
             reason="START"
+            reason_color="$BLUE"
         elif [[ "$force_all" == "true" ]]; then
             needs_action=true
             reason="FORCE UPDATE"
+            reason_color="$PURPLE"
         else
             reason="UP-TO-DATE"
+            reason_color="$GREEN"
         fi
         
         needs_update["$service"]="$needs_action"
         update_reasons["$service"]="$reason"
         
-        update_analysis_table+=("$service|v$current_version|v$target_version_for_service|$reason")
+        update_analysis_table+=("$service|v$current_version|v$target_version_for_service|${reason_color}${reason}${NC}")
         
         if [[ "$needs_action" == "true" ]]; then
             ((updates_needed_count++))
@@ -396,14 +403,22 @@ check_updates_needed() {
     # Display the analysis in a clean table format
     echo
     if command -v column >/dev/null 2>&1; then
-        printf "%s\n" "${update_analysis_table[@]}" | column -t -s '|'
+        (
+          IFS=$'\n'
+          echo -e "${update_analysis_table[*]}"
+        ) | column -t -s '|' | sed 's/^/  /'
     else
         # Fallback for systems without 'column'
-        printf "%-15s %-15s %-15s %-15s\n" "SERVICE" "CURRENT" "TARGET" "STATUS"
-        echo "-----------------------------------------------------------------"
-        for row in "${update_analysis_table[@]:1}"; do
+        local header_printed=false
+        for row in "${update_analysis_table[@]}"; do
             IFS='|' read -r s c t r <<< "$row"
-            printf "%-15s %-15s %-15s %-15s\n" "$s" "$c" "$t" "$r"
+            if ! "$header_printed"; then
+                printf "  %-15s %-15s %-15s %-15s\n" "$(echo -e "$s")" "$(echo -e "$c")" "$(echo -e "$t")" "$(echo -e "$r")"
+                echo "  -----------------------------------------------------------------"
+                header_printed=true
+            else
+                printf "  %-15s %-15s %-15s %-15s\n" "$s" "$c" "$t" "$(echo -e "$r")"
+            fi
         done
     fi
     echo

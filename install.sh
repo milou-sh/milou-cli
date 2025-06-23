@@ -57,6 +57,37 @@ log() {
 
 # --- End of UI Library ---
 
+# Tries to detect the branch name from the curl command used to run this script.
+# This makes the one-line installer branch-aware.
+detect_branch_from_curl() {
+    # This function is only effective when the script is piped from curl.
+    # We check for the parent process ID (PPID) to determine the calling command.
+    if [[ -z "$PPID" ]]; then
+        return
+    fi
+    
+    # Ensure 'ps' command is available.
+    if ! command -v ps >/dev/null; then
+        return
+    fi
+
+    # Get the command line of the parent process.
+    # Note: 'ps' arguments can differ between OSes. This is for Linux.
+    local parent_cmd
+    parent_cmd=$(ps -o args= -p "$PPID")
+
+    # Check if the parent command is curl and extract branch from the URL.
+    if [[ "$parent_cmd" =~ curl ]]; then
+        # Regex: Look for .../milou-sh/milou-cli/BRANCH_NAME/install.sh
+        if [[ "$parent_cmd" =~ milou-sh/milou-cli/([^/]+)/install\.sh ]]; then
+            local detected_branch="${BASH_REMATCH[1]}"
+            if [[ -n "$detected_branch" && "$detected_branch" != "$BRANCH" ]]; then
+                log "INFO" "Installer branch detected: ${BOLD}$detected_branch${NC}. Overriding default branch."
+                BRANCH="$detected_branch" # Override the global BRANCH variable
+            fi
+        fi
+    fi
+}
 
 # Determine default installation directory
 get_default_install_dir() {
@@ -72,9 +103,9 @@ get_default_install_dir() {
 
 # Configuration
 readonly REPO_URL="https://github.com/milou-sh/milou-cli"
-readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main-gemini"
 INSTALL_DIR="${MILOU_INSTALL_DIR:-$(get_default_install_dir)}"
-readonly BRANCH="${MILOU_BRANCH:-main}"
+BRANCH="${MILOU_BRANCH:-main}"
 
 # Global variables
 QUIET=false
@@ -521,6 +552,10 @@ start_setup() {
 main() {
     check_interactive_mode
     
+    # Auto-detect branch from curl command BEFORE parsing args.
+    # This allows --branch flag to override the detection.
+    detect_branch_from_curl
+
     if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
         parse_args "$@"
     fi

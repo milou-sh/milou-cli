@@ -66,20 +66,23 @@ detect_branch_from_curl() {
         return
     fi
     
-    # Ensure 'ps' command is available.
-    if ! command -v ps >/dev/null; then
-        return
+    local parent_cmd=""
+    # Use /proc for a more reliable method on Linux systems
+    if [[ -r /proc/$PPID/cmdline ]]; then
+        # Read the null-delimited arguments into a string
+        parent_cmd=$(tr -d '\0' < /proc/$PPID/cmdline)
+    # Fallback to using ps for other systems (like macOS)
+    elif command -v ps >/dev/null; then
+        parent_cmd=$(ps -o args= -p "$PPID")
+    else
+        return # Cannot determine parent command
     fi
 
-    # Get the command line of the parent process.
-    # Note: 'ps' arguments can differ between OSes. This is for Linux.
-    local parent_cmd
-    parent_cmd=$(ps -o args= -p "$PPID")
-
     # Check if the parent command is curl and extract branch from the URL.
+    # It also handles the jsdelivr CDN URL format.
     if [[ "$parent_cmd" =~ curl ]]; then
-        # Regex: Look for .../milou-sh/milou-cli/BRANCH_NAME/install.sh
-        if [[ "$parent_cmd" =~ milou-sh/milou-cli/([^/]+)/install\.sh ]]; then
+        if [[ "$parent_cmd" =~ milou-sh/milou-cli@([^/]+)/install\.sh ]] || \
+           [[ "$parent_cmd" =~ milou-sh/milou-cli/([^/]+)/install\.sh ]]; then
             local detected_branch="${BASH_REMATCH[1]}"
             if [[ -n "$detected_branch" && "$detected_branch" != "$BRANCH" ]]; then
                 log "INFO" "Installer branch detected: ${BOLD}$detected_branch${NC}. Overriding default branch."
@@ -160,23 +163,6 @@ handle_error() {
             exit 1
             ;;
     esac
-}
-
-# Logging functions
-log() {
-    [[ "$QUIET" != "true" ]] && echo -e "$*"
-}
-
-warn() {
-    echo -e "${YELLOW}Warning: $*${NC}" >&2
-}
-
-error() {
-    echo -e "${RED}Error: $*${NC}" >&2
-}
-
-success() {
-    echo -e "${GREEN}$*${NC}"
 }
 
 # Show minimal logo

@@ -13,115 +13,76 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${DB_NAME}
     
-  # Development backend with live code mounting  
+  # Backend built locally
   backend:
     build:
-      context: /home/user/milou/dashboard
+      context: ${PROJECT_ROOT_DIR:-/home/user/milou}/dashboard
       dockerfile: backend/Dockerfile.backend
     environment:
-      - NODE_ENV=development
-      - CHOKIDAR_USEPOLLING=true
-      - WATCHPACK_POLLING=true
-      # Map standard .env variables to what backend container expects
-      - ADMIN_EMAIL=${ADMIN_EMAIL}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - JWT_SECRET=${SESSION_SECRET}
+      - NODE_ENV=production
+      - DATABASE_URI=postgresql://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT:-5432}/${DB_NAME}?sslmode=disable
+      - PORT=${PORT:-9999}
+      - DB_HOST=db
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-milou_database}
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SSO_CONFIG_ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - REDIS_URL=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
+      - JWT_SECRET=${SESSION_SECRET}
       - FRONTEND_URL=https://${DOMAIN:-localhost}
       - BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
-    volumes:
-      - /home/user/milou/dashboard/backend/src:/app/backend/src:delegated
-      - /home/user/milou/dashboard/backend/tsconfig.json:/app/backend/tsconfig.json:ro
-      - /home/user/milou/dashboard/tsconfig.json:/app/tsconfig.json:ro
-      - backend_node_modules:/app/node_modules
-      - backend_workspace_node_modules:/app/backend/node_modules
-      - backend_logs:/app/logs:rw
-    command: >
-      /bin/sh -c "
-        chown -R node:node /app/logs /app/uploads &&
-        cd /app/backend &&
-        su-exec node npm run dev
-      "
-    
-  # Development frontend with live code mounting
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+
+  # Frontend built locally
   frontend:
     build:
-      context: /home/user/milou/dashboard
+      context: ${PROJECT_ROOT_DIR:-/home/user/milou}/dashboard
       dockerfile: frontend/Dockerfile.frontend
     environment:
-      - NODE_ENV=development
-      - CHOKIDAR_USEPOLLING=true
-      - CHOKIDAR_INTERVAL=100
-      - WATCHPACK_POLLING=true
-      - FAST_REFRESH=false
-      # Map standard .env variables to what frontend container expects
+      - NODE_ENV=production
       - VITE_DOMAIN=${DOMAIN}
-      - VITE_FRONTEND_URL=https://${DOMAIN:-localhost}
-      - VITE_BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
-    volumes:
-      - /home/user/milou/dashboard/frontend:/app/frontend:delegated
-      - /app/node_modules
-      - /app/frontend/node_modules
-    command: >
-      /bin/sh -c "
-        cd /app/frontend &&
-        if [ ! -d node_modules ] || [ ! -f node_modules/.installed ]; then
-          npm install && touch node_modules/.installed
-        fi &&
-        npm run dev -- --host 0.0.0.0
-      "
-    
-  # Development engine with live code mounting
+
+  # Engine built locally
   engine:
     build:
-      context: /home/user/milou/engine
+      context: ${PROJECT_ROOT_DIR:-/home/user/milou}/engine
       dockerfile: Dockerfile
     environment:
       - PYTHONUNBUFFERED=1
-      - WATCHDOG_POLLING=true
-      - WATCHDOG_POLLING_INTERVAL=1
-      # Map standard .env variables to what engine container expects
+      - DATABASE_URI=postgresql://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT:-5432}/${DB_NAME}?sslmode=disable
+      - DB_HOST=db
+      - DB_PORT=${DB_PORT:-5432}
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${DB_NAME}
       - JWT_SECRET=${SESSION_SECRET}
       - SSO_CONFIG_ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - REDIS_URL=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
+      - REDIS_URL=redis://redis:${REDIS_PORT:-6379}
       - DOMAIN=${DOMAIN}
-    volumes:
-      - /home/user/milou/engine:/app:delegated
-      - engine_logs:/app/src/logger/logs:rw
-      - engine_venv:/app/venv
-    command: >
-      /bin/sh -c "
-        if [ ! -f venv/bin/activate ]; then
-          python -m venv venv &&
-          . venv/bin/activate &&
-          pip install -r requirements.txt &&
-          pip install watchdog
-        elif [ ! -f /tmp/requirements.md5 ] || ! md5sum -c /tmp/requirements.md5 >/dev/null 2>&1; then
-          . venv/bin/activate &&
-          pip install -r requirements.txt &&
-          md5sum requirements.txt > /tmp/requirements.md5
-        else
-          . venv/bin/activate
-        fi &&
-        watchmedo auto-restart --directory=./src --pattern=*.py --recursive -- python src/main.py
-      "
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
     
-  # Development nginx
+  # Nginx built locally
   nginx:
     build:
-      context: /home/user/milou/docker/nginx
+      context: ${PROJECT_ROOT_DIR:-/home/user/milou}/docker/nginx
       dockerfile: Dockerfile
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - DOMAIN=${DOMAIN}
 
 volumes:
-  backend_node_modules: {}
-  backend_workspace_node_modules: {}
   backend_logs: {}
-  engine_logs: {}
-  engine_venv: {} 
+  engine_logs: {} 

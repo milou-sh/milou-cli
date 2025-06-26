@@ -341,7 +341,7 @@ services:
       - "${HTTPS_PORT:-443}:443"
     volumes:
       # CRITICAL: Fixed SSL certificate mount with proper permissions
-      - ${SSL_CERT_PATH:-./ssl}:/etc/ssl:ro
+      - ${SSL_CERT_PATH_ABS:-./ssl}:/etc/ssl:ro
       - nginx_logs:/var/log/nginx:rw
       - nginx_cache:/var/cache/nginx:rw
     depends_on:

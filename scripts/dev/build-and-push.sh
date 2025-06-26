@@ -1526,9 +1526,13 @@ run_local_devenv() {
 
     local script_root_dir
     script_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+    # Source dependent modules for SSL generation
+    source "${script_root_dir}/src/_core.sh"
+    source "${script_root_dir}/src/_ssl.sh"
+
     local compose_file="$script_root_dir/static/docker-compose.yml"
     local compose_local_file="$script_root_dir/static/docker-compose.local.yml"
-    local main_env_file="$script_root_dir/.env" # Correct path to the main .env file
     local temp_compose_local_file
     temp_compose_local_file=$(mktemp)
 
@@ -1539,57 +1543,64 @@ run_local_devenv() {
     fi
 
     log "INFO" "Found project path at: $PROJECT_PATH"
-    log "INFO" "Preparing local docker-compose override file..."
 
     # Ensure PROJECT_PATH is absolute
     if [[ ! "$PROJECT_PATH" = /* ]]; then
         PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
     fi
     log "INFO" "Absolute project path is: $PROJECT_PATH"
-
-    # Replace hardcoded paths with the dynamic project path
-    sed "s|/home/milou_fresh|$PROJECT_PATH|g" "$compose_local_file" > "$temp_compose_local_file"
-    log "SUCCESS" "✅ Local compose file is ready."
+    export PROJECT_ROOT_DIR="$PROJECT_PATH"
 
     log "INFO" "Changing directory to $PROJECT_PATH"
     cd "$PROJECT_PATH" || return 1
 
+    # Ensure SSL certificates exist for localhost, generate if missing
+    if [[ ! -f "${MILOU_SSL_CERT_FILE}" || ! -f "${MILOU_SSL_KEY_FILE}" ]]; then
+        log "WARN" "⚠️  SSL certificates not found. Generating self-signed certs for localhost..."
+        ssl_generate_self_signed "localhost" "false" "false" || {
+            log "ERROR" "Failed to generate self-signed certificates. Aborting."
+            return 1
+        }
+    else
+        log "INFO" "✅ SSL certificates found."
+    fi
+
     # Add a trap to ensure the environment is torn down on exit
-    trap 'log "INFO" "🛑 Shutting down local environment..."; docker compose -f "$compose_file" -f "$temp_compose_local_file" down --remove-orphans >/dev/null 2>&1; rm -f "$temp_compose_local_file";' INT TERM
+    trap 'log "INFO" "🛑 Shutting down local environment..."; docker compose -f "$compose_file" -f "$compose_local_file" down --remove-orphans >/dev/null 2>&1;' INT TERM
+
+    local main_env_file="./.env"
 
     if [[ ! -f "$main_env_file" ]]; then
-        log "WARN" "⚠️  Main .env file not found at: $main_env_file"
+        log "WARN" "⚠️  Main .env file not found at: $PROJECT_PATH/.env"
         log "WARN" "    The application might not work correctly without required environment variables."
         log "WARN" "    Please ensure 'milou.sh setup' has been run to generate it."
     fi
 
     # Always tear down previous environment to ensure a clean state
-    log "INFO" "Tearing down any existing environment to ensure a clean slate..."
+    log "INFO" "Tearing down any existing environment to ensure a clean slate (including volumes)..."
     if [[ "$use_compose_v1" == "true" ]]; then
-        docker-compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" down --remove-orphans
+        docker-compose -f "$compose_file" -f "$compose_local_file" --env-file "$main_env_file" down -v --remove-orphans
     else
-        docker compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" down --remove-orphans
+        docker compose -f "$compose_file" -f "$compose_local_file" --env-file "$main_env_file" down -v --remove-orphans
     fi
 
     log "STEP" "🚀 Launching services in detached mode with docker-compose..."
     
     if [[ "$DRY_RUN" == "true" ]]; then
         if [[ "$use_compose_v1" == "true" ]]; then
-            log "INFO" "[DRY RUN] Would execute: docker-compose -f \"$compose_file\" -f \"$temp_compose_local_file\" up --build"
+            log "INFO" "[DRY RUN] Would execute: docker-compose -f \"$compose_file\" -f \"$compose_local_file\" up --build"
         else
-            log "INFO" "[DRY RUN] Would execute: docker compose -f \"$compose_file\" -f \"$temp_compose_local_file\" up --build"
+            log "INFO" "[DRY RUN] Would execute: docker compose -f \"$compose_file\" -f \"$compose_local_file\" up --build"
         fi
-        rm -f "$temp_compose_local_file"
         return 0
     fi
 
     if [[ "$use_compose_v1" == "true" ]]; then
-        docker-compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" up --build -d
+        docker-compose -f "$compose_file" -f "$compose_local_file" --env-file "$main_env_file" up --build -d
     else
-        docker compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" up --build -d
+        SSL_CERT_PATH_ABS="$script_root_dir/ssl" docker compose -f "$compose_file" -f "$compose_local_file" --env-file "$main_env_file" up --build -d
     fi
 
-    rm -f "$temp_compose_local_file"
     log "SUCCESS" "✅ Services started in detached mode."
     log "INFO" "   To view logs, navigate to '$PROJECT_PATH' and run: docker compose logs -f"
     return 0

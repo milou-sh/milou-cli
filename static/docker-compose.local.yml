@@ -5,7 +5,7 @@
 
 services:
   # Development database
-  db:
+  database:
     image: postgres:16
     environment:
       # Map standard .env variables to what Postgres container expects
@@ -22,7 +22,7 @@ services:
       - NODE_ENV=production
       - DATABASE_URI=postgresql://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT:-5432}/${DB_NAME}?sslmode=disable
       - PORT=${PORT:-9999}
-      - DB_HOST=db
+      - DB_HOST=database
       - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
@@ -60,8 +60,8 @@ services:
       dockerfile: Dockerfile
     environment:
       - PYTHONUNBUFFERED=1
-      - DATABASE_URI=postgresql://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT:-5432}/${DB_NAME}?sslmode=disable
-      - DB_HOST=db
+      - DATABASE_URI=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=disable
+      - DB_HOST=database
       - DB_PORT=${DB_PORT:-5432}
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}

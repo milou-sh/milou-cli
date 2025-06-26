@@ -7,7 +7,7 @@ services:
   # ==========================================================================
   # Database Service (PostgreSQL)
   # ==========================================================================
-  db:
+  database:
     image: ghcr.io/milou-sh/milou/database:${MILOU_DATABASE_TAG:-v1.0.0}
     container_name: milou-database
     restart: unless-stopped
@@ -114,7 +114,7 @@ services:
       
       # Database Configuration
       - DATABASE_URI=${DATABASE_URI}
-      - DB_HOST=${DB_HOST:-db}
+      - DB_HOST=${DB_HOST:-database}
       - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
@@ -165,7 +165,7 @@ services:
       - uploads:/app/uploads:rw
       - backend_logs:/app/logs:rw
     depends_on:
-      db:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -233,7 +233,7 @@ services:
       - DATABASE_URI=${DATABASE_URI}
       
       # Database Configuration (individual vars for backward compatibility)
-      - DB_HOST=${DB_HOST:-db}
+      - DB_HOST=${DB_HOST:-database}
       - DB_PORT=${DB_PORT:-5432}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
@@ -291,7 +291,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      db:
+      database:
         condition: service_healthy
       redis:
         condition: service_healthy

@@ -397,9 +397,6 @@ services:
 networks:
   milou_network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16  # Reverted back to original to avoid disrupting existing services
     labels:
       - "project=milou"
       - "environment=${NODE_ENV:-production}"

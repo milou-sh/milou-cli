@@ -7,6 +7,11 @@ services:
   # Development database
   db:
     image: postgres:16
+    environment:
+      # Map standard .env variables to what Postgres container expects
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     
   # Development backend with live code mounting  
   backend:
@@ -17,9 +22,14 @@ services:
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
-      # Admin credentials from environment variables (set by CLI)
+      # Map standard .env variables to what backend container expects
       - ADMIN_EMAIL=${ADMIN_EMAIL}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - JWT_SECRET=${SESSION_SECRET}
+      - SSO_CONFIG_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - REDIS_URL=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
+      - FRONTEND_URL=https://${DOMAIN:-localhost}
+      - BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
     volumes:
       - /home/milou_fresh/dashboard/backend/src:/app/backend/src:delegated
       - /home/milou_fresh/dashboard/backend/tsconfig.json:/app/backend/tsconfig.json:ro
@@ -42,6 +52,10 @@ services:
       - CHOKIDAR_INTERVAL=100
       - WATCHPACK_POLLING=true
       - FAST_REFRESH=false
+      # Map standard .env variables to what frontend container expects
+      - VITE_DOMAIN=${DOMAIN}
+      - VITE_FRONTEND_URL=https://${DOMAIN:-localhost}
+      - VITE_BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
     volumes:
       - /home/milou_fresh/dashboard/frontend:/app/frontend:delegated
       - /app/node_modules
@@ -64,6 +78,14 @@ services:
       - PYTHONUNBUFFERED=1
       - WATCHDOG_POLLING=true
       - WATCHDOG_POLLING_INTERVAL=1
+      # Map standard .env variables to what engine container expects
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+      - JWT_SECRET=${SESSION_SECRET}
+      - SSO_CONFIG_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - REDIS_URL=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
+      - DOMAIN=${DOMAIN}
     volumes:
       - /home/milou_fresh/engine:/app:delegated
       - engine_logs:/app/src/logger/logs:rw
@@ -92,6 +114,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - NODE_ENV=development
+      - DOMAIN=${DOMAIN}
 
 volumes:
   backend_node_modules: {}

@@ -60,6 +60,7 @@ USE_CACHE=true
 MULTI_PLATFORM=false
 BUILD_ARGS=""
 PRUNE_AFTER_BUILD=false
+RUN_LOCAL=false
 
 ### CHANGED: Default parallel builds to true
 PARALLEL_BUILDS=true                            # was false
@@ -1038,6 +1039,9 @@ ${BOLD}${BLUE}EXAMPLES:${NC}
   ${GREEN}# Disable parallel builds (force serial)${NC}
   $0 ${CYAN}--all --no-parallel --version 1.3.0 --push --token ghp_xxx${NC}
 
+  ${GREEN}# Build and run the entire stack locally for development with a specific project path${NC}
+  $0 ${CYAN}--run-local --path /path/to/your/milou_fresh${NC}
+
 ${BOLD}${BLUE}TOKEN SETUP:${NC}
   Create a token at: https://github.com/settings/tokens
   Required scopes: read:packages, write:packages, delete:packages
@@ -1255,6 +1259,10 @@ parse_args() {
                 QUICK_TEST=true
                 shift
                 ;;
+            --run-local)
+                RUN_LOCAL=true
+                shift
+                ;;
             --path)
                 if [[ -z "${2:-}" ]]; then
                     log "ERROR" "--path requires a value"
@@ -1276,7 +1284,7 @@ parse_args() {
     done
 
     # For build operations, ensure either --service or --all is provided
-    if [[ "$LIST_IMAGES" == "false" && "$DELETE_IMAGES" == "false" && "$TEST_MODE" == "false" && "$QUICK_TEST" == "false" ]]; then
+    if [[ "$LIST_IMAGES" == "false" && "$DELETE_IMAGES" == "false" && "$TEST_MODE" == "false" && "$QUICK_TEST" == "false" && "$RUN_LOCAL" == "false" ]]; then
         if [[ "$BUILD_ALL" == "false" && -z "$SERVICE" ]]; then
             log "ERROR" "Either specify --service or use --all for build operations"
             echo "Use --help for usage information"
@@ -1490,6 +1498,101 @@ run_comprehensive_tests() {
         log "ERROR" "❌ Some tests failed. Please fix the issues before proceeding."
         return 1
     fi
+}
+
+# =============================================================================
+# LOCAL DEVELOPMENT ENVIRONMENT
+# =============================================================================
+run_local_devenv() {
+    log "STEP" "🚀 Starting local development environment..."
+
+    local use_compose_v1=false
+    if command -v docker-compose >/dev/null 2>&1; then
+        use_compose_v1=true
+        log "INFO" "Using 'docker-compose' (v1) for compose operations."
+    elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        log "INFO" "Using 'docker compose' (v2) for compose operations."
+    else
+        log "ERROR" "Missing required dependency: 'docker-compose' or the 'docker compose' plugin."
+        log "INFO" "Please install it to continue. On Fedora/CentOS: sudo dnf install docker-compose-plugin. On Debian/Ubuntu: sudo apt-get install docker-compose-plugin."
+        return 1
+    fi
+
+    if [[ ! -d "$PROJECT_PATH" ]]; then
+        log "ERROR" "Project directory not found at: $PROJECT_PATH"
+        log "ERROR" "Please specify the correct path to your 'milou_fresh' directory with --path"
+        return 1
+    fi
+
+    local script_root_dir
+    script_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    local compose_file="$script_root_dir/static/docker-compose.yml"
+    local compose_local_file="$script_root_dir/static/docker-compose.local.yml"
+    local main_env_file="$script_root_dir/.env" # Correct path to the main .env file
+    local temp_compose_local_file
+    temp_compose_local_file=$(mktemp)
+
+    if [[ ! -f "$compose_file" ]] || [[ ! -f "$compose_local_file" ]]; then
+        log "ERROR" "Docker compose files not found in static/ directory."
+        rm -f "$temp_compose_local_file"
+        return 1
+    fi
+
+    log "INFO" "Found project path at: $PROJECT_PATH"
+    log "INFO" "Preparing local docker-compose override file..."
+
+    # Ensure PROJECT_PATH is absolute
+    if [[ ! "$PROJECT_PATH" = /* ]]; then
+        PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
+    fi
+    log "INFO" "Absolute project path is: $PROJECT_PATH"
+
+    # Replace hardcoded paths with the dynamic project path
+    sed "s|/home/milou_fresh|$PROJECT_PATH|g" "$compose_local_file" > "$temp_compose_local_file"
+    log "SUCCESS" "✅ Local compose file is ready."
+
+    log "INFO" "Changing directory to $PROJECT_PATH"
+    cd "$PROJECT_PATH" || return 1
+
+    # Add a trap to ensure the environment is torn down on exit
+    trap 'log "INFO" "🛑 Shutting down local environment..."; docker compose -f "$compose_file" -f "$temp_compose_local_file" down --remove-orphans >/dev/null 2>&1; rm -f "$temp_compose_local_file";' INT TERM
+
+    if [[ ! -f "$main_env_file" ]]; then
+        log "WARN" "⚠️  Main .env file not found at: $main_env_file"
+        log "WARN" "    The application might not work correctly without required environment variables."
+        log "WARN" "    Please ensure 'milou.sh setup' has been run to generate it."
+    fi
+
+    # Always tear down previous environment to ensure a clean state
+    log "INFO" "Tearing down any existing environment to ensure a clean slate..."
+    if [[ "$use_compose_v1" == "true" ]]; then
+        docker-compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" down --remove-orphans
+    else
+        docker compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" down --remove-orphans
+    fi
+
+    log "STEP" "🚀 Launching services in detached mode with docker-compose..."
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        if [[ "$use_compose_v1" == "true" ]]; then
+            log "INFO" "[DRY RUN] Would execute: docker-compose -f \"$compose_file\" -f \"$temp_compose_local_file\" up --build"
+        else
+            log "INFO" "[DRY RUN] Would execute: docker compose -f \"$compose_file\" -f \"$temp_compose_local_file\" up --build"
+        fi
+        rm -f "$temp_compose_local_file"
+        return 0
+    fi
+
+    if [[ "$use_compose_v1" == "true" ]]; then
+        docker-compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" up --build -d
+    else
+        docker compose -f "$compose_file" -f "$temp_compose_local_file" --env-file "$main_env_file" up --build -d
+    fi
+
+    rm -f "$temp_compose_local_file"
+    log "SUCCESS" "✅ Services started in detached mode."
+    log "INFO" "   To view logs, navigate to '$PROJECT_PATH' and run: docker compose logs -f"
+    return 0
 }
 
 # =============================================================================
@@ -1739,6 +1842,11 @@ display_build_summary() {
 main() {
     parse_args "$@"
     show_banner
+
+    if [[ "$RUN_LOCAL" == "true" ]]; then
+        run_local_devenv
+        exit $?
+    fi
 
     if [[ "$TEST_MODE" == "true" ]]; then
         run_comprehensive_tests

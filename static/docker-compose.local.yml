@@ -16,8 +16,8 @@ services:
   # Development backend with live code mounting  
   backend:
     build:
-      context: /home/milou_fresh/dashboard
-      dockerfile: backend/Dockerfile.backend.dev
+      context: /home/user/milou/dashboard
+      dockerfile: backend/Dockerfile.backend
     environment:
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true
@@ -31,21 +31,24 @@ services:
       - FRONTEND_URL=https://${DOMAIN:-localhost}
       - BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
     volumes:
-      - /home/milou_fresh/dashboard/backend/src:/app/backend/src:delegated
-      - /home/milou_fresh/dashboard/backend/tsconfig.json:/app/backend/tsconfig.json:ro
+      - /home/user/milou/dashboard/backend/src:/app/backend/src:delegated
+      - /home/user/milou/dashboard/backend/tsconfig.json:/app/backend/tsconfig.json:ro
+      - /home/user/milou/dashboard/tsconfig.json:/app/tsconfig.json:ro
       - backend_node_modules:/app/node_modules
       - backend_workspace_node_modules:/app/backend/node_modules
+      - backend_logs:/app/logs:rw
     command: >
       /bin/sh -c "
+        chown -R node:node /app/logs /app/uploads &&
         cd /app/backend &&
-        npm run dev
+        su-exec node npm run dev
       "
     
   # Development frontend with live code mounting
   frontend:
     build:
-      context: /home/milou_fresh/dashboard
-      dockerfile: frontend/Dockerfile.frontend.dev
+      context: /home/user/milou/dashboard
+      dockerfile: frontend/Dockerfile.frontend
     environment:
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true
@@ -57,7 +60,7 @@ services:
       - VITE_FRONTEND_URL=https://${DOMAIN:-localhost}
       - VITE_BACKEND_URL=https://${DOMAIN:-localhost}:${PORT:-9999}/
     volumes:
-      - /home/milou_fresh/dashboard/frontend:/app/frontend:delegated
+      - /home/user/milou/dashboard/frontend:/app/frontend:delegated
       - /app/node_modules
       - /app/frontend/node_modules
     command: >
@@ -72,7 +75,7 @@ services:
   # Development engine with live code mounting
   engine:
     build:
-      context: /home/milou_fresh/engine
+      context: /home/user/milou/engine
       dockerfile: Dockerfile
     environment:
       - PYTHONUNBUFFERED=1
@@ -87,7 +90,7 @@ services:
       - REDIS_URL=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
       - DOMAIN=${DOMAIN}
     volumes:
-      - /home/milou_fresh/engine:/app:delegated
+      - /home/user/milou/engine:/app:delegated
       - engine_logs:/app/src/logger/logs:rw
       - engine_venv:/app/venv
     command: >
@@ -110,7 +113,7 @@ services:
   # Development nginx
   nginx:
     build:
-      context: /home/milou_fresh/docker/nginx
+      context: /home/user/milou/docker/nginx
       dockerfile: Dockerfile
     environment:
       - NODE_ENV=development
@@ -119,5 +122,6 @@ services:
 volumes:
   backend_node_modules: {}
   backend_workspace_node_modules: {}
+  backend_logs: {}
   engine_logs: {}
   engine_venv: {} 

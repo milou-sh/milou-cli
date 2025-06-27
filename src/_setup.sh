@@ -2011,17 +2011,38 @@ setup_prepare_docker_environment() {
 # Start services
 setup_start_services() {
     milou_log "INFO" "✓ Starting Milou services..."
-    
+
     # The complex logic for token handling and intelligent pulling has been
     # simplified and moved. For repair mode, login is handled earlier.
     # For interactive mode, the user is prompted.
     # We now directly proceed to starting the services, and docker-compose
     # will handle pulling images if they are not present locally.
-    
+
+    # --- ADDED: Run initial database migration ---
+    milou_log "INFO" "⚙️  Running initial database migrations..."
+
+    # Ensure dependencies like database are up first
+    if ! docker_execute "up" "database" "false" "-d"; then
+        milou_log "ERROR" "Failed to start the database for migration."
+        return 1
+    fi
+    milou_log "INFO" "⏳ Waiting for database to be ready..."
+    sleep 10 # Simple wait for DB to initialize
+
+    # Now run the migration
+    if ! docker_compose run --rm backend migrate; then
+        milou_log "ERROR" "❌ Database migration failed. Setup cannot continue."
+        milou_log "INFO" "💡 Check the logs above for migration errors from the backend service."
+        milou_log "INFO" "💡 You may need to clean the installation with './milou.sh setup --clean' and try again."
+        return 1
+    fi
+    milou_log "SUCCESS" "✅ Database migrations completed successfully."
+    # --- END MIGRATION STEP ---
+
     # Use the Docker module's start function which handles authentication
     if service_start_with_validation "" "60" "false"; then
         milou_log "SUCCESS" "✓ Services started successfully"
-        
+
         # Wait for services to be ready
         milou_log "INFO" "✓ Waiting for services to initialize..."
         sleep 10

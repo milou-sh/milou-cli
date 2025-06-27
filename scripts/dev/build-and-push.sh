@@ -1585,7 +1585,6 @@ run_local_devenv() {
     fi
 
     log "STEP" "⚙️ Running backend migrations before running docker compose..."
-    log "STEP" "script root dir is: $script_root_dir"
     SSL_CERT_PATH_ABS="$script_root_dir/ssl" docker compose -f "$compose_file" -f "$compose_local_file" --env-file "$main_env_file" run --rm backend migrate
 
     log "STEP" "🚀 Launching services in detached mode with docker-compose..."

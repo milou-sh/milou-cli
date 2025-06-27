@@ -924,40 +924,71 @@ service_restart_safely() {
 service_update_zero_downtime() {
     local service="${1:-}"
     local quiet="${2:-false}"
-    
+
     if [[ -z "$service" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "service_update_zero_downtime requires a service name."
         return 1
     fi
-    
+
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Starting zero-downtime update for: $service"
-    
+
+    # --- ADDED: Get current image tag for potential rollback ---
+    local old_image_tag=""
+    if [[ "$service" == "backend" ]]; then
+        old_image_tag=$(docker inspect --format='{{.Config.Image}}' "milou-${service}" 2>/dev/null | cut -d: -f2)
+        if [[ -n "$old_image_tag" ]]; then
+            milou_log "INFO" "🏷️  Current backend version is $old_image_tag. This will be used for rollback if migration fails."
+        fi
+    fi
+    # --- END ---
+
     # Create backup snapshot
     if command -v create_system_snapshot >/dev/null 2>&1; then
         if ! create_system_snapshot "update_${service}_$(date +%s)" "$quiet"; then
             [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Could not create backup snapshot"
         fi
     fi
-    
+
     # Pull the specific image for the service
     if ! docker_execute "pull" "$service" "$quiet"; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to pull new image for $service"
         return 1
     fi
-    
+
+    # --- ADDED: Migration logic for backend service ---
+    if [[ "$service" == "backend" ]]; then
+        milou_log "INFO" "⚙️  Running database migrations for backend update..."
+        if ! docker_compose run --rm backend migrate; then
+            milou_log "ERROR" "❌ Database migration failed for the new version."
+            milou_log "INFO" "🔄 Rolling back to the previous version..."
+
+            if [[ -n "$old_image_tag" ]]; then
+                # Revert the tag in the .env file
+                core_update_env_var "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" "MILOU_BACKEND_TAG" "$old_image_tag"
+                milou_log "SUCCESS" "✅ Rolled back backend version in .env file to $old_image_tag."
+                milou_log "INFO" "The update for the backend has been cancelled. Your system continues to run the old version."
+            else
+                milou_log "WARN" "Could not determine the old version tag for automatic rollback. Please check your .env file."
+            fi
+            return 1 # Abort the update for this service
+        fi
+        milou_log "SUCCESS" "✅ Database migrations completed successfully."
+    fi
+    # --- END MIGRATION LOGIC ---
+
     # Perform rolling update for the single service
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
-    
+
     local result_output
     result_output=$(docker_compose up -d --remove-orphans --no-deps "$service" 2>&1)
     local exit_code=$?
-    
+
     if [[ $exit_code -ne 0 ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to update service: $service"
         docker_handle_startup_error "$result_output" "$service" "$quiet"
         return 1
     fi
-    
+
     # Wait for the updated service to become healthy
     local retries=12
     local wait_interval=5

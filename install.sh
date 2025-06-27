@@ -106,7 +106,7 @@ get_default_install_dir() {
 
 # Configuration
 readonly REPO_URL="https://github.com/milou-sh/milou-cli"
-readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main-gemini"
+readonly REPO_RAW_URL="https://raw.githubusercontent.com/milou-sh/milou-cli/main"
 INSTALL_DIR="${MILOU_INSTALL_DIR:-$(get_default_install_dir)}"
 BRANCH="${MILOU_BRANCH:-main}"
 

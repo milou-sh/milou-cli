@@ -341,7 +341,7 @@ services:
       - "${HTTPS_PORT:-443}:443"
     volumes:
       # CRITICAL: Fixed SSL certificate mount with proper permissions
-      - ${SSL_CERT_PATH_ABS:-./ssl}:/etc/ssl:ro
+      - ${SSL_CERT_PATH:-../ssl}:/etc/ssl:ro
       - nginx_logs:/var/log/nginx:rw
       - nginx_cache:/var/cache/nginx:rw
     depends_on:
@@ -361,6 +361,89 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  # ==========================================================================
+  # Database Migration Service
+  # ==========================================================================
+  database-migrations:
+    image: ghcr.io/milou-sh/milou/backend:${MILOU_BACKEND_TAG:-v1.0.0}
+    container_name: milou-database-migrations
+    restart: unless-stopped
+    profiles:
+      - "database-migrations"
+    entrypoint: ""
+    command: |
+      sh -c
+        "npm run migrations:run:prod --workspace=backend"
+    environment:
+      # Application Environment
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-9999}
+      - DOCKER_CONTAINER=true
+      
+      # Database Configuration
+      - DATABASE_URI=${DATABASE_URI}
+      - DB_HOST=${DB_HOST:-database}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-milou_database}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-milou_database}
+      
+      # Redis Configuration
+      - REDIS_URL=${REDIS_URL}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # RabbitMQ Configuration - CRITICAL: Fixed credential passing
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - RABBITMQ_HOST=${RABBITMQ_HOST:-rabbitmq}
+      - RABBITMQ_PORT=${RABBITMQ_PORT:-5672}
+      - RABBITMQ_USER=${RABBITMQ_USER}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      - RABBITMQ_VHOST=${RABBITMQ_VHOST:-/}
+      
+      # Security Configuration
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SSO_CONFIG_ENCRYPTION_KEY=${SSO_CONFIG_ENCRYPTION_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      
+      # Feature Flags
+      - ENABLE_ANALYTICS=${ENABLE_ANALYTICS:-true}
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-true}
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+      
+      # CORS Configuration
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      
+      # URL Configuration (Backend App Config)
+      - FRONTEND_URL=${FRONTEND_URL}
+      - BACKEND_URL=${BACKEND_URL}
+      
+      # Admin Configuration
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+    expose:
+      - "${PORT:-9999}"
+    volumes:
+      - uploads:/app/uploads:rw
+      - backend_logs:/app/logs:rw
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - milou_network
+      - proxy
+    
 
 
 # =============================================================================

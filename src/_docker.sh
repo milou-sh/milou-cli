@@ -770,26 +770,29 @@ service_start_with_validation() {
     local service="${1:-}"
     local timeout="${2:-60}"
     local quiet="${3:-false}"
-    
+    local skip_credential_check="${4:-false}"
+
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🚀 Starting service with validation: ${service:-all services}"
-    
+
     # Check for credential mismatches before starting (prevents authentication failures)
-    [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Checking for potential credential mismatches..."
-    if detect_credential_mismatch "$quiet"; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "🔧 Credential mismatch detected - offering automatic resolution"
-        
-        # Try to resolve automatically in interactive mode
-        if resolve_credential_mismatch "true" "$quiet"; then
-            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credential mismatch resolved - proceeding with startup"
-        else
-            [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Credential mismatch not resolved - startup may fail"
-            [[ "$quiet" != "true" ]] && echo ""
-            [[ "$quiet" != "true" ]] && echo "💡 MANUAL FIX: Run './milou.sh setup --fix-credentials' or clean volumes manually"
-            [[ "$quiet" != "true" ]] && echo ""
-            # Continue anyway - user might want to handle it manually
+    if [[ "$skip_credential_check" != "true" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "INFO" "🔍 Checking for potential credential mismatches..."
+        if detect_credential_mismatch "$quiet"; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "🔧 Credential mismatch detected - offering automatic resolution"
+
+            # Try to resolve automatically in interactive mode
+            if resolve_credential_mismatch "true" "$quiet"; then
+                [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Credential mismatch resolved - proceeding with startup"
+            else
+                [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Credential mismatch not resolved - startup may fail"
+                [[ "$quiet" != "true" ]] && echo ""
+                [[ "$quiet" != "true" ]] && echo "💡 MANUAL FIX: Run './milou.sh setup --fix-credentials' or clean volumes manually"
+                [[ "$quiet" != "true" ]] && echo ""
+                # Continue anyway - user might want to handle it manually
+            fi
         fi
     fi
-    
+
     # NETWORK CREATION: Ensure required networks exist (like in update process)
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔗 Ensuring required networks exist..."
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Networks will be created by Docker Compose"
@@ -955,10 +958,10 @@ service_update_zero_downtime() {
         return 1
     fi
 
-    # --- ADDED: Migration logic for backend service ---
+    # --- CHANGED: Migration logic for backend service using dedicated service ---
     if [[ "$service" == "backend" ]]; then
         milou_log "INFO" "⚙️  Running database migrations for backend update..."
-        if ! docker_compose run --rm backend migrate; then
+        if ! docker_compose --profile database-migrations up --abort-on-container-exit; then
             milou_log "ERROR" "❌ Database migration failed for the new version."
             milou_log "INFO" "🔄 Rolling back to the previous version..."
 
@@ -973,6 +976,9 @@ service_update_zero_downtime() {
             return 1 # Abort the update for this service
         fi
         milou_log "SUCCESS" "✅ Database migrations completed successfully."
+        # Bring down the migration service and its dependencies after a successful run
+        milou_log "INFO" "✓ Bringing down migration service..."
+        docker_compose --profile database-migrations down >/dev/null 2>&1 || true
     fi
     # --- END MIGRATION LOGIC ---
 

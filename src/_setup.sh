@@ -2018,29 +2018,30 @@ setup_start_services() {
     # We now directly proceed to starting the services, and docker-compose
     # will handle pulling images if they are not present locally.
 
-    # --- ADDED: Run initial database migration ---
+    # --- CHANGED: Run initial database migration using dedicated service ---
     milou_log "INFO" "⚙️  Running initial database migrations..."
 
-    # Ensure dependencies like database are up first
-    if ! docker_execute "up" "database" "false" "-d"; then
-        milou_log "ERROR" "Failed to start the database for migration."
-        return 1
-    fi
-    milou_log "INFO" "⏳ Waiting for database to be ready..."
-    sleep 10 # Simple wait for DB to initialize
-
-    # Now run the migration
-    if ! docker_compose run --rm backend migrate; then
+    # Run the migrations service. It will bring up dependencies (db)
+    # and run the migration, then exit. The `--abort-on-container-exit` flag
+    # ensures that compose exits when the one-off migration task is done.
+    if ! docker_compose --profile database-migrations up --abort-on-container-exit; then
         milou_log "ERROR" "❌ Database migration failed. Setup cannot continue."
-        milou_log "INFO" "💡 Check the logs above for migration errors from the backend service."
+        milou_log "INFO" "💡 Check the logs above for migration errors."
         milou_log "INFO" "💡 You may need to clean the installation with './milou.sh setup --clean' and try again."
         return 1
     fi
     milou_log "SUCCESS" "✅ Database migrations completed successfully."
-    # --- END MIGRATION STEP ---
 
-    # Use the Docker module's start function which handles authentication
-    if service_start_with_validation "" "60" "false"; then
+    # --- ADDED: Clean up migration service and its dependencies ---
+    # This brings down the services that were only started for the migration.
+    milou_log "INFO" "✓ Stopping migration-related containers..."
+    if ! docker_compose --profile database-migrations down; then
+        milou_log "WARN" "Could not stop migration containers cleanly, but proceeding."
+    fi
+
+    # Use the Docker module's start function, skipping the credential check
+    # because we know it's a fresh database.
+    if service_start_with_validation "" "60" "false" "true"; then
         milou_log "SUCCESS" "✓ Services started successfully"
 
         # Wait for services to be ready

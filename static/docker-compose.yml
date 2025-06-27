@@ -374,7 +374,7 @@ services:
     entrypoint: ""
     command: |
       sh -c
-        "npm run migrations:run:prod --workspace=backend"
+        "npm run migration:run:prod --workspace=backend"
     environment:
       # Application Environment
       - NODE_ENV=${NODE_ENV:-production}

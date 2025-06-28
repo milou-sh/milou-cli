@@ -113,6 +113,22 @@ fi
 readonly MILOU_CORE_LOADED="true"
 
 # =============================================================================
+# GLOBAL CONSTANTS AND CONFIGURATION
+# =============================================================================
+
+# Define essential services required for the application to be healthy.
+# This array is the single source of truth for service validation.
+readonly -a MILOU_ESSENTIAL_SERVICES=(
+    "database"
+    "redis"
+    "rabbitmq"
+    "backend"
+    "frontend"
+    "engine"
+    "nginx"
+)
+
+# =============================================================================
 # ENHANCED UI/UX LOGGING UTILITIES
 # Version: 3.1.1 - Enhanced User Experience Edition  
 # =============================================================================

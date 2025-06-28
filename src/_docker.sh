@@ -677,35 +677,45 @@ docker_execute() {
 health_check_service() {
     local service="$1"
     local quiet="${2:-false}"
-    
-    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🏥 Checking health of service: $service"
-    
-    # Check if service is defined
+    # As per comments elsewhere, container names are hardcoded with 'milou-' prefix.
+    local container_name="milou-${service}"
+
+    [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🏥 Checking health of service: $service (container: $container_name)"
+
+    # First, check if the service is defined in the compose file at all.
+    # This prevents false negatives for services that shouldn't exist.
     local service_exists
-    service_exists=$(docker_compose config --services 2>/dev/null | grep -c "^$service$" || echo "0")
+    service_exists=$(docker_compose config --services 2>/dev/null | grep -c "^${service}$" || echo "0")
     
     if [[ "$service_exists" -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service '$service' not found in compose configuration"
+        [[ "$quiet" != "true" ]] && milou_log "ERROR" "Service '$service' is essential but not found in compose configuration."
+        return 1
+    fi
+
+    local container_status
+    # Get status for a specific container. Filter by exact name match.
+    container_status=$(docker ps -a --filter "name=^/${container_name}$" --format "{{.Status}}" 2>/dev/null)
+
+    if [[ -z "$container_status" ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' container not found, though defined in compose."
+        return 1 # Not found
+    fi
+
+    if echo "$container_status" | grep -q "(healthy)"; then
+        [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Service '$service' is healthy"
+        return 0 # Healthy
+    fi
+
+    if echo "$container_status" | grep -q "Up"; then
+        # It's running, but not healthy yet (e.g., starting up).
+        # For a final check, this is a failure.
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is running but not yet healthy. Status: $container_status"
         return 1
     fi
     
-    # Check if service is running
-    local service_status
-    service_status=$(docker_compose ps --services --filter "status=running" 2>/dev/null | grep -c "^$service$" 2>/dev/null || echo "0")
-    
-    # Ensure service_status is a valid number
-    if ! [[ "$service_status" =~ ^[0-9]+$ ]]; then
-        service_status="0"
-    fi
-    
-    if [[ "$service_status" -eq 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is not running"
-        return 1
-    fi
-    
-    # Additional health checks can be added here per service
-    [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✅ Service '$service' is healthy"
-    return 0
+    # Any other status is a failure (e.g., Exited, Restarting, Created)
+    [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Service '$service' is not running correctly. Status: $container_status"
+    return 1 # Unhealthy
 }
 
 # Check all services health - comprehensive implementation
@@ -718,9 +728,13 @@ health_check_all() {
     local healthy_services=0
     local unhealthy_services=()
     
-    # Hardcoded list of essential, long-running services to check.
-    # This avoids checking one-off tasks like 'database-migrations'.
-    local services_to_check=("database" "redis" "rabbitmq" "backend" "frontend" "engine" "nginx")
+    # Use the global list of essential services
+    local services_to_check=("${MILOU_ESSENTIAL_SERVICES[@]}")
+    
+    if [[ ${#services_to_check[@]} -eq 0 ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "Essential services list is empty. Skipping health check."
+        return 0 # Nothing to check
+    fi
     
     total_services=${#services_to_check[@]}
 
@@ -738,7 +752,7 @@ health_check_all() {
     if [[ "$quiet" != "true" ]]; then
         echo
         milou_log "INFO" "📊 Health Check Summary:"
-        milou_log "INFO" "  Total services: $total_services"
+        milou_log "INFO" "  Total essential services: $total_services"
         milou_log "INFO" "  Healthy: $healthy_services"
         milou_log "INFO" "  Unhealthy: ${#unhealthy_services[@]}"
         
@@ -748,11 +762,13 @@ health_check_all() {
     fi
     
     # Return success only if all services are healthy
-    if [[ $healthy_services -eq $total_services && $total_services -gt 0 ]]; then
-        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 All services are healthy!"
+    if [[ $healthy_services -eq $total_services ]]; then
+        [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "🎉 All essential services are healthy!"
         return 0
     else
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Some services need attention"
+        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Some essential services need attention"
+        # Upon failure, immediately report logs for any unhealthy containers
+        docker_report_unhealthy_services "" "$quiet"
         return 1
     fi
 }
@@ -988,7 +1004,7 @@ service_update_zero_downtime() {
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Updating service: $service"
 
     local result_output
-    result_output=$(docker_compose up -d --remove-orphans --no-deps "$service" 2>&1)
+    result_output=$(docker_compose up -d --remove-orphans "$service" 2>&1)
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then

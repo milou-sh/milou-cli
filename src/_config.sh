@@ -239,8 +239,8 @@ config_detect_service_versions() {
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Detecting latest version for each service individually"
     
-    # Services to check
-    local services=("backend" "frontend" "engine" "database" "nginx")
+    # Use the global list of essential services
+    local services=("${MILOU_ESSENTIAL_SERVICES[@]}")
     
     # Try to get version for each service
     for service in "${services[@]}"; do
@@ -1462,7 +1462,7 @@ config_resolve_mutable_tags() {
     [[ ! -f "$env_file" ]] && return 0  # nothing to do
 
     local updated=false
-    for service in "${MILOU_SERVICE_LIST[@]}"; do
+    for service in "${MILOU_ESSENTIAL_SERVICES[@]}"; do
         local var_name="MILOU_$(to_uppercase "$service")_TAG"
         local current_value
         current_value=$(grep -E "^${var_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')

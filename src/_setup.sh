@@ -2035,7 +2035,7 @@ setup_start_services() {
     # --- ADDED: Clean up migration service and its dependencies ---
     # This brings down the services that were only started for the migration.
     milou_log "INFO" "✓ Stopping migration-related containers..."
-    if ! docker_compose database-migrations down; then
+    if ! docker_compose down; then
         milou_log "WARN" "Could not stop migration containers cleanly, but proceeding."
     fi
 

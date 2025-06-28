@@ -980,7 +980,7 @@ service_update_zero_downtime() {
         milou_log "SUCCESS" "✅ Database migrations completed successfully."
         # Bring down the migration service and its dependencies after a successful run
         milou_log "INFO" "✓ Bringing down migration service..."
-        docker_compose database-migrations down >/dev/null 2>&1 || true
+        docker_compose down >/dev/null 2>&1 || true
     fi
     # --- END MIGRATION LOGIC ---
 

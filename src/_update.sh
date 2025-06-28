@@ -684,6 +684,18 @@ _perform_fixed_update() {
     local updated_services=()
     
     for service in "${services_to_update[@]}"; do
+        # --- ADDED: Get current image tag for potential rollback ---
+        local old_image_tag=""
+        if [[ "$service" == "backend" ]]; then
+            # We need the actual service name for docker inspect
+            local actual_backend_service_name="${SERVICE_NAME_MAP[backend]:-backend}"
+            old_image_tag=$(docker inspect --format='{{.Config.Image}}' "milou-${actual_backend_service_name}" 2>/dev/null | cut -d: -f2)
+            if [[ -n "$old_image_tag" ]]; then
+                milou_log "INFO" "🏷️  Current backend version is $old_image_tag. This will be used for rollback if migration fails."
+            fi
+        fi
+        # --- END ---
+
         # Get target version for this service
         local service_target_version=""
         local var_name="MILOU_TARGET_VERSION_${service^^}"
@@ -707,12 +719,12 @@ _perform_fixed_update() {
         # Perform zero-downtime update
         local update_success=false
         if command -v service_update_zero_downtime >/dev/null 2>&1; then
-            if service_update_zero_downtime "$actual_service_name" "false"; then
+            if service_update_zero_downtime "$actual_service_name" "false" "$old_image_tag"; then
                 update_success=true
             fi
         else
             # Fallback to basic update
-            if _update_single_service "$actual_service_name" "$service_target_version"; then
+            if _update_single_service "$actual_service_name" "$service_target_version" "$old_image_tag"; then
                 update_success=true
             fi
         fi
@@ -769,6 +781,7 @@ _update_env_file_service_version() {
 _update_single_service() {
     local service="$1"
     local target_version="$2"
+    local old_image_tag="$3"
     
     local registry="${DOCKER_REGISTRY:-ghcr.io/milou-sh/milou}"
     local image_name="${registry}/${service}:${target_version}"
@@ -778,6 +791,30 @@ _update_single_service() {
         milou_log "ERROR" "❌ Failed to pull image: $image_name"
         return 1
     fi
+    
+    # --- ADDED: Migration logic for backend service ---
+    if [[ "$service" == "backend" || "$service" == "db" ]]; then # Match on actual service name
+        milou_log "INFO" "⚙️  Running database migrations for backend update..."
+        if ! docker_compose up database-migrations --remove-orphans; then
+            milou_log "ERROR" "❌ Database migration failed for the new version."
+            milou_log "INFO" "🔄 Rolling back to the previous version..."
+
+            if [[ -n "$old_image_tag" ]]; then
+                # Revert the tag in the .env file
+                core_update_env_var "${DOCKER_ENV_FILE:-${SCRIPT_DIR}/.env}" "MILOU_BACKEND_TAG" "$old_image_tag"
+                milou_log "SUCCESS" "✅ Rolled back backend version in .env file to $old_image_tag."
+                milou_log "INFO" "The update for the backend has been cancelled. Your system continues to run the old version."
+            else
+                milou_log "WARN" "Could not determine the old version tag for automatic rollback. Please check your .env file."
+            fi
+            return 1 # Abort the update for this service
+        fi
+        milou_log "SUCCESS" "✅ Database migrations completed successfully."
+        # Bring down the migration service and its dependencies after a successful run
+        milou_log "INFO" "✓ Bringing down migration service..."
+        docker_compose down >/dev/null 2>&1 || true
+    fi
+    # --- END MIGRATION LOGIC ---
     
     # Restart service with new image
     if command -v docker_execute >/dev/null 2>&1; then

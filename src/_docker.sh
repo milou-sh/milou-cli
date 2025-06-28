@@ -945,6 +945,7 @@ service_restart_safely() {
 service_update_zero_downtime() {
     local service="${1:-}"
     local quiet="${2:-false}"
+    local old_image_tag="${3:-}" # Accept old image tag for rollback
 
     if [[ -z "$service" ]]; then
         [[ "$quiet" != "true" ]] && milou_log "ERROR" "service_update_zero_downtime requires a service name."
@@ -952,16 +953,6 @@ service_update_zero_downtime() {
     fi
 
     [[ "$quiet" != "true" ]] && milou_log "INFO" "🔄 Starting zero-downtime update for: $service"
-
-    # --- ADDED: Get current image tag for potential rollback ---
-    local old_image_tag=""
-    if [[ "$service" == "backend" ]]; then
-        old_image_tag=$(docker inspect --format='{{.Config.Image}}' "milou-${service}" 2>/dev/null | cut -d: -f2)
-        if [[ -n "$old_image_tag" ]]; then
-            milou_log "INFO" "🏷️  Current backend version is $old_image_tag. This will be used for rollback if migration fails."
-        fi
-    fi
-    # --- END ---
 
     # Create backup snapshot
     if command -v create_system_snapshot >/dev/null 2>&1; then

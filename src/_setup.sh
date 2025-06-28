@@ -2039,9 +2039,12 @@ setup_start_services() {
         milou_log "WARN" "Could not stop migration containers cleanly, but proceeding."
     fi
 
-    # Use the Docker module's start function, skipping the credential check
-    # because we know it's a fresh database.
-    if service_start_with_validation "" "60" "false" "true"; then
+    milou_log "INFO" "▶️  Starting all services..."
+    local result_output
+    result_output=$(docker_compose up -d --remove-orphans 2>&1)
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
         milou_log "SUCCESS" "✓ Services started successfully"
 
         # Wait for services to be ready
@@ -2050,24 +2053,8 @@ setup_start_services() {
         
         return 0
     else
-        milou_log "ERROR" "Failed to start services"
-        
-        # Error guidance is now handled by docker_handle_startup_error in _docker.sh
-        # which provides more specific feedback based on the docker-compose output.
-        echo ""
-        echo "🔧 TROUBLESHOOTING SERVICE STARTUP"
-        echo "=================================="
-        echo "   Authentication appears OK, but services failed to start."
-        echo ""
-        echo "✓ NEXT STEPS:"
-        echo "   1. Check service logs for detailed errors: ./milou.sh logs"
-        echo "   2. Verify system resources: docker system df"
-        echo "   3. Check for port conflicts: ./milou.sh status"
-        echo "   4. Try a manual start: ./milou.sh start"
-        echo ""
-        echo "💡 For the most detailed output, re-run with --verbose: ./milou.sh setup --verbose"
-        echo ""
-        
+        milou_log "ERROR" "❌ Failed to start services with docker-compose."
+        docker_handle_startup_error "$result_output" "" "false"
         return 1
     fi
 }

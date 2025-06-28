@@ -718,11 +718,13 @@ health_check_all() {
     local healthy_services=0
     local unhealthy_services=()
     
-    # Get all defined services
-    while IFS= read -r service; do
-        [[ -z "$service" ]] && continue
-        ((total_services++))
-        
+    # Hardcoded list of essential, long-running services to check.
+    # This avoids checking one-off tasks like 'database-migrations'.
+    local services_to_check=("database" "redis" "rabbitmq" "backend" "frontend" "engine" "nginx")
+    
+    total_services=${#services_to_check[@]}
+
+    for service in "${services_to_check[@]}"; do
         if health_check_service "$service" "true"; then
             ((healthy_services++))
             [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "  ✅ $service"
@@ -730,7 +732,7 @@ health_check_all() {
             unhealthy_services+=("$service")
             [[ "$quiet" != "true" ]] && milou_log "ERROR" "  ❌ $service"
         fi
-    done < <(docker_compose config --services 2>/dev/null)
+    done
     
     # Report results
     if [[ "$quiet" != "true" ]]; then
@@ -961,7 +963,7 @@ service_update_zero_downtime() {
     # --- CHANGED: Migration logic for backend service using dedicated service ---
     if [[ "$service" == "backend" ]]; then
         milou_log "INFO" "⚙️  Running database migrations for backend update..."
-        if ! docker_compose --profile database-migrations up --abort-on-container-exit; then
+        if ! docker_compose up database-migrations --remove-orphans; then
             milou_log "ERROR" "❌ Database migration failed for the new version."
             milou_log "INFO" "🔄 Rolling back to the previous version..."
 
@@ -978,7 +980,7 @@ service_update_zero_downtime() {
         milou_log "SUCCESS" "✅ Database migrations completed successfully."
         # Bring down the migration service and its dependencies after a successful run
         milou_log "INFO" "✓ Bringing down migration service..."
-        docker_compose --profile database-migrations down >/dev/null 2>&1 || true
+        docker_compose database-migrations down >/dev/null 2>&1 || true
     fi
     # --- END MIGRATION LOGIC ---
 

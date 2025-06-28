@@ -368,7 +368,6 @@ services:
   database-migrations:
     image: ghcr.io/milou-sh/milou/backend:${MILOU_BACKEND_TAG:-v1.0.0}
     container_name: milou-database-migrations
-    restart: unless-stopped
     profiles:
       - "database-migrations"
     entrypoint: ""

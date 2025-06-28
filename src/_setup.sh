@@ -2024,7 +2024,7 @@ setup_start_services() {
     # Run the migrations service. It will bring up dependencies (db)
     # and run the migration, then exit. The `--abort-on-container-exit` flag
     # ensures that compose exits when the one-off migration task is done.
-    if ! docker_compose --profile database-migrations up --abort-on-container-exit; then
+    if ! docker_compose up database-migrations  --remove-orphans; then
         milou_log "ERROR" "❌ Database migration failed. Setup cannot continue."
         milou_log "INFO" "💡 Check the logs above for migration errors."
         milou_log "INFO" "💡 You may need to clean the installation with './milou.sh setup --clean' and try again."
@@ -2035,7 +2035,7 @@ setup_start_services() {
     # --- ADDED: Clean up migration service and its dependencies ---
     # This brings down the services that were only started for the migration.
     milou_log "INFO" "✓ Stopping migration-related containers..."
-    if ! docker_compose --profile database-migrations down; then
+    if ! docker_compose database-migrations down; then
         milou_log "WARN" "Could not stop migration containers cleanly, but proceeding."
     fi
 

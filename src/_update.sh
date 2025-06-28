@@ -815,13 +815,13 @@ _update_single_service() {
         docker_compose down >/dev/null 2>&1 || true
     fi
     # --- END MIGRATION LOGIC ---
-    
-    # Restart service with new image
+
+    # Restart all services with new images (not just the modified one)
     if command -v docker_execute >/dev/null 2>&1; then
-        docker_execute "up" "$service" "false" "--force-recreate" "--no-deps" "-d"
+        docker_execute "up" "all" "false" "--force-recreate" "-d"
     else
-        docker compose pull "$service"
-        docker compose up -d --force-recreate --no-deps "$service"
+        docker compose pull
+        docker compose up -d --force-recreate
     fi
     
     return 0

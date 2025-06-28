@@ -100,7 +100,7 @@ config_generate() {
     if [[ "$preserve_credentials" == "auto" ]]; then
         if [[ -f "$env_file" ]]; then
             should_preserve="true"
-            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 AUTO: Preserving existing credentials (safe update mode) "
+            [[ "$quiet" != "true" ]] && milou_log "INFO" "🔒 AUTO: Preserving existing credentials (safe update mode)"
         else
             [[ "$quiet" != "true" ]] && milou_log "INFO" "🆕 AUTO: Generating new credentials (fresh installation)"
         fi

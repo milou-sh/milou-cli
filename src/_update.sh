@@ -795,7 +795,7 @@ _update_single_service() {
     # --- ADDED: Migration logic for backend service ---
     if [[ "$service" == "backend" || "$service" == "db" ]]; then # Match on actual service name
         milou_log "INFO" "⚙️  Running database migrations for backend update..."
-        if ! docker_compose up database-migrations --remove-orphans; then
+        if ! docker_compose up database-migrations --remove-orphans --abort-on-container-exit --exit-code-from database-migrations; then
             milou_log "ERROR" "❌ Database migration failed for the new version."
             milou_log "INFO" "🔄 Rolling back to the previous version..."
 

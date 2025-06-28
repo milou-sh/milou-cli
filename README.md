@@ -110,6 +110,8 @@ cd milou-cli
 # Start developing
 ./milou.sh logs    # Watch logs
 ./milou.sh restart # Restart after changes
+
+# Test commit for user attribution
 ```
 
 ## 📄 License

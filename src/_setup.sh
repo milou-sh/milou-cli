@@ -2077,6 +2077,48 @@ setup_prepare_docker_environment() {
     return 0
 }
 
+# Pre-pull images to work around potential docker compose pull issues
+_setup_pre_pull_images() {
+    milou_log "INFO" "⬇️  Pre-pulling all service images individually (verbose)..."
+    milou_log "DEBUG" "This is a workaround for potential Docker client/daemon issues with attestations."
+
+    if ! command -v docker_compose >/dev/null 2>&1; then
+        milou_log "WARN" "The 'docker_compose' wrapper function is not available. Skipping pre-pull."
+        return 0
+    fi
+
+    # Get all unique image names from the docker-compose configuration.
+    # This will include images from all services not in a disabled profile.
+    # Since database-migrations uses the backend image (which is in the default profile),
+    # this single command is sufficient.
+    local images_to_pull
+    images_to_pull=$(docker_compose config --images 2>/dev/null)
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]] || [[ -z "$images_to_pull" ]]; then
+        milou_log "WARN" "Could not retrieve image list from Docker Compose configuration. Skipping pre-pull."
+        # This is not fatal; we'll let 'docker-compose up' handle it.
+        return 0
+    fi
+    
+    milou_log "DEBUG" "Images to pull:\n$images_to_pull"
+
+    # Read images into an array, sorting to get unique entries
+    readarray -t image_array <<<"$(echo "$images_to_pull" | sort -u)"
+
+    for image in "${image_array[@]}"; do
+        if [[ -z "$image" ]]; then
+            continue
+        fi
+        
+        milou_log "INFO" "  PULLING: $image"
+        # docker pull provides verbose output to stdout/stderr
+        docker pull "$image"
+    done
+
+    milou_log "SUCCESS" "✅ Pre-pulling of images complete."
+}
+
 # Start services
 setup_start_services() {
     milou_log "INFO" "✓ Starting Milou services..."
@@ -2086,6 +2128,11 @@ setup_start_services() {
     # For interactive mode, the user is prompted.
     # We now directly proceed to starting the services, and docker-compose
     # will handle pulling images if they are not present locally.
+
+    # Pre-pull images as a workaround for docker compose issues
+    if ! _setup_pre_pull_images; then
+        milou_log "WARN" "Image pre-pulling step encountered an issue. Continuing with setup, but it may fail."
+    fi
 
     # --- CHANGED: Run initial database migration using dedicated service ---
     milou_log "INFO" "⚙️  Running initial database migrations..."

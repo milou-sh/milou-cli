@@ -1396,6 +1396,40 @@ setup_generate_configuration_interactive() {
                 2) 
                     ssl_mode="existing"
                     echo -e "   ${YELLOW}✓${NC} Using: ${BOLD}Your own certificates${NC}"
+                    
+                    # Collect certificate source path for existing certificates
+                    echo
+                    echo -e "${BOLD}${CYAN}📁 Where are your SSL certificate files located?${NC}"
+                    echo -e "${DIM}Please provide the directory containing your certificate files.${NC}"
+                    echo -e "${DIM}Default location: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
+                    echo
+                    
+                    local cert_source=""
+                    while true; do
+                        echo -ne "${BOLD}${GREEN}Certificate directory${NC} [${CYAN}${SCRIPT_DIR:-$(pwd)}/ssl${NC}]: "
+                        read -r cert_source
+                        if [[ -z "$cert_source" ]]; then
+                            cert_source="${SCRIPT_DIR:-$(pwd)}/ssl"
+                        fi
+                        
+                        # Expand tilde if present
+                        cert_source="${cert_source/#\~/$HOME}"
+                        
+                        # Check if directory exists
+                        if [[ -d "$cert_source" ]]; then
+                            # Store the certificate source for later use
+                            export MILOU_SSL_CERT_SOURCE="$cert_source"
+                            echo -e "   ${GREEN}${CHECKMARK} Certificate directory: ${BOLD}$cert_source${NC}"
+                            break
+                        else
+                            echo -e "   ${YELLOW}⚠️  Directory not found: $cert_source${NC}"
+                            echo -e "   ${DIM}The directory will be checked during SSL setup.${NC}"
+                            # Store it anyway - the SSL module will handle missing directories
+                            export MILOU_SSL_CERT_SOURCE="$cert_source"
+                            break
+                        fi
+                    done
+                    
                     break
                     ;;
                 3) 
@@ -1442,6 +1476,41 @@ setup_generate_configuration_interactive() {
                 1) 
                     ssl_mode="existing"
                     echo -e "   ${BLUE}✓${NC} Using: ${BOLD}Your own certificates${NC}"
+                    
+                    # Collect certificate source path for existing certificates
+                    echo
+                    echo -e "${BOLD}${CYAN}📁 Where are your SSL certificate files located?${NC}"
+                    echo -e "${DIM}Please provide the directory containing your certificate files.${NC}"
+                    echo -e "${DIM}Supported formats: Let's Encrypt, .crt/.key, .pem files${NC}"
+                    echo -e "${DIM}Default location: $(realpath "${SCRIPT_DIR:-$(pwd)}/ssl" 2>/dev/null || echo "${SCRIPT_DIR:-$(pwd)}/ssl")${NC}"
+                    echo
+                    
+                    local cert_source=""
+                    while true; do
+                        echo -ne "${BOLD}${GREEN}Certificate directory${NC} [${CYAN}${SCRIPT_DIR:-$(pwd)}/ssl${NC}]: "
+                        read -r cert_source
+                        if [[ -z "$cert_source" ]]; then
+                            cert_source="${SCRIPT_DIR:-$(pwd)}/ssl"
+                        fi
+                        
+                        # Expand tilde if present
+                        cert_source="${cert_source/#\~/$HOME}"
+                        
+                        # Check if directory exists
+                        if [[ -d "$cert_source" ]]; then
+                            # Store the certificate source for later use
+                            export MILOU_SSL_CERT_SOURCE="$cert_source"
+                            echo -e "   ${GREEN}${CHECKMARK} Certificate directory: ${BOLD}$cert_source${NC}"
+                            break
+                        else
+                            echo -e "   ${YELLOW}⚠️  Directory not found: $cert_source${NC}"
+                            echo -e "   ${DIM}The directory will be checked during SSL setup.${NC}"
+                            # Store it anyway - the SSL module will handle missing directories
+                            export MILOU_SSL_CERT_SOURCE="$cert_source"
+                            break
+                        fi
+                    done
+                    
                     break
                     ;;
                 2) 

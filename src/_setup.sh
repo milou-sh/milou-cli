@@ -296,7 +296,7 @@ _setup_run_repair() {
 
     # NEW: Automatically detect and offer to fix credential mismatches
     log_step "🔑" "Checking for Credential Mismatch"
-    if detect_credential_mismatch "true"; then # Quietly check
+    if detect_credential_mismatch "false"; then # Quietly check
         log_warning "Credential mismatch detected. This is a common issue after re-installations."
         log_info "This happens when the application has a different password than the database."
         

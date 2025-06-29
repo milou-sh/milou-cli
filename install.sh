@@ -350,6 +350,89 @@ check_prerequisites() {
     return 0
 }
 
+# Preserve configuration files before update
+preserve_config_files() {
+    local source_dir="$1"
+    local temp_dir="$2"
+    
+    if [[ ! -d "$source_dir" ]]; then
+        return 0
+    fi
+    
+    log "INFO" "Preserving configuration files..."
+    
+    # Create temp directory for preserved files
+    mkdir -p "$temp_dir"
+    
+    # Preserve .env file if it exists
+    if [[ -f "$source_dir/.env" ]]; then
+        cp "$source_dir/.env" "$temp_dir/.env"
+        log "SUCCESS" "Preserved .env file"
+    fi
+    
+    # Preserve docker-compose.override.yml if it exists
+    if [[ -f "$source_dir/static/docker-compose.override.yml" ]]; then
+        cp "$source_dir/static/docker-compose.override.yml" "$temp_dir/docker-compose.override.yml"
+        log "SUCCESS" "Preserved docker-compose.override.yml"
+    fi
+    
+    # Preserve SSL certificates if they exist
+    if [[ -d "$source_dir/ssl" ]]; then
+        cp -r "$source_dir/ssl" "$temp_dir/ssl"
+        log "SUCCESS" "Preserved SSL certificates"
+    fi
+    
+    # Preserve backups directory if it exists
+    if [[ -d "$source_dir/backups" ]]; then
+        cp -r "$source_dir/backups" "$temp_dir/backups"
+        log "SUCCESS" "Preserved backups directory"
+    fi
+    
+    return 0
+}
+
+# Restore configuration files after update
+restore_config_files() {
+    local temp_dir="$1"
+    local target_dir="$2"
+    
+    if [[ ! -d "$temp_dir" ]]; then
+        return 0
+    fi
+    
+    log "INFO" "Restoring configuration files..."
+    
+    # Restore .env file
+    if [[ -f "$temp_dir/.env" ]]; then
+        cp "$temp_dir/.env" "$target_dir/.env"
+        log "SUCCESS" "Restored .env file"
+    fi
+    
+    # Restore docker-compose.override.yml
+    if [[ -f "$temp_dir/docker-compose.override.yml" ]]; then
+        mkdir -p "$target_dir/static"
+        cp "$temp_dir/docker-compose.override.yml" "$target_dir/static/docker-compose.override.yml"
+        log "SUCCESS" "Restored docker-compose.override.yml"
+    fi
+    
+    # Restore SSL certificates
+    if [[ -d "$temp_dir/ssl" ]]; then
+        cp -r "$temp_dir/ssl" "$target_dir/ssl"
+        log "SUCCESS" "Restored SSL certificates"
+    fi
+    
+    # Restore backups
+    if [[ -d "$temp_dir/backups" ]]; then
+        cp -r "$temp_dir/backups" "$target_dir/backups"
+        log "SUCCESS" "Restored backups directory"
+    fi
+    
+    # Clean up temp directory
+    rm -rf "$temp_dir"
+    
+    return 0
+}
+
 # Check if installation directory exists
 check_existing_installation() {
     if [[ -d "$INSTALL_DIR" ]]; then
@@ -358,7 +441,14 @@ check_existing_installation() {
             is_milou_installation=true
         fi
         
+        # Create temp directory for preserving config files
+        PRESERVE_TEMP_DIR="/tmp/milou_preserve_$$_$(date +%s)"
+        
         if [[ "$FORCE" == "true" ]]; then
+            # Preserve config files before removing
+            if [[ "$is_milou_installation" == "true" ]]; then
+                preserve_config_files "$INSTALL_DIR" "$PRESERVE_TEMP_DIR"
+            fi
             if ! rm -rf "$INSTALL_DIR"; then
                 handle_error "Failed to remove existing installation directory"
                 return 1
@@ -367,6 +457,8 @@ check_existing_installation() {
             log "WARN" "Existing Milou CLI installation detected."
             
             if [[ "$INTERACTIVE" == "false" ]] || [[ "$QUIET" == "true" ]]; then
+                # Preserve config files before backup
+                preserve_config_files "$INSTALL_DIR" "$PRESERVE_TEMP_DIR"
                 local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
                 if mv "$INSTALL_DIR" "$backup_dir"; then
                     log "INFO" "Backup created: $backup_dir"
@@ -378,6 +470,8 @@ check_existing_installation() {
                 local choice
                 choice=$(prompt_user "Update existing installation? (Y/n)" "y")
                 if [[ "$choice" =~ ^[Yy]$ ]]; then
+                    # Preserve config files before backup
+                    preserve_config_files "$INSTALL_DIR" "$PRESERVE_TEMP_DIR"
                     local backup_dir="${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
                     if mv "$INSTALL_DIR" "$backup_dir"; then
                         log "INFO" "Backup created: $backup_dir"
@@ -452,6 +546,20 @@ install_milou() {
         if id "$target_user" &>/dev/null; then
             chown -R "$target_user:$target_user" "$INSTALL_DIR" 2>/dev/null || true
             log "INFO" "Set ownership of $INSTALL_DIR to user '$target_user'"
+        fi
+    fi
+    
+    # Restore preserved configuration files if they exist
+    if [[ -n "${PRESERVE_TEMP_DIR:-}" ]] && [[ -d "$PRESERVE_TEMP_DIR" ]]; then
+        restore_config_files "$PRESERVE_TEMP_DIR" "$INSTALL_DIR"
+        
+        # Fix ownership for restored files if running as root
+        if [[ $EUID -eq 0 ]] && [[ "$INSTALL_DIR" == /home/* ]]; then
+            local target_user
+            target_user=$(echo "$INSTALL_DIR" | cut -d'/' -f3)
+            if id "$target_user" &>/dev/null; then
+                chown -R "$target_user:$target_user" "$INSTALL_DIR" 2>/dev/null || true
+            fi
         fi
     fi
     

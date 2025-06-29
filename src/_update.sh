@@ -517,7 +517,17 @@ ensure_dependency_services() {
         else
             # Fallback to direct docker compose call
             if command -v docker >/dev/null 2>&1; then
-                if docker compose --env-file "$env_file" -f "$compose_file" up -d "$dep_service" 2>/dev/null; then
+                local docker_compose_cmd="docker compose --env-file $env_file -f $compose_file"
+                
+                # Check for override file in fallback mode
+                local compose_dir
+                compose_dir="$(dirname "$compose_file")"
+                local override_file="$compose_dir/docker-compose.override.yml"
+                if [[ -f "$override_file" ]]; then
+                    docker_compose_cmd="$docker_compose_cmd -f $override_file"
+                fi
+                
+                if $docker_compose_cmd up -d "$dep_service" 2>/dev/null; then
                     ((deps_started++))
                     milou_log "SUCCESS" "      ✅ $dep_service started successfully (fallback)"
                 else
@@ -820,8 +830,29 @@ _update_single_service() {
     if command -v docker_execute >/dev/null 2>&1; then
         docker_execute "up" "all" "false" "--force-recreate" "-d"
     else
-        docker compose pull
-        docker compose up -d --force-recreate
+        # Fallback to direct docker compose commands with override support
+        local docker_compose_base="docker compose"
+        
+        # Add env file if available
+        if [[ -n "${DOCKER_ENV_FILE:-}" && -f "${DOCKER_ENV_FILE:-}" ]]; then
+            docker_compose_base="$docker_compose_base --env-file ${DOCKER_ENV_FILE}"
+        fi
+        
+        # Add compose file
+        if [[ -n "${DOCKER_COMPOSE_FILE:-}" && -f "${DOCKER_COMPOSE_FILE:-}" ]]; then
+            docker_compose_base="$docker_compose_base -f ${DOCKER_COMPOSE_FILE}"
+            
+            # Check for override file
+            local compose_dir
+            compose_dir="$(dirname "${DOCKER_COMPOSE_FILE}")"
+            local override_file="$compose_dir/docker-compose.override.yml"
+            if [[ -f "$override_file" ]]; then
+                docker_compose_base="$docker_compose_base -f $override_file"
+            fi
+        fi
+        
+        $docker_compose_base pull
+        $docker_compose_base up -d --force-recreate
     fi
     
     return 0

@@ -508,10 +508,23 @@ docker_init() {
         docker_compose_cmd="$docker_compose_cmd -p $DOCKER_PROJECT_NAME"
         docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
         
+        # Check for docker-compose.override.yml
+        local compose_dir
+        compose_dir="$(dirname "$DOCKER_COMPOSE_FILE")"
+        local override_file="$compose_dir/docker-compose.override.yml"
+        
+        if [[ -f "$override_file" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found docker-compose.override.yml, including in validation"
+            docker_compose_cmd="$docker_compose_cmd -f $override_file"
+        fi
+        
         if ! $docker_compose_cmd config --quiet 2>/dev/null; then
             [[ "$quiet" != "true" ]] && milou_log "WARN" "Docker Compose configuration validation failed"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your environment file: $DOCKER_ENV_FILE"
             [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your compose file: $DOCKER_COMPOSE_FILE"
+            if [[ -f "$override_file" ]]; then
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Check your override file: $override_file"
+            fi
             # Don't fail hard for configuration issues in update context
             if [[ "$skip_auth" != "true" ]]; then
                 return 1
@@ -546,6 +559,16 @@ docker_compose() {
     
     docker_compose_cmd="$docker_compose_cmd -p $DOCKER_PROJECT_NAME"
     docker_compose_cmd="$docker_compose_cmd -f $DOCKER_COMPOSE_FILE"
+    
+    # Check for docker-compose.override.yml in the same directory as the main compose file
+    local compose_dir
+    compose_dir="$(dirname "$DOCKER_COMPOSE_FILE")"
+    local override_file="$compose_dir/docker-compose.override.yml"
+    
+    if [[ -f "$override_file" ]]; then
+        milou_log "DEBUG" "Including docker-compose.override.yml from: $override_file"
+        docker_compose_cmd="$docker_compose_cmd -f $override_file"
+    fi
     
     # Execute the command
     $docker_compose_cmd "$@"

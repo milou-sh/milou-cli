@@ -74,6 +74,26 @@ milou setup
    - `ssl/private.key`
 2. Run `milou restart`
 
+### Custom Docker Configuration
+
+You can customize service configurations without modifying the core files by creating a `docker-compose.override.yml` file in the `static/` directory:
+
+```yaml
+# static/docker-compose.override.yml
+services:
+  nginx:
+    volumes:
+      # Custom SSL certificate path
+      - ${CUSTOM_SSL_PATH:-/path/to/your/ssl}:/etc/ssl:ro
+      - nginx_logs:/var/log/nginx:rw
+      - nginx_cache:/var/cache/nginx:rw
+```
+
+This file is automatically included and:
+- Preserved during updates
+- Allows custom volumes, environment variables, and resource limits
+- Won't be overwritten by CLI updates
+
 ### Backup & Restore
 ```bash
 # Create backup

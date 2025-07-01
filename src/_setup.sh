@@ -2156,8 +2156,17 @@ setup_start_services() {
     fi
 
     milou_log "INFO" "▶️  Starting all services..."
+    
+    # Check for docker-compose override file to handle custom configurations
+    local compose_args=()
+    if [[ -f "${SCRIPT_DIR:-$(pwd)}/docker-compose.override.yml" ]]; then
+        milou_log "INFO" "✓ Found docker-compose.override.yml - using custom configuration"
+        compose_args+=("-f" "docker-compose.yml" "-f" "docker-compose.override.yml")
+    fi
+    
+    # Start services, allowing override files to disable problematic services
     local result_output
-    result_output=$(docker_compose up -d --remove-orphans 2>&1)
+    result_output=$(docker_compose "${compose_args[@]}" up -d --remove-orphans 2>&1)
     local exit_code=$?
 
     if [[ $exit_code -eq 0 ]]; then
@@ -2169,6 +2178,23 @@ setup_start_services() {
         
         return 0
     else
+        # Check if the failure is due to port conflicts (common with reverse proxies)
+        if echo "$result_output" | grep -q "port is already allocated\|address already in use"; then
+            milou_log "WARN" "⚠️  Port conflict detected - likely due to reverse proxy setup"
+            milou_log "INFO" "💡 Attempting to start without problematic services..."
+            
+            # Try to start without nginx service (common when using reverse proxy)
+            result_output=$(docker_compose "${compose_args[@]}" up -d --remove-orphans --scale nginx=0 2>&1)
+            exit_code=$?
+            
+            if [[ $exit_code -eq 0 ]]; then
+                milou_log "SUCCESS" "✓ Services started successfully (nginx disabled for reverse proxy)"
+                milou_log "INFO" "✓ Reverse proxy mode detected - ensure your proxy routes to the frontend service"
+                sleep 10
+                return 0
+            fi
+        fi
+        
         milou_log "ERROR" "❌ Failed to start services with docker-compose."
         docker_handle_startup_error "$result_output" "" "false"
         return 1

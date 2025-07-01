@@ -1,0 +1,75 @@
+# Example docker-compose.override.yml for Reverse Proxy Setup
+# Place this file in your milou-cli directory to customize the deployment
+# This example shows how to disable nginx and configure services for Traefik
+
+version: '3.8'
+
+services:
+  # Disable nginx since reverse proxy handles SSL/routing
+  nginx:
+    deploy:
+      replicas: 0
+    # Alternative: you can also use profiles to completely exclude nginx
+    # profiles: ["disabled"]
+
+  # Configure frontend for reverse proxy (Traefik example)
+  frontend:
+    labels:
+      # Traefik configuration
+      - "traefik.enable=true"
+      - "traefik.http.routers.milou-frontend.rule=Host(`your-domain.com`)"
+      - "traefik.http.routers.milou-frontend.entrypoints=websecure"
+      - "traefik.http.routers.milou-frontend.tls=true"
+      - "traefik.http.routers.milou-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.milou-frontend.loadbalancer.server.port=3000"
+      
+      # Optional: redirect HTTP to HTTPS
+      - "traefik.http.routers.milou-frontend-http.rule=Host(`your-domain.com`)"
+      - "traefik.http.routers.milou-frontend-http.entrypoints=web"
+      - "traefik.http.routers.milou-frontend-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    
+    # Connect to reverse proxy network
+    networks:
+      - default
+      - traefik  # External network for Traefik
+
+  # Configure backend API for reverse proxy if needed
+  backend:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.milou-api.rule=Host(`your-domain.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.milou-api.entrypoints=websecure"
+      - "traefik.http.routers.milou-api.tls=true"
+      - "traefik.http.routers.milou-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.milou-api.loadbalancer.server.port=8000"
+    
+    networks:
+      - default
+      - traefik  # External network for Traefik
+
+networks:
+  # Connect to external Traefik network
+  traefik:
+    external: true
+
+# Alternative configurations for other reverse proxies:
+
+# For Nginx Proxy Manager:
+# frontend:
+#   labels:
+#     - "nginx-proxy-manager.enable=true"
+#     - "virtual.host=your-domain.com"
+#     - "virtual.port=3000"
+
+# For Caddy:
+# frontend:
+#   labels:
+#     - "caddy=your-domain.com"
+#     - "caddy.reverse_proxy={{upstreams 3000}}"
+
+# For custom nginx reverse proxy:
+# frontend:
+#   expose:
+#     - "3000"
+#   # Remove published ports to avoid conflicts 

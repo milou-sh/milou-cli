@@ -619,17 +619,56 @@ docker_execute() {
                 local exit_code=$?
                 
                 if [[ $exit_code -ne 0 ]]; then
+                    # Check if this is a port conflict with nginx (common with reverse proxies)
+                    if [[ "$service" == "nginx" ]] && echo "$result_output" | grep -q "port is already allocated\|address already in use"; then
+                        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Port conflict detected for nginx - likely reverse proxy setup"
+                        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Skipping nginx service (reverse proxy mode)"
+                        return 0  # Success - nginx is not needed with reverse proxy
+                    fi
+                    
                     [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to start service: $service"
                     docker_handle_startup_error "$result_output" "$service" "$quiet"
                     return $exit_code
                 fi
             else
                 [[ "$quiet" != "true" ]] && milou_log "INFO" "▶️  Starting all services"
+                
+                # Check for docker-compose override file to handle custom configurations
+                local compose_files=()
+                if [[ -f "${SCRIPT_DIR:-$(pwd)}/docker-compose.override.yml" ]]; then
+                    [[ "$quiet" != "true" ]] && milou_log "INFO" "✓ Found docker-compose.override.yml - using custom configuration"
+                    compose_files+=("-f" "${SCRIPT_DIR:-$(pwd)}/docker-compose.yml" "-f" "${SCRIPT_DIR:-$(pwd)}/docker-compose.override.yml")
+                fi
+                
                 local result_output
-                result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" 2>&1)
+                if [[ ${#compose_files[@]} -gt 0 ]]; then
+                    result_output=$(docker compose "${compose_files[@]}" up -d --remove-orphans "${additional_args[@]}" 2>&1)
+                else
+                    result_output=$(docker_compose up -d --remove-orphans "${additional_args[@]}" 2>&1)
+                fi
                 local exit_code=$?
                 
                 if [[ $exit_code -ne 0 ]]; then
+                    # Check if the failure is due to port conflicts (common with reverse proxies)
+                    if echo "$result_output" | grep -q "port is already allocated\|address already in use"; then
+                        [[ "$quiet" != "true" ]] && milou_log "WARN" "⚠️  Port conflict detected - likely due to reverse proxy setup"
+                        [[ "$quiet" != "true" ]] && milou_log "INFO" "💡 Attempting to start without nginx service..."
+                        
+                        # Try to start without nginx service (common when using reverse proxy)
+                        if [[ ${#compose_files[@]} -gt 0 ]]; then
+                            result_output=$(docker compose "${compose_files[@]}" up -d --remove-orphans --scale nginx=0 "${additional_args[@]}" 2>&1)
+                        else
+                            result_output=$(docker_compose up -d --remove-orphans --scale nginx=0 "${additional_args[@]}" 2>&1)
+                        fi
+                        exit_code=$?
+                        
+                        if [[ $exit_code -eq 0 ]]; then
+                            [[ "$quiet" != "true" ]] && milou_log "SUCCESS" "✓ Services started successfully (nginx disabled for reverse proxy)"
+                            [[ "$quiet" != "true" ]] && milou_log "INFO" "✓ Reverse proxy mode detected - ensure your proxy routes to the frontend service"
+                            return 0
+                        fi
+                    fi
+                    
                     [[ "$quiet" != "true" ]] && milou_log "ERROR" "❌ Failed to start services"
                     docker_handle_startup_error "$result_output" "" "$quiet"
                     return $exit_code

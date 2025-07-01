@@ -268,7 +268,7 @@ function handle_smart_setup() {
     
     # Get current installation state (quiet mode to avoid output corruption)
     local current_state
-    current_state=$(get_current_state "true")
+    current_state=$(get_current_state "false")
     
     # Determine setup mode based on state (quiet mode to avoid output corruption)
     local setup_mode

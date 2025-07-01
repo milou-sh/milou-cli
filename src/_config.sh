@@ -1028,7 +1028,7 @@ config_detect_installation_type() {
     fi
     
     # Check for existing volumes with data
-    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" | head -1 | xargs -I {} docker volume inspect {} 2>/dev/null | grep -q "CreatedAt"; then
+    if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)" | head -1 | xargs -I {} docker volume inspect {} 2>/dev/null | grep -q "CreatedAt"; then
         has_volumes=true
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Found existing data volumes"
     fi

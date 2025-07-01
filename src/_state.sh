@@ -132,7 +132,7 @@ detect_installation_state() {
         local volumes_output
         if volumes_output=$(docker volume ls --format "{{.Name}}" 2>/dev/null); then
             local filtered_volumes
-            if filtered_volumes=$(echo "$volumes_output" | grep -E "(milou|static)" 2>/dev/null); then
+            if filtered_volumes=$(echo "$volumes_output" | grep -E "(milou)" 2>/dev/null); then
                 volume_count=$(echo "$filtered_volumes" | grep -c . 2>/dev/null || echo "0")
                 volume_count=${volume_count//[^0-9]/}  # Remove any non-numeric characters
             fi
@@ -186,7 +186,7 @@ detect_installation_state() {
         
         # Get Milou-related volumes and check if they contain significant data
         local milou_volumes
-        if milou_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
+        if milou_volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)" 2>/dev/null); then
             for volume in $milou_volumes; do
                 # Use a faster method to check volume data - just check if volume has any files
                 local file_count

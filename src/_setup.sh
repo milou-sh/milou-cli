@@ -405,8 +405,8 @@ setup_run() {
         fi
         
         # Check for volumes
-        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" >/dev/null 2>&1; then
-            volume_count=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" | wc -l)
+        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)" >/dev/null 2>&1; then
+            volume_count=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)" | wc -l)
         fi
         
         if [[ $container_count -gt 0 ]] || [[ $volume_count -gt 0 ]]; then
@@ -823,7 +823,7 @@ setup_check_existing_installation() {
         fi
         
         # Check for data volumes
-        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)"; then
+        if docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)"; then
             has_volumes=true
             milou_log "DEBUG" "Found existing data volumes"
         fi

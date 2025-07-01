@@ -1185,7 +1185,7 @@ docker_cleanup_environment() {
                 [[ "$quiet" != "true" ]] && milou_log "WARN" "Removing Milou data volumes (this will delete all data!)"
             fi
             local volumes
-            if volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou|static)" 2>/dev/null); then
+            if volumes=$(docker volume ls --format "{{.Name}}" 2>/dev/null | grep -E "(milou)" 2>/dev/null); then
                 for volume in $volumes; do
                     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Removing volume: $volume"
                     docker volume rm "$volume" 2>/dev/null || true

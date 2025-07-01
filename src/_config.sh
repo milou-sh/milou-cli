@@ -560,7 +560,7 @@ GITHUB_TOKEN=${GITHUB_TOKEN:-}
 HTTP_PORT=$http_port
 HTTPS_PORT=$https_port
 FRONTEND_URL=https://$domain
-BACKEND_URL=https://$domain/api
+BACKEND_URL=https://$domain
 
 # =============================================================================
 # DOCKER CONFIGURATION

@@ -289,7 +289,6 @@ create_milou_directories() {
     local directories=(
         "$milou_home/.config"
         "$milou_home/.local/bin"
-        "$milou_home/milou-cli"
         "$milou_home/backups"
         "$milou_home/logs"
     )
@@ -329,7 +328,7 @@ if [ -f /etc/bashrc ]; then
 fi
 
 # Milou CLI environment variables
-export MILOU_HOME="$HOME/milou-cli"
+export MILOU_HOME="/opt/milou-cli"
 export PATH="$HOME/.local/bin:$MILOU_HOME:$PATH"
 
 # Milou CLI aliases
@@ -386,7 +385,7 @@ setup_milou_profile() {
     
     cat > "$profile" << 'EOF'
 # Milou CLI User Profile
-export MILOU_HOME="$HOME/milou-cli"
+export MILOU_HOME="/opt/milou-cli"
 export PATH="$HOME/.local/bin:$MILOU_HOME:$PATH"
 
 # Load bashrc if running bash
@@ -406,12 +405,12 @@ EOF
 setup_milou_symlinks() {
     local milou_home
     milou_home=$(get_milou_home)
-    local script_dir="${SCRIPT_DIR:-$(pwd)}"
+    local milou_install_dir="/opt/milou-cli"
     
-    # Link milou-cli directory
+    # Link milou-cli directory to the standard installation location
     if [[ ! -L "$milou_home/milou-cli" ]]; then
-        if ln -sf "$script_dir" "$milou_home/milou-cli"; then
-            milou_log "DEBUG" "✅ Created milou-cli symlink"
+        if ln -sf "$milou_install_dir" "$milou_home/milou-cli"; then
+            milou_log "DEBUG" "✅ Created milou-cli symlink to $milou_install_dir"
         else
             milou_log "WARN" "⚠️  Failed to create milou-cli symlink"
         fi
@@ -419,7 +418,7 @@ setup_milou_symlinks() {
     
     # Link milou command to local bin
     if [[ ! -L "$milou_home/.local/bin/milou" ]]; then
-        if ln -sf "$script_dir/milou.sh" "$milou_home/.local/bin/milou"; then
+        if ln -sf "$milou_install_dir/milou.sh" "$milou_home/.local/bin/milou"; then
             milou_log "DEBUG" "✅ Created milou command symlink"
         else
             milou_log "WARN" "⚠️  Failed to create milou command symlink"
@@ -474,13 +473,12 @@ validate_milou_user_environment() {
 
 # Test milou user CLI access
 test_milou_user_cli() {
-    local milou_home
-    milou_home=$(get_milou_home)
+    local milou_install_dir="/opt/milou-cli"
     
     milou_log "INFO" "🧪 Testing milou user CLI access"
     
     # Test as milou user
-    if sudo -u milou bash -c "cd $milou_home/milou-cli && ./milou.sh version" >/dev/null 2>&1; then
+    if sudo -u milou bash -c "cd $milou_install_dir && ./milou.sh version" >/dev/null 2>&1; then
         milou_log "SUCCESS" "✅ Milou user can access CLI"
         return 0
     else

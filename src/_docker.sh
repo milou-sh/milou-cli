@@ -584,8 +584,6 @@ docker_execute() {
     # DEFENSIVE: Store original service parameter to prevent variable pollution
     local _original_service="$service"
     
-    milou_log "INFO" "▶️  Received argument service: $_original_service"
-    
     # Determine if authentication should be skipped based on operation
     local skip_auth="false"
     case "$operation" in
@@ -615,7 +613,6 @@ docker_execute() {
     
     # DEFENSIVE: Restore original service parameter after docker_init (in case of variable pollution)
     service="$_original_service"
-    milou_log "INFO" "Received argument service after docker init: $service"
     
     [[ "$quiet" != "true" ]] && milou_log "DEBUG" "🐳 Docker Execute: $operation ${service:+$service }${additional_args[*]:+${additional_args[*]}} (skip_auth=$skip_auth)"
     

@@ -417,7 +417,7 @@ restore_config_files() {
     
     # Restore SSL certificates
     if [[ -d "$temp_dir/ssl" ]]; then
-        cp -r "$temp_dir/ssl" "$target_dir/ssl"
+        cp -r "$temp_dir/ssl/." "$target_dir/ssl"
         log "SUCCESS" "Restored SSL certificates"
     fi
     

@@ -2,9 +2,21 @@
 # This file allows you to override specific service configurations without modifying the main docker-compose.yml
 # Place this file in the static/ directory and it will be automatically included
 
+# Minimal valid YAML structure to prevent Docker Compose errors
+# Remove this file entirely if you don't need custom overrides
+version: '3.8'
+
+# Uncomment and modify the sections below to customize your deployment:
+
 # Example: Override SSL certificate path for nginx service
 # services:
 #   nginx:
 #     volumes:
 #       - /your_custom_path/milou.crt:/etc/ssl:ro
 #       - /your_custom_path/milou.key:/etc/ssl:ro
+
+# Example: Disable nginx for reverse proxy setups
+# services:
+#   nginx:
+#     deploy:
+#       replicas: 0

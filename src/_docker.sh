@@ -1329,12 +1329,12 @@ detect_credential_mismatch() {
     
     # Temporarily start just the database container to test
     local test_result=0
-    if docker_compose up -d db 2>/dev/null; then
+    if docker_compose up -d database 2>/dev/null; then
         # Wait a few seconds for database to initialize
         sleep 5
         
         # Try to connect with current credentials
-        if docker_compose exec -T db psql -U "$current_db_user" -d "${POSTGRES_DB:-${DB_NAME:-milou_database}}" -c "SELECT 1;" >/dev/null 2>&1; then
+        if docker_compose exec -T database psql -U "$current_db_user" -d "${POSTGRES_DB:-${DB_NAME:-milou_database}}" -c "SELECT 1;" >/dev/null 2>&1; then
             [[ "$quiet" != "true" ]] && milou_log "DEBUG" "✅ Database connection successful - no credential mismatch"
             test_result=1  # No mismatch
         else
@@ -1343,7 +1343,7 @@ detect_credential_mismatch() {
         fi
         
         # Stop the test database
-        docker_compose stop db >/dev/null 2>&1 || true
+        docker_compose stop database >/dev/null 2>&1 || true
     else
         [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Could not start database for testing - assuming mismatch"
         test_result=0  # Assume mismatch if can't start

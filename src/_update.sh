@@ -51,7 +51,7 @@ readonly RELEASE_API_URL="${GITHUB_API_BASE:-https://api.github.com}/repos/${MIL
 
 # Map logical names to actual docker-compose service names
 declare -A SERVICE_NAME_MAP=(
-    ["database"]="db"
+    ["database"]="database"
     ["backend"]="backend" 
     ["frontend"]="frontend"
     ["engine"]="engine"
@@ -86,11 +86,11 @@ get_running_service_versions() {
         local service
         service=$(echo "$container_name" | sed -e 's/milou-static-//' -e 's/milou-//')
 
-        # Map actual service names to logical names
-        case "$service" in
-            "db") service="database" ;;
-            *) ;;
-        esac
+        # Map actual service names to logical names - This is no longer needed
+        # case "$service" in
+        #     "db") service="database" ;;
+        #     *) ;;
+        # esac
         
         # Extract version from image tag
         local version=""
@@ -803,7 +803,7 @@ _update_single_service() {
     fi
     
     # --- ADDED: Migration logic for backend service ---
-    if [[ "$service" == "backend" || "$service" == "db" ]]; then # Match on actual service name
+    if [[ "$service" == "backend" || "$service" == "database" ]]; then # Match on actual service name
         milou_log "INFO" "⚙️  Running database migrations for backend update..."
         if ! docker_compose up database-migrations --remove-orphans --abort-on-container-exit --exit-code-from database-migrations; then
             milou_log "ERROR" "❌ Database migration failed for the new version."

@@ -1200,6 +1200,7 @@ function main() {
                 echo "Starts all Milou services in the background."
                 exit 0
             fi
+            milou_log "INFO" "Arguments received for start are $@..."
             handle_docker_command "start" "$@"
             ;;
         stop)

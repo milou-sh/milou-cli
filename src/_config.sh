@@ -1462,19 +1462,19 @@ config_resolve_mutable_tags() {
     [[ ! -f "$env_file" ]] && return 0  # nothing to do
 
     local updated=false
-    for service in "${MILOU_ESSENTIAL_SERVICES[@]}"; do
-        local var_name="MILOU_$(to_uppercase "$service")_TAG"
+    for _service_name in "${MILOU_ESSENTIAL_SERVICES[@]}"; do
+        local var_name="MILOU_$(to_uppercase "$_service_name")_TAG"
         local current_value
         current_value=$(grep -E "^${var_name}=" "$env_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
         if [[ "$current_value" == "latest" || "$current_value" == "stable" ]]; then
             local new_tag
-            new_tag=$(core_get_latest_service_version "$service" "$github_token" "true")
+            new_tag=$(core_get_latest_service_version "$_service_name" "$github_token" "true")
             if [[ -n "$new_tag" ]]; then
                 core_update_env_var "$env_file" "$var_name" "$new_tag"
-                [[ "$quiet" != "true" ]] && milou_log "INFO" "📌 Pinned $service image: $current_value → $new_tag"
+                [[ "$quiet" != "true" ]] && milou_log "INFO" "📌 Pinned $_service_name image: $current_value → $new_tag"
                 updated=true
             else
-                [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not resolve latest tag for $service"
+                [[ "$quiet" != "true" ]] && milou_log "WARN" "Could not resolve latest tag for $_service_name"
             fi
         fi
     done

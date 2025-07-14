@@ -774,11 +774,17 @@ health_check_service() {
         return 0 # Healthy
     fi
 
+    # To:
     if echo "$container_status" | grep -q "Up"; then
         # It's running, but not healthy yet (e.g., starting up).
-        # For a final check, this is a failure.
-        [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is running but not yet healthy. Status: $container_status"
-        return 1
+        # This is acceptable during startup - only fail if we're in final validation mode
+        if [[ "${FINAL_HEALTH_CHECK:-false}" == "true" ]]; then
+            [[ "$quiet" != "true" ]] && milou_log "WARN" "Service '$service' is running but not yet healthy. Status: $container_status"
+            return 1
+        else
+            [[ "$quiet" != "true" ]] && milou_log "DEBUG" "Service '$service' is starting up. Status: $container_status"
+            return 2  # New return code for "starting up"
+        fi
     fi
     
     # Any other status is a failure (e.g., Exited, Restarting, Created)
@@ -1073,13 +1079,18 @@ service_update_zero_downtime() {
     fi
 
     # Wait for the updated service to become healthy
-    local retries=12
+    local retries=18
     local wait_interval=5
     local healthy=false
     while [[ $retries -gt 0 ]]; do
-        if health_check_service "$service" "true"; then
+        local health_result
+        health_result=$(health_check_service "$service" "true"; echo $?)
+        if [[ $health_result -eq 0 ]]; then
             healthy=true
             break
+        elif [[ $health_result -eq 2 ]]; then
+            # Service is starting up - this is normal, continue waiting
+            [[ "$quiet" != "true" ]] && echo -n "."
         fi
         sleep "$wait_interval"
         ((retries--))

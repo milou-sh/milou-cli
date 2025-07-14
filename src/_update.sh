@@ -731,6 +731,11 @@ _perform_fixed_update() {
         if command -v service_update_zero_downtime >/dev/null 2>&1; then
             if service_update_zero_downtime "$actual_service_name" "false" "$old_image_tag"; then
                 update_success=true
+            else
+                # Add this missing fallback!
+                if _update_single_service "$actual_service_name" "$service_target_version" "$old_image_tag"; then
+                    update_success=true
+                fi
             fi
         else
             # Fallback to basic update
@@ -805,7 +810,7 @@ _update_single_service() {
     # --- ADDED: Migration logic for backend service ---
     if [[ "$service" == "backend" || "$service" == "database" ]]; then # Match on actual service name
         milou_log "INFO" "⚙️  Running database migrations for backend update..."
-        if ! docker_compose up database-migrations --remove-orphans --abort-on-container-exit --exit-code-from database-migrations; then
+        if ! docker_compose run --rm database-migrations npm run migration:run:prod --workspace=backend; then
             milou_log "ERROR" "❌ Database migration failed for the new version."
             milou_log "INFO" "🔄 Rolling back to the previous version..."
 

@@ -553,7 +553,23 @@ _setup_validate_system() {
             log_info "Attempting to start the Docker daemon..."
             if systemctl start docker 2>/dev/null || service docker start 2>/dev/null; then
                 log_success "Docker daemon started successfully."
-                sleep 2  # Give Docker a moment to fully start
+                log_info "Waiting for Docker daemon to become available..."
+                local wait_time=20
+                local interval=2
+                local elapsed=0
+                while ! docker info >/dev/null 2>&1; do
+                    if [[ $elapsed -ge $wait_time ]]; then
+                        log_warning "Docker daemon did not become available within ${wait_time}s."
+                        break
+                    fi
+                    sleep $interval
+                    elapsed=$((elapsed + interval))
+                done
+
+                # Check one last time
+                if docker info >/dev/null 2>&1; then
+                    log_success "Docker daemon is now responding."
+                fi
             else
                 log_warning "Could not start the Docker daemon automatically."
                 ((warnings++))
@@ -2137,13 +2153,12 @@ setup_start_services() {
     # --- CHANGED: Run initial database migration using dedicated service ---
     milou_log "INFO" "⚙️  Running initial database migrations..."
 
-    # Run the migrations service. It will bring up dependencies (db)
+    # Run the migrations service. It will bring up dependencies (database)
     # and run the migration, then exit. The `--abort-on-container-exit` flag
     # ensures that compose exits when the one-off migration task is done.
     if ! docker_compose up database-migrations --remove-orphans --abort-on-container-exit --exit-code-from database-migrations; then
         milou_log "ERROR" "❌ Database migration failed. Setup cannot continue."
         milou_log "INFO" "💡 Check the logs above for migration errors."
-        milou_log "INFO" "💡 You may need to clean the installation with './milou.sh setup --clean' and try again."
         return 1
     fi
     milou_log "SUCCESS" "✅ Database migrations completed successfully."

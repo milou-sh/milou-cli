@@ -68,13 +68,15 @@ VERBOSE=false
 QUIET=false
 AUTO_TAG=true
 PLATFORMS="linux/amd64"
+PARALLEL_PUSHES=true
+MAX_PARALLEL_PUSH=3
 CACHE_FROM=""
 CACHE_TO=""
 TARGET_STAGE=""
 SECRETS=""
 SSH_KEYS=""
 BUILD_TIMEOUT="1800"
-MAX_PARALLEL_JOBS=3
+MAX_PARALLEL_JOBS=5
 TEST_MODE=false
 QUICK_TEST=false
 DELETE_DAYS=30
@@ -563,6 +565,11 @@ delete_ghcr_images() {
                            -H "Accept: application/vnd.github.v3+json" \
                            "$api_url" 2>/dev/null || echo "[]")
 
+            # Filter by specific version tag if requested
+            if [[ -n "$VERSION" ]]; then
+                response=$(echo "$response" | jq "[ .[] | select(((.metadata.container.tags // []) | index(\"$VERSION\"))) ]")
+            fi
+
             if echo "$response" | jq -e 'type == "array"' >/dev/null 2>&1; then
                 if echo "$response" | jq -e '. | length > 0' >/dev/null 2>&1; then
                     working_url="$api_url"
@@ -913,6 +920,7 @@ build_image_advanced() {
 }
 
 push_image_advanced() {
+    # REPLACED: implement digest-based tagging and parallel push support
     local tags=("$@")
 
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -927,23 +935,79 @@ push_image_advanced() {
     local pushed_count=0
     local failed_count=0
 
-    for tag in "${tags[@]}"; do
-        show_progress "📤 Pushing $tag..."
+    # Push the primary tag first to obtain a digest reference
+    local primary_tag="${tags[0]}"
+    show_progress "📤 Pushing $primary_tag ..."
+    if docker push "$primary_tag"; then
+        log "SUCCESS" "✅ Successfully pushed $primary_tag"
+        ((pushed_count++))
+    else
+        log "ERROR" "❌ Failed to push $primary_tag"
+        ((failed_count++))
+    fi
 
-        local start_time
-        start_time=$(date +%s)
+    # If there are no additional tags, return early
+    if [[ ${#tags[@]} -le 1 ]]; then
+        [[ $failed_count -eq 0 ]] && return 0 || return 1
+    fi
 
-        if docker push "$tag"; then
-            local end_time duration
-            end_time=$(date +%s)
-            duration=$((end_time - start_time))
-            log "SUCCESS" "✅ Successfully pushed $tag (${duration}s)"
-            ((pushed_count++))
+    # Resolve digest of the pushed image for lightweight secondary tagging
+    local digest_ref
+    digest_ref=$(docker image inspect --format '{{index .RepoDigests 0}}' "$primary_tag" 2>/dev/null || true)
+    if [[ -n "$digest_ref" ]]; then
+        for tag in "${tags[@]:1}"; do
+            docker tag "$digest_ref" "$tag"
+        done
+    else
+        log "WARN" "⚠️ Could not resolve digest reference for $primary_tag; secondary tags will be pushed normally."
+    fi
+
+    # Helper to push a single tag
+    _push_single() {
+        local t="$1"
+        show_progress "📤 Pushing $t ..."
+        if docker push "$t" >/dev/null 2>&1; then
+            echo "SUCCESS::$t"
         else
-            log "ERROR" "❌ Failed to push $tag"
-            ((failed_count++))
+            echo "FAILED::$t"
         fi
-    done
+    }
+
+    local results_file
+    results_file=$(mktemp -t milou_push_results.XXXX)
+
+    if [[ "$PARALLEL_PUSHES" == "true" ]]; then
+        for tag in "${tags[@]:1}"; do
+            (
+                _push_single "$tag"
+            ) >>"$results_file" &
+
+            # throttle according to MAX_PARALLEL_PUSH
+            while (( $(jobs -r | wc -l) >= MAX_PARALLEL_PUSH )); do
+                sleep 0.2
+            done
+        done
+        wait
+    else
+        for tag in "${tags[@]:1}"; do
+            _push_single "$tag" >>"$results_file"
+        done
+    fi
+
+    # Collect results
+    while IFS= read -r line; do
+        case "$line" in
+            SUCCESS::*)
+                ((pushed_count++))
+                ;;
+            FAILED::*)
+                local failed_tag="${line#FAILED::}"
+                log "ERROR" "❌ Failed to push $failed_tag"
+                ((failed_count++))
+                ;;
+        esac
+    done < "$results_file"
+    rm -f "$results_file"
 
     if [[ $failed_count -eq 0 ]]; then
         log "SUCCESS" "✅ All images pushed successfully ($pushed_count images)"
@@ -1274,6 +1338,14 @@ parse_args() {
             --help|-h)
                 show_help
                 exit 0
+                ;;
+            --no-parallel-push)
+                PARALLEL_PUSHES=false
+                shift
+                ;;
+            --parallel-push)
+                PARALLEL_PUSHES=true
+                shift
                 ;;
             *)
                 log "ERROR" "Unknown option: $1"

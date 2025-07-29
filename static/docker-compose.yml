@@ -171,6 +171,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      engine:
+        condition: service_healthy
     networks:
       - milou_network
       - proxy
@@ -294,8 +296,6 @@ services:
       database:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      backend:
         condition: service_healthy
     networks:
       - milou_network
